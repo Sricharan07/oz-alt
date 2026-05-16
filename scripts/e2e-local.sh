@@ -5,7 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 cargo test --workspace
-python3 -m py_compile lambda_entry.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+python3 -m py_compile lambda_entry.py lambda_crawler_entry.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+python3 scripts/index-registry-to-db.py --dry-run >/dev/null
 cargo build -p oz
 
 tmp_home="$(mktemp -d)"

@@ -85,6 +85,38 @@ class RegistryStorage:
             return None
         return f"{self.pack_public_base_url}/{vendor}/{library}/{version}.ozpack"
 
+    def put_pack_bytes(self, vendor: str, library: str, version: str, body: bytes) -> str:
+        key = f"{self.pack_prefix}/{vendor}/{library}/{version}.ozpack"
+        if self.packs_bucket:
+            self._put_s3_bytes(
+                self.packs_bucket,
+                key,
+                body,
+                content_type="application/vnd.oz.pack",
+                cache_control="public, max-age=31536000, immutable",
+            )
+            return key
+
+        path = self.packs_root / vendor / library / f"{version}.ozpack"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        return str(path.relative_to(self.repo_root))
+
+    def put_catalog_document(self, document: dict[str, Any]) -> None:
+        body = json.dumps(document, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        if self.catalog_bucket:
+            self._put_s3_bytes(
+                self.catalog_bucket,
+                self.catalog_key,
+                body,
+                content_type="application/json",
+                cache_control="public, max-age=300",
+            )
+            return
+
+        self.catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        self.catalog_path.write_bytes(body)
+
     def append_admin_event(self, stream: str, event: dict[str, Any]) -> None:
         if self.admin_bucket:
             key = f"{self.admin_prefix}/{stream}.jsonl"
@@ -171,11 +203,24 @@ class RegistryStorage:
         except Exception:
             return None
 
-    def _put_s3_bytes(self, bucket: str, key: str, body: bytes) -> None:
+    def _put_s3_bytes(
+        self,
+        bucket: str,
+        key: str,
+        body: bytes,
+        *,
+        content_type: str | None = None,
+        cache_control: str | None = None,
+    ) -> None:
         client = s3_client()
         if client is None:
             return
-        client.put_object(Bucket=bucket, Key=key, Body=body)
+        kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": body}
+        if content_type:
+            kwargs["ContentType"] = content_type
+        if cache_control:
+            kwargs["CacheControl"] = cache_control
+        client.put_object(**kwargs)
 
 
 def s3_client() -> Any | None:

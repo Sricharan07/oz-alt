@@ -7,6 +7,7 @@ dependencies = []
 
 [project.scripts]
 oz-api = "oz_api.server:main"
+oz-index-registry = "oz_api.indexer:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -14,4 +15,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/oz_api"]
-

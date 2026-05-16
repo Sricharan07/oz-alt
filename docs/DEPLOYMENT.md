@@ -54,6 +54,24 @@ DATABASE_URL='postgres://...' bash scripts/apply-db-migrations.sh
 
 The SQL schema is in `infra/sql`.
 
+Load the generated catalog and chunk index into Postgres/Aurora after migrations:
+
+```bash
+OZ_DATABASE_URL='postgres://...' OPENAI_API_KEY='sk-...' python3 scripts/index-registry-to-db.py
+```
+
+For the deployed Aurora Data API path, use the stack outputs instead of `OZ_DATABASE_URL`:
+
+```bash
+OZ_DB_RESOURCE_ARN='arn:aws:rds:...' \
+OZ_DB_SECRET_ARN='arn:aws:secretsmanager:...' \
+OZ_DB_NAME='oz' \
+OPENAI_API_KEY='sk-...' \
+python3 scripts/index-registry-to-db.py
+```
+
+The importer writes vendors, libraries, latest refs, and chunk rows. If `_chunks.jsonl` rows contain 1536-dimensional embeddings, they are stored in `pgvector`; if they do not, the importer generates them when `OPENAI_API_KEY` is set. Without embeddings, the same rows remain searchable through Postgres full-text search.
+
 ## Publish Registry Packs
 
 After CDK deploy, publish the generated catalog and packs to the packs bucket output:

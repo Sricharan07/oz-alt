@@ -290,9 +290,18 @@ fn read_pack_file(path: &Path) -> Result<PackFile> {
 }
 
 fn parse_pack_bytes(compressed: &[u8], label: &str) -> Result<PackFile> {
-    let decoded = zstd::stream::decode_all(Cursor::new(compressed))
-        .with_context(|| format!("failed to decompress pack {label}"))?;
-    serde_json::from_slice(&decoded).with_context(|| format!("failed to parse pack {label}"))
+    match zstd::stream::decode_all(Cursor::new(compressed)) {
+        Ok(decoded) => {
+            serde_json::from_slice(&decoded).with_context(|| format!("failed to parse pack {label}"))
+        }
+        Err(error) => {
+            if compressed.first().copied() == Some(b'{') {
+                return serde_json::from_slice(compressed)
+                    .with_context(|| format!("failed to parse raw JSON pack {label}"));
+            }
+            Err(error).with_context(|| format!("failed to decompress pack {label}"))
+        }
+    }
 }
 
 pub fn materialize_tree(
@@ -414,6 +423,15 @@ mod tests {
         assert_eq!(
             fs::read_to_string(target_from_bytes.join("INDEX.md")).unwrap(),
             "# Index\n"
+        );
+
+        let target_from_raw_json = temp.path().join("target-raw-json");
+        let raw_json = zstd::stream::decode_all(Cursor::new(&pack_bytes)).unwrap();
+        let tree = ingest_pack_bytes(&objects, &raw_json, "raw-json-pack").unwrap();
+        materialize_tree(&objects, &target_from_raw_json, &tree).unwrap();
+        assert_eq!(
+            fs::read_to_string(target_from_raw_json.join("guides").join("start.md")).unwrap(),
+            "# Start\n"
         );
     }
 }

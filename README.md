@@ -7,9 +7,9 @@ This repository contains the end-to-end beta product:
 1. 15 launch libraries crawled into `registry/fixtures`.
 2. Immutable `.ozpack` bundles in `registry/packs`.
 3. A Rust CLI with `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `gc`, `doctor`, and `config`.
-4. A Python API that runs locally or in Lambda and serves `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, and admin routes.
+4. A Python API that runs locally or in Lambda and serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, and admin routes.
 5. A Scrapling-first crawler with stdlib fallback, chunking, symbol extraction, and optional OpenAI embedding generation.
-6. CDK infrastructure for S3, Aurora Serverless v2/Postgres Data API, DynamoDB rerank cache, SQS crawler queue/DLQ, scheduled recrawls, API Gateway, Lambda, and budget guardrail.
+6. CDK infrastructure for S3, Aurora Serverless v2/Postgres Data API, pgvector/FTS indexing, DynamoDB rerank cache, SQS crawler queue/DLQ, scheduled recrawls, API Gateway, Lambda, and budget guardrail.
 
 ## Repository Layout
 
@@ -71,6 +71,12 @@ OZ_SEED_MAX_PAGES=24 bash scripts/build-seed-registry.sh
 ```
 
 This crawls the 15 launch libraries from `registry/seed_libraries.json`, writes fixture trees, rebuilds `.ozpack` bundles, and refreshes `registry/catalog.json`.
+
+Index the generated chunks into Postgres/Aurora for semantic API retrieval:
+
+```bash
+OPENAI_API_KEY='sk-...' OZ_DATABASE_URL='postgres://...' python3 scripts/index-registry-to-db.py
+```
 
 ## Deployment
 

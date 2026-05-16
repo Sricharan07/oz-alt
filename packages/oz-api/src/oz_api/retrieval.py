@@ -26,7 +26,7 @@ class RetrievalContext:
     def from_env(cls, storage: RegistryStorage) -> "RetrievalContext":
         return cls(
             storage=storage,
-            database_url=os.environ.get("OZ_DATABASE_URL"),
+            database_url=os.environ.get("OZ_DATABASE_URL") or os.environ.get("DATABASE_URL"),
             db_resource_arn=os.environ.get("OZ_DB_RESOURCE_ARN"),
             db_secret_arn=os.environ.get("OZ_DB_SECRET_ARN"),
             db_name=os.environ.get("OZ_DB_NAME", "oz"),
@@ -166,24 +166,50 @@ def suggest_from_postgres(
     if connection is None:
         return None
     terms = " ".join(normalize_query(query))
-    sql = """
+    embedding = embedding_for_query(ctx, query)
+    vector = vector_literal(embedding) if embedding else None
+    if vector:
+        score_sql = """
+          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) +
+          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) +
+          coalesce(greatest(1 - (c.embedding <=> %s::vector), 0), 0)
+        """
+        where_sql = """
+          l.search_document @@ websearch_to_tsquery('english', %s)
+          or c.search_document @@ websearch_to_tsquery('english', %s)
+          or c.embedding is not null
+        """
+        params: list[Any] = [terms, terms, vector, terms, terms, max_results]
+    else:
+        score_sql = """
+          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) +
+          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
+        """
+        where_sql = """
+          l.search_document @@ websearch_to_tsquery('english', %s)
+          or c.search_document @@ websearch_to_tsquery('english', %s)
+        """
+        params = [terms, terms, terms, terms, max_results]
+    sql = f"""
         select
           v.name as vendor,
           l.name as library,
           lv.version,
-          greatest(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+          max({score_sql}) as score,
           coalesce(l.description, '') as reason
         from libraries l
         join vendors v on v.id = l.vendor_id
         join library_versions lv on lv.library_id = l.id
-        where l.search_document @@ websearch_to_tsquery('english', %s)
-        order by score desc, v.name asc, l.name asc
+        left join chunks c on c.version_id = lv.id
+        where {where_sql}
+        group by v.name, l.name, lv.version, l.description
+        order by score desc, v.name asc, l.name asc, lv.version asc
         limit %s
     """
     try:
         with connection:
             with connection.cursor() as cursor:
-                cursor.execute(sql, (terms, terms, max_results))
+                cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
         return [
             {
@@ -273,28 +299,50 @@ def suggest_from_data_api(
     max_results: int,
 ) -> list[dict[str, Any]] | None:
     terms = " ".join(normalize_query(query))
-    sql = """
+    embedding = embedding_for_query(ctx, query)
+    vector = vector_literal(embedding) if embedding else None
+    params: list[dict[str, Any]] = [
+        {"name": "terms", "value": {"stringValue": terms}},
+        {"name": "max_results", "value": {"longValue": max_results}},
+    ]
+    if vector:
+        params.append({"name": "embedding", "value": {"stringValue": vector}})
+        score_sql = """
+          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) +
+          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) +
+          coalesce(greatest(1 - (c.embedding <=> (:embedding)::vector), 0), 0)
+        """
+        where_sql = """
+          l.search_document @@ websearch_to_tsquery('english', :terms)
+          or c.search_document @@ websearch_to_tsquery('english', :terms)
+          or c.embedding is not null
+        """
+    else:
+        score_sql = """
+          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) +
+          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
+        """
+        where_sql = """
+          l.search_document @@ websearch_to_tsquery('english', :terms)
+          or c.search_document @@ websearch_to_tsquery('english', :terms)
+        """
+    sql = f"""
         select
           v.name as vendor,
           l.name as library,
           lv.version,
-          greatest(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) as score,
+          max({score_sql}) as score,
           coalesce(l.description, '') as reason
         from libraries l
         join vendors v on v.id = l.vendor_id
         join library_versions lv on lv.library_id = l.id
-        where l.search_document @@ websearch_to_tsquery('english', :terms)
-        order by score desc, v.name asc, l.name asc
+        left join chunks c on c.version_id = lv.id
+        where {where_sql}
+        group by v.name, l.name, lv.version, l.description
+        order by score desc, v.name asc, l.name asc, lv.version asc
         limit :max_results
     """
-    rows = execute_data_api(
-        ctx,
-        sql,
-        [
-            {"name": "terms", "value": {"stringValue": terms}},
-            {"name": "max_results", "value": {"longValue": max_results}},
-        ],
-    )
+    rows = execute_data_api(ctx, sql, params)
     if rows is None:
         return None
     return [
