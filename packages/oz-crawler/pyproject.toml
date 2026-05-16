@@ -6,7 +6,21 @@ requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.12.3",
     "markdownify>=0.14.1",
-    "scrapling @ git+https://github.com/D4Vinci/Scrapling.git",
+    "lxml>=6.1.0",
+    "cssselect>=1.4.0",
+    "orjson>=3.11.8",
+    "tld>=0.13.2",
+    "w3lib>=2.4.1",
+    "typing_extensions",
+    "click>=8.3.0",
+    "curl_cffi>=0.15.0",
+    "playwright==1.59.0",
+    "patchright==1.59.1",
+    "browserforge>=1.2.4",
+    "apify-fingerprint-datapoints>=0.13.0",
+    "msgspec>=0.21.1",
+    "anyio>=4.13.0",
+    "protego>=0.6.0",
 ]
 
 [project.scripts]
@@ -18,4 +32,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/oz_crawler"]
-

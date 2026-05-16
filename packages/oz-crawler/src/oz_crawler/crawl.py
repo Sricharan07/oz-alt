@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,38 @@ class CrawlResult:
     page: NormalizedPage
 
 
+@dataclass(frozen=True)
+class CrawlOptions:
+    max_pages: int = 1
+    fetcher: str = "auto"
+    concurrent_requests: int = 6
+    download_delay: float = 0.0
+    robots_txt: bool = True
+    crawldir: Path | None = None
+    headless: bool = True
+    network_idle: bool = True
+
+    @classmethod
+    def from_env(cls, *, max_pages: int) -> "CrawlOptions":
+        return cls(
+            max_pages=max_pages,
+            fetcher=os.environ.get("OZ_CRAWLER_FETCHER", "auto"),
+            concurrent_requests=int(os.environ.get("OZ_CRAWLER_CONCURRENCY", "6")),
+            download_delay=float(os.environ.get("OZ_CRAWLER_DELAY", "0")),
+            robots_txt=os.environ.get("OZ_CRAWLER_ROBOTS", "1").lower() not in {"0", "false", "no"},
+            crawldir=Path(os.environ["OZ_CRAWLER_CRAWLDIR"]) if os.environ.get("OZ_CRAWLER_CRAWLDIR") else None,
+            headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
+            network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
+        )
+
+
+@dataclass
+class CrawledPage:
+    source_url: str
+    html: str
+    title: str | None = None
+
+
 def crawl_single_page(
     *,
     url: str,
@@ -35,8 +69,10 @@ def crawl_single_page(
     version: str,
     title: str | None = None,
     max_pages: int = 1,
+    options: CrawlOptions | None = None,
 ) -> Path:
-    pages = crawl_pages(url, title=title, max_pages=max_pages)
+    crawl_options = options or CrawlOptions.from_env(max_pages=max_pages)
+    pages = crawl_pages(url, title=title, options=crawl_options)
     if not pages:
         raise RuntimeError(f"no pages crawled from {url}")
 
@@ -96,31 +132,133 @@ def crawl_single_page(
     return target
 
 
-def crawl_pages(url: str, *, title: str | None, max_pages: int) -> list[NormalizedPage]:
-    first_html = fetch_html(url)
-    first_page = normalize_html(first_html, source_url=url, title=title)
-    pages = [first_page]
-    if max_pages <= 1:
+def crawl_pages(url: str, *, title: str | None, options: CrawlOptions) -> list[NormalizedPage]:
+    if options.max_pages <= 0:
+        return []
+    crawled = crawl_pages_with_scrapling(url, options=options)
+    if crawled is None:
+        crawled = crawl_pages_with_stdlib(url, options=options)
+    return [normalize_html(page.html, source_url=page.source_url, title=title or page.title) for page in crawled]
+
+
+def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[CrawledPage] | None:
+    if options.fetcher.lower() == "stdlib":
+        return None
+    ensure_vendored_scrapling_path()
+    try:
+        from scrapling.fetchers import AsyncDynamicSession, AsyncStealthySession, FetcherSession
+        from scrapling.spiders import Spider
+    except ImportError:
+        return None
+
+    parsed_seed = urlparse(url)
+    seed_allowed_domains = {parsed_seed.netloc}
+    max_pages = options.max_pages
+    fetcher_mode = options.fetcher.lower()
+    declared_links = discover_declared_doc_links(url)
+
+    class OzDocsSpider(Spider):  # type: ignore[misc, valid-type]
+        name = "oz_docs"
+        start_urls = [url]
+        allowed_domains = seed_allowed_domains
+        concurrent_requests = max(1, options.concurrent_requests)
+        concurrent_requests_per_domain = max(1, options.concurrent_requests)
+        download_delay = max(0.0, options.download_delay)
+        robots_txt_obey = options.robots_txt
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.pages: list[CrawledPage] = []
+            self.seen: set[str] = {url}
+
+        def configure_sessions(self, manager: Any) -> None:
+            if fetcher_mode == "stealth":
+                manager.add(
+                    "default",
+                    AsyncStealthySession(headless=options.headless, network_idle=options.network_idle),
+                    default=True,
+                )
+            elif fetcher_mode == "dynamic":
+                manager.add(
+                    "default",
+                    AsyncDynamicSession(headless=options.headless, network_idle=options.network_idle),
+                    default=True,
+                )
+            elif fetcher_mode == "auto":
+                manager.add("default", FetcherSession(impersonate="chrome"), default=True)
+                manager.add(
+                    "dynamic",
+                    AsyncDynamicSession(headless=options.headless, network_idle=options.network_idle),
+                    lazy=True,
+                )
+                manager.add(
+                    "stealth",
+                    AsyncStealthySession(headless=options.headless, network_idle=options.network_idle),
+                    lazy=True,
+                )
+            else:
+                manager.add("default", FetcherSession(impersonate="chrome"), default=True)
+
+        async def parse(self, response: Any) -> Any:
+            response_url = response_source_url(response, fallback=url)
+            html = extract_html(response)
+            if html.strip() and len(self.pages) < max_pages:
+                self.pages.append(CrawledPage(source_url=response_url, html=html, title=response_title(response)))
+                yield {"url": response_url, "bytes": len(html)}
+
+            for link in candidate_doc_links(url, response_url, html, declared_links if response_url == url else []):
+                if len(self.seen) >= max_pages:
+                    break
+                if link in self.seen:
+                    continue
+                self.seen.add(link)
+                try:
+                    sid = session_id_for_link(fetcher_mode, link)
+                    kwargs: dict[str, Any] = {"callback": self.parse, "sid": sid}
+                    if sid in {"dynamic", "stealth"} or fetcher_mode in {"dynamic", "stealth"}:
+                        kwargs["network_idle"] = options.network_idle
+                    yield response.follow(link, **kwargs)
+                except TypeError:
+                    yield response.follow(link, callback=self.parse)
+
+    spider_kwargs: dict[str, Any] = {}
+    if options.crawldir is not None:
+        spider_kwargs["crawldir"] = str(options.crawldir)
+    spider = OzDocsSpider(**spider_kwargs)
+    try:
+        spider.start()
+    except Exception:
+        if fetcher_mode != "auto":
+            raise
+        return None
+    return spider.pages
+
+
+def crawl_pages_with_stdlib(url: str, *, options: CrawlOptions) -> list[CrawledPage]:
+    first_html = fetch_html_stdlib(url)
+    pages = [CrawledPage(source_url=url, html=first_html)]
+    if options.max_pages <= 1:
         return pages
 
-    discovered = discover_declared_doc_links(url)
+    discovered = discover_declared_doc_links(url, fetcher="stdlib")
     discovered.extend(discover_same_site_links(url, first_html))
     seen = {url}
-    for linked_url in dedupe(discovered):
-        if len(pages) >= max_pages:
+    for linked_url in candidate_doc_links(url, url, first_html, discovered):
+        if len(pages) >= options.max_pages:
             break
         if linked_url in seen:
             continue
         seen.add(linked_url)
         try:
-            html = fetch_html(linked_url)
+            html = fetch_html_stdlib(linked_url)
         except Exception:
             continue
-        pages.append(normalize_html(html, source_url=linked_url))
+        pages.append(CrawledPage(source_url=linked_url, html=html))
     return pages
 
 
 def fetch_html(url: str) -> str:
+    ensure_vendored_scrapling_path()
     try:
         from scrapling.fetchers import Fetcher
     except ImportError:
@@ -128,22 +266,40 @@ def fetch_html(url: str) -> str:
         with urlopen(req, timeout=20) as response:
             return response.read().decode("utf-8", errors="replace")
 
-    page = Fetcher.get(url)
+    page = Fetcher.get(url, stealthy_headers=True)
     html = extract_html(page)
     if not html.strip():
         raise RuntimeError(f"Scrapling fetched {url}, but no HTML content was found on the response object")
     return html
 
 
-def fetch_text_optional(url: str) -> str | None:
+def ensure_vendored_scrapling_path() -> None:
+    for ancestor in Path(__file__).resolve().parents:
+        candidate = ancestor / "third_party" / "Scrapling"
+        if (candidate / "scrapling").is_dir():
+            candidate_text = str(candidate)
+            if candidate_text not in sys.path:
+                sys.path.insert(0, candidate_text)
+            return
+
+
+def fetch_html_stdlib(url: str) -> str:
+    req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
+    with urlopen(req, timeout=20) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def fetch_text_optional(url: str, *, fetcher: str = "auto") -> str | None:
     try:
+        if fetcher == "stdlib":
+            return fetch_html_stdlib(url)
         return fetch_html(url)
     except Exception:
         return None
 
 
 def extract_html(page: Any) -> str:
-    for attr in ("html", "content", "body", "text"):
+    for attr in ("html", "content", "body", "text", "raw_body"):
         value = getattr(page, attr, None)
         if callable(value):
             value = value()
@@ -152,6 +308,27 @@ def extract_html(page: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return str(page)
+
+
+def response_source_url(response: Any, *, fallback: str) -> str:
+    for attr in ("url", "final_url", "request_url"):
+        value = getattr(response, attr, None)
+        if value:
+            return str(value)
+    meta = getattr(response, "meta", None)
+    if isinstance(meta, dict):
+        for key in ("url", "final_url", "request_url"):
+            if meta.get(key):
+                return str(meta[key])
+    return fallback
+
+
+def response_title(response: Any) -> str | None:
+    try:
+        title = response.css("title::text").get("")
+        return str(title) if title else None
+    except Exception:
+        return None
 
 
 def discover_same_site_links(url: str, html: str) -> list[str]:
@@ -176,6 +353,75 @@ def discover_same_site_links(url: str, html: str) -> list[str]:
     return output
 
 
+def candidate_doc_links(seed_url: str, current_url: str, html: str, declared_links: list[str]) -> list[str]:
+    parsed_seed = urlparse(seed_url)
+    links = []
+    links.extend(declared_links)
+    links.extend(discover_same_site_links(current_url, html))
+    filtered = [
+        link
+        for link in dedupe(links)
+        if is_crawlable_doc_url(link, parsed_seed.netloc)
+        and same_site_or_subdomain(link, parsed_seed.netloc)
+        and link != current_url
+    ]
+    filtered.sort(key=lambda link: (-doc_url_score(link), len(link), link))
+    return filtered
+
+
+def is_crawlable_doc_url(url: str, netloc: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    path = parsed.path.lower()
+    if re.search(r"\.(png|jpe?g|gif|webp|svg|ico|css|js|mjs|map|woff2?|ttf|eot|pdf|zip|tar|gz|tgz|mp4|webm)$", path):
+        return False
+    if any(part in path for part in ("/blog/", "/pricing", "/careers", "/login", "/signup", "/account")):
+        return False
+    return same_site_or_subdomain(url, netloc)
+
+
+def same_site_or_subdomain(url: str, netloc: str) -> bool:
+    try:
+        host = urlparse(url).netloc
+    except ValueError:
+        return False
+    return host == netloc or host.endswith(f".{netloc}")
+
+
+def doc_url_score(url: str) -> int:
+    lower = url.lower()
+    score = 0
+    for token, weight in {
+        "docs": 8,
+        "documentation": 8,
+        "guide": 7,
+        "reference": 7,
+        "api": 6,
+        "sdk": 5,
+        "examples": 5,
+        "tutorial": 4,
+        "quickstart": 4,
+        "getting-started": 4,
+        "llms": 3,
+        "sitemap": 2,
+    }.items():
+        if token in lower:
+            score += weight
+    return score
+
+
+def session_id_for_link(fetcher_mode: str, url: str) -> str:
+    if fetcher_mode in {"stealth", "dynamic", "http"}:
+        return "default"
+    lower = url.lower()
+    if any(token in lower for token in ("cloudflare", "captcha", "login", "protected")):
+        return "stealth"
+    if any(token in lower for token in ("app", "dashboard", "interactive")):
+        return "dynamic"
+    return "default"
+
+
 def discover_same_site_links_fallback(url: str, html: str) -> list[str]:
     parsed = urlparse(url)
     seen: set[str] = set()
@@ -192,17 +438,17 @@ def discover_same_site_links_fallback(url: str, html: str) -> list[str]:
     return output
 
 
-def discover_declared_doc_links(url: str) -> list[str]:
+def discover_declared_doc_links(url: str, *, fetcher: str = "auto") -> list[str]:
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     links: list[str] = []
 
     for name in ("/llms-full.txt", "/llms.txt"):
-        text = fetch_text_optional(base + name)
+        text = fetch_text_optional(base + name, fetcher=fetcher)
         if text:
             links.extend(extract_urls(text, base_url=base))
 
-    sitemap = fetch_text_optional(base + "/sitemap.xml")
+    sitemap = fetch_text_optional(base + "/sitemap.xml", fetcher=fetcher)
     if sitemap:
         links.extend(extract_sitemap_urls(sitemap))
 

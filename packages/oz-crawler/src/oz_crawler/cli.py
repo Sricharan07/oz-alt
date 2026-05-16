@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from oz_crawler.crawl import crawl_single_page
+from oz_crawler.crawl import CrawlOptions, crawl_single_page
 from oz_crawler.worker import run_local_worker
 
 
@@ -33,6 +33,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Maximum same-site pages to crawl. Defaults to 1.",
     )
+    crawl.add_argument(
+        "--fetcher",
+        choices=["auto", "http", "dynamic", "stealth", "stdlib"],
+        default="auto",
+        help="Scrapling fetcher mode. Defaults to auto.",
+    )
+    crawl.add_argument("--concurrency", type=int, default=6, help="Concurrent Scrapling requests.")
+    crawl.add_argument("--delay", type=float, default=0.0, help="Per-domain download delay in seconds.")
+    crawl.add_argument("--no-robots", action="store_true", help="Disable Scrapling robots.txt compliance.")
+    crawl.add_argument("--crawldir", type=Path, default=None, help="Scrapling checkpoint directory.")
+    crawl.add_argument("--headed", action="store_true", help="Run browser fetchers headed instead of headless.")
 
     worker = subcommands.add_parser("worker", help="Process local crawler queue jobs.")
     worker.add_argument(
@@ -48,6 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fixture registry root.",
     )
     worker.add_argument("--max-pages", type=int, default=8)
+    worker.add_argument(
+        "--fetcher",
+        choices=["auto", "http", "dynamic", "stealth", "stdlib"],
+        default="auto",
+        help="Scrapling fetcher mode for queued jobs.",
+    )
+    worker.add_argument("--concurrency", type=int, default=6)
+    worker.add_argument("--delay", type=float, default=0.0)
+    worker.add_argument("--no-robots", action="store_true")
 
     return parser
 
@@ -65,6 +85,15 @@ def main() -> None:
             version=args.version,
             title=args.title,
             max_pages=args.max_pages,
+            options=CrawlOptions(
+                max_pages=args.max_pages,
+                fetcher=args.fetcher,
+                concurrent_requests=args.concurrency,
+                download_delay=args.delay,
+                robots_txt=not args.no_robots,
+                crawldir=args.crawldir,
+                headless=not args.headed,
+            ),
         )
         print(target)
     elif args.command == "worker":
@@ -72,6 +101,10 @@ def main() -> None:
             queue_path=args.queue,
             registry_root=args.registry_root,
             max_pages=args.max_pages,
+            fetcher=args.fetcher,
+            concurrent_requests=args.concurrency,
+            download_delay=args.delay,
+            robots_txt=not args.no_robots,
         )
         print(f"processed {processed} crawler jobs")
 

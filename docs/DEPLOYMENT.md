@@ -20,6 +20,14 @@ The generated registry must contain at least 15 packs:
 find registry/packs -name '*.ozpack' | wc -l
 ```
 
+The crawler uses the vendored D4Vinci/Scrapling source under `third_party/Scrapling`. Install the crawler package dependencies before crawling:
+
+```bash
+pip install -e packages/oz-crawler
+```
+
+For browser-backed Scrapling modes, run Scrapling's browser install step in the runtime image before using `--fetcher dynamic` or `--fetcher stealth`.
+
 ## Deploy AWS Stack
 
 ```bash

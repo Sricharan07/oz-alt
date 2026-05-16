@@ -43,7 +43,9 @@ The API uses the same handlers locally and in Lambda. `RegistryStorage` reads ca
 
 ## Crawler
 
-The crawler fetches docs with Scrapling when installed and uses a stdlib fetch/normalize fallback in Lambda. It discovers `/llms-full.txt`, `/llms.txt`, `/sitemap.xml`, and same-site links, then writes:
+The crawler uses a vendored copy of D4Vinci/Scrapling under `third_party/Scrapling` as the primary crawler engine. Local and production jobs run through Scrapling's `Spider`, `FetcherSession`, `AsyncDynamicSession`, `AsyncStealthySession`, `response.follow()`, concurrency controls, optional robots.txt compliance, and optional checkpoint directories. A stdlib fetch fallback remains for Lambda/runtime images that do not include browser dependencies.
+
+It discovers `/llms-full.txt`, `/llms.txt`, `/sitemap.xml`, and same-site links, then writes:
 
 - `README.md`
 - `INDEX.md`

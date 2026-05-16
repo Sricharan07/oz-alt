@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 from oz_api.indexer import DataApiWriter, write_catalog_and_chunks  # noqa: E402
 from oz_api.retrieval import RetrievalContext  # noqa: E402
 from oz_api.storage import RegistryStorage, normalize_query  # noqa: E402
-from oz_crawler.crawl import crawl_single_page  # noqa: E402
+from oz_crawler.crawl import CrawlOptions, crawl_single_page  # noqa: E402
 from oz_crawler.pack import build_pack_bytes  # noqa: E402
 
 
@@ -60,6 +60,17 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         library=library,
         version=version,
         max_pages=int(job.get("max_pages") or os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
+        options=CrawlOptions(
+            max_pages=int(job.get("max_pages") or os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
+            fetcher=str(job.get("fetcher") or os.environ.get("OZ_CRAWLER_FETCHER", "auto")),
+            concurrent_requests=int(job.get("concurrent_requests") or os.environ.get("OZ_CRAWLER_CONCURRENCY", "6")),
+            download_delay=float(job.get("download_delay") or os.environ.get("OZ_CRAWLER_DELAY", "0")),
+            robots_txt=str(job.get("robots_txt", os.environ.get("OZ_CRAWLER_ROBOTS", "1"))).lower()
+            not in {"0", "false", "no"},
+            crawldir=Path(os.environ["OZ_CRAWLER_CRAWLDIR"]) if os.environ.get("OZ_CRAWLER_CRAWLDIR") else None,
+            headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
+            network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
+        ),
     )
     pack_body, manifest = build_pack_bytes(target, vendor, library, version)
     pack_key = storage.put_pack_bytes(vendor, library, version, pack_body)
@@ -164,6 +175,10 @@ def enqueue_seed_libraries() -> None:
                     "version": item["version"],
                     "source_url": item["source_url"],
                     "max_pages": int(os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
+                    "fetcher": os.environ.get("OZ_CRAWLER_FETCHER", "auto"),
+                    "concurrent_requests": int(os.environ.get("OZ_CRAWLER_CONCURRENCY", "6")),
+                    "download_delay": float(os.environ.get("OZ_CRAWLER_DELAY", "0")),
+                    "robots_txt": os.environ.get("OZ_CRAWLER_ROBOTS", "1").lower() not in {"0", "false", "no"},
                 },
                 sort_keys=True,
             ),

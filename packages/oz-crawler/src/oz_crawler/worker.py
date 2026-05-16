@@ -4,10 +4,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from oz_crawler.crawl import crawl_single_page
+from oz_crawler.crawl import CrawlOptions, crawl_single_page
 
 
-def run_local_worker(*, queue_path: Path, registry_root: Path, max_pages: int) -> int:
+def run_local_worker(
+    *,
+    queue_path: Path,
+    registry_root: Path,
+    max_pages: int,
+    fetcher: str = "auto",
+    concurrent_requests: int = 6,
+    download_delay: float = 0.0,
+    robots_txt: bool = True,
+) -> int:
     if not queue_path.exists():
         return 0
 
@@ -35,6 +44,13 @@ def run_local_worker(*, queue_path: Path, registry_root: Path, max_pages: int) -
                 library=library,
                 version=version,
                 max_pages=max_pages,
+                options=CrawlOptions(
+                    max_pages=int(job.get("max_pages") or max_pages),
+                    fetcher=str(job.get("fetcher") or fetcher),
+                    concurrent_requests=int(job.get("concurrent_requests") or concurrent_requests),
+                    download_delay=float(job.get("download_delay") or download_delay),
+                    robots_txt=bool(job.get("robots_txt", robots_txt)),
+                ),
             )
         except Exception as exc:  # pragma: no cover - operational boundary
             job["status"] = "failed"
@@ -50,4 +66,3 @@ def run_local_worker(*, queue_path: Path, registry_root: Path, max_pages: int) -
         encoding="utf-8",
     )
     return processed
-
