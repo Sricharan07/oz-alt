@@ -17,7 +17,7 @@ npm install -g @hiringbae/oz
 ## Connect
 
 ```bash
-oz login --api-url https://zt994ghexl.execute-api.us-east-1.amazonaws.com/
+oz login --api-url https://api.claw.codes
 ```
 
 ## Use
@@ -26,4 +26,3 @@ oz login --api-url https://zt994ghexl.execute-api.us-east-1.amazonaws.com/
 oz pull facebook/react@19
 oz search "useEffect cleanup dependencies" facebook/react
 ```
-
