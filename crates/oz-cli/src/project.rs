@@ -7,6 +7,7 @@ pub(crate) fn init_project(project_root: &Path) -> Result<()> {
             project_root.join(VENDORS_DIR).display()
         )
     })?;
+    ensure_global_objects_root()?;
 
     let existing = read_lock(project_root).unwrap_or_default();
     let mut dependencies = detect_dependencies(project_root)?;
@@ -356,6 +357,12 @@ fn hex_digest(bytes: &[u8]) -> String {
 pub(crate) fn global_objects_root() -> Result<PathBuf> {
     let home = dirs::home_dir().context("failed to locate home directory")?;
     Ok(home.join(".codo").join("objects"))
+}
+
+pub(crate) fn ensure_global_objects_root() -> Result<PathBuf> {
+    let root = global_objects_root()?;
+    fs::create_dir_all(&root).with_context(|| format!("failed to create {}", root.display()))?;
+    Ok(root)
 }
 
 pub(crate) fn upsert_pull(lock: &mut ProjectLock, pull: PulledLibrary) {
