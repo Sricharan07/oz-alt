@@ -47,6 +47,20 @@ npm run deploy -- \
   --parameters PackVerifyKey=<ed25519-public-key>
 ```
 
+To deploy Oz behind your own API hostname, set these before `npm run synth` or
+`npm run deploy`:
+
+```bash
+export OZ_CUSTOM_DOMAIN_NAME=api.yourdomain.com
+export OZ_CUSTOM_DOMAIN_CERT_ARN=arn:aws:acm:us-east-1:123456789012:certificate/...
+```
+
+When that is set, the stack creates an API Gateway custom domain and outputs:
+
+- `ApiUrl` for the URL the CLI should use
+- `CloudflareCnameTarget` for the Cloudflare DNS record value
+- `CloudflareHostedZoneId` for the API Gateway regional hosted zone ID
+
 The stack creates:
 
 - API Gateway HTTP API

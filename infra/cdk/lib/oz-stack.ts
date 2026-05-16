@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
+import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as budgets from "aws-cdk-lib/aws-budgets";
@@ -21,6 +22,20 @@ import * as sqs from "aws-cdk-lib/aws-sqs";
 export class OzStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
+
+    const customDomainName = readOptionalEnv("OZ_CUSTOM_DOMAIN_NAME");
+    const customDomainCertificateArn = readOptionalEnv("OZ_CUSTOM_DOMAIN_CERT_ARN");
+    if (customDomainName && !customDomainCertificateArn) {
+      throw new Error(
+        "OZ_CUSTOM_DOMAIN_CERT_ARN is required when OZ_CUSTOM_DOMAIN_NAME is set"
+      );
+    }
+    if (customDomainCertificateArn && !customDomainName) {
+      throw new Error(
+        "OZ_CUSTOM_DOMAIN_NAME is required when OZ_CUSTOM_DOMAIN_CERT_ARN is set"
+      );
+    }
+    const customDomainCertificateArnValue = customDomainCertificateArn ?? "";
 
     const budgetAlertEmail = new cdk.CfnParameter(this, "BudgetAlertEmail", {
       type: "String",
@@ -452,9 +467,28 @@ export class OzStack extends cdk.Stack {
       ]
     });
 
-    const httpApi = new apigwv2.HttpApi(this, "HttpApi", {
+    const customDomain = customDomainName
+      ? new apigwv2.DomainName(this, "CustomDomainName", {
+          domainName: customDomainName,
+          certificate: acm.Certificate.fromCertificateArn(
+            this,
+            "CustomDomainCertificate",
+            customDomainCertificateArnValue
+          )
+        })
+      : undefined;
+
+    const httpApiProps: apigwv2.HttpApiProps = {
       defaultIntegration: new integrations.HttpLambdaIntegration("ApiIntegration", apiFunction)
-    });
+    };
+    if (customDomain) {
+      httpApiProps.defaultDomainMapping = {
+        domainName: customDomain
+      };
+      httpApiProps.disableExecuteApiEndpoint = true;
+    }
+
+    const httpApi = new apigwv2.HttpApi(this, "HttpApi", httpApiProps);
 
     new budgets.CfnBudget(this, "BetaBudget", {
       budget: {
@@ -484,7 +518,19 @@ export class OzStack extends cdk.Stack {
       ]
     });
 
-    new cdk.CfnOutput(this, "ApiUrl", { value: httpApi.url ?? "" });
+    new cdk.CfnOutput(this, "ApiGatewayExecuteUrl", { value: httpApi.url ?? "" });
+    new cdk.CfnOutput(this, "ApiUrl", {
+      value: customDomain ? `https://${customDomainName}` : (httpApi.url ?? "")
+    });
+    if (customDomain) {
+      new cdk.CfnOutput(this, "CustomDomainName", { value: customDomainName });
+      new cdk.CfnOutput(this, "CloudflareCnameTarget", {
+        value: customDomain.regionalDomainName
+      });
+      new cdk.CfnOutput(this, "CloudflareHostedZoneId", {
+        value: customDomain.regionalHostedZoneId
+      });
+    }
     new cdk.CfnOutput(this, "ObjectsBucketName", { value: objectsBucket.bucketName });
     new cdk.CfnOutput(this, "PacksBucketName", { value: packsBucket.bucketName });
     new cdk.CfnOutput(this, "CrawlerQueueUrl", { value: crawlerQueue.queueUrl });
@@ -495,4 +541,9 @@ export class OzStack extends cdk.Stack {
     new cdk.CfnOutput(this, "DatabaseSecretArn", { value: database.attrMasterUserSecretSecretArn });
     new cdk.CfnOutput(this, "OpenAiApiKeySecretArn", { value: openAiApiKeySecret.secretArn });
   }
+}
+
+function readOptionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
 }
