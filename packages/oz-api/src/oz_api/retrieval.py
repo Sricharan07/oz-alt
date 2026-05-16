@@ -1,0 +1,401 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib import request
+
+from oz_api.storage import RegistryStorage, normalize_query
+
+
+@dataclass(frozen=True)
+class RetrievalContext:
+    storage: RegistryStorage
+    database_url: str | None = None
+    rerank_table: str | None = None
+    openai_api_key: str | None = None
+
+    @classmethod
+    def from_env(cls, storage: RegistryStorage) -> "RetrievalContext":
+        return cls(
+            storage=storage,
+            database_url=os.environ.get("OZ_DATABASE_URL"),
+            rerank_table=os.environ.get("OZ_RERANK_TABLE"),
+            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        )
+
+
+def suggest(ctx: RetrievalContext, query: str, max_results: int, fingerprint: str = "") -> list[dict[str, Any]]:
+    rows = suggest_from_postgres(ctx, query, max_results, fingerprint)
+    if rows is None:
+        rows = suggest_from_catalog(ctx.storage, query, max_results)
+    return maybe_rerank(ctx, "suggest", query, fingerprint, rows)
+
+
+def search(
+    ctx: RetrievalContext,
+    query: str,
+    *,
+    library_scope: str | None,
+    max_results: int,
+    fingerprint: str = "",
+) -> list[dict[str, Any]]:
+    rows = search_from_postgres(ctx, query, library_scope, max_results, fingerprint)
+    if rows is None:
+        rows = search_from_fixtures(ctx.storage, query, library_scope=library_scope, max_results=max_results)
+    return maybe_rerank(ctx, f"search:{library_scope or '*'}", query, fingerprint, rows)
+
+
+def suggest_from_catalog(storage: RegistryStorage, query: str, max_results: int) -> list[dict[str, Any]]:
+    terms = normalize_query(query)
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for entry in storage.load_catalog():
+        haystack = " ".join(
+            [
+                entry.get("vendor", ""),
+                entry.get("library", ""),
+                entry.get("version", ""),
+                entry.get("description", ""),
+                " ".join(entry.get("keywords", [])),
+            ]
+        ).lower()
+        score = sum(haystack.count(term) for term in terms)
+        if score:
+            rows.append((score, entry))
+    rows.sort(key=lambda item: (-item[0], item[1].get("vendor", ""), item[1].get("library", "")))
+    return [
+        {
+            "vendor": entry["vendor"],
+            "library": entry["library"],
+            "version": entry["version"],
+            "score": score,
+            "reason": entry.get("description", ""),
+        }
+        for score, entry in rows[:max_results]
+    ]
+
+
+def search_from_fixtures(
+    storage: RegistryStorage,
+    query: str,
+    *,
+    library_scope: str | None,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    terms = normalize_query(query)
+    scope_vendor, scope_library = parse_scope(library_scope)
+    hits: list[dict[str, Any]] = []
+
+    for fixture in storage.fixtures_root.glob("*/*/*"):
+        if not fixture.is_dir():
+            continue
+        vendor, library, version = fixture.parts[-3:]
+        if scope_vendor and (vendor != scope_vendor or library != scope_library):
+            continue
+        chunk_path = fixture / "_chunks.jsonl"
+        if chunk_path.exists():
+            for row in read_jsonl(chunk_path):
+                normalized = str(row.get("text", "")).lower()
+                score = sum(1 for term in terms if term in normalized)
+                if score == 0:
+                    continue
+                hits.append(
+                    {
+                        "path": f".codo/vendors/{vendor}/{library}@{version}/{row.get('path')}",
+                        "line": 1,
+                        "score": score,
+                        "library": f"{vendor}/{library}",
+                        "vendor": vendor,
+                        "version": version,
+                    }
+                )
+            continue
+        for path in fixture.rglob("*.md"):
+            relative = path.relative_to(fixture)
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                normalized = line.lower()
+                score = sum(1 for term in terms if term in normalized)
+                if score == 0:
+                    continue
+                hits.append(
+                    {
+                        "path": f".codo/vendors/{vendor}/{library}@{version}/{relative.as_posix()}",
+                        "line": line_number,
+                        "score": score,
+                        "library": f"{vendor}/{library}",
+                        "vendor": vendor,
+                        "version": version,
+                    }
+                )
+
+    hits.sort(key=lambda hit: (-hit["score"], hit["path"], hit["line"]))
+    return hits[:max_results]
+
+
+def suggest_from_postgres(
+    ctx: RetrievalContext,
+    query: str,
+    max_results: int,
+    fingerprint: str,
+) -> list[dict[str, Any]] | None:
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return None
+    terms = " ".join(normalize_query(query))
+    sql = """
+        select
+          v.name as vendor,
+          l.name as library,
+          lv.version,
+          greatest(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+          coalesce(l.description, '') as reason
+        from libraries l
+        join vendors v on v.id = l.vendor_id
+        join library_versions lv on lv.library_id = l.id
+        where l.search_document @@ websearch_to_tsquery('english', %s)
+        order by score desc, v.name asc, l.name asc
+        limit %s
+    """
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, (terms, terms, max_results))
+                rows = cursor.fetchall()
+        return [
+            {
+                "vendor": row[0],
+                "library": row[1],
+                "version": row[2],
+                "score": float(row[3]),
+                "reason": row[4],
+            }
+            for row in rows
+        ]
+    except Exception:
+        return None
+
+
+def search_from_postgres(
+    ctx: RetrievalContext,
+    query: str,
+    library_scope: str | None,
+    max_results: int,
+    fingerprint: str,
+) -> list[dict[str, Any]] | None:
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return None
+    terms = " ".join(normalize_query(query))
+    scope_vendor, scope_library = parse_scope(library_scope)
+    where_scope = ""
+    params: list[Any] = [terms, terms]
+    if scope_vendor:
+        where_scope = "and v.name = %s and l.name = %s"
+        params.extend([scope_vendor, scope_library])
+    params.append(max_results)
+    sql = f"""
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+          c.start_line,
+          greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version
+        from chunks c
+        join library_versions lv on lv.id = c.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        where c.search_document @@ websearch_to_tsquery('english', %s)
+        {where_scope}
+        order by score desc, path asc, c.start_line asc
+        limit %s
+    """
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+        return [
+            {
+                "path": row[0],
+                "line": row[1],
+                "score": float(row[2]),
+                "library": row[3],
+                "vendor": row[4],
+                "version": row[5],
+            }
+            for row in rows
+        ]
+    except Exception:
+        return None
+
+
+def maybe_rerank(
+    ctx: RetrievalContext,
+    route: str,
+    query: str,
+    fingerprint: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if len(rows) < 2 or clear_winner(rows):
+        return rows
+
+    cache_key = rerank_cache_key(route, query, fingerprint)
+    cached = get_rerank_cache(ctx, cache_key)
+    if cached is not None:
+        return cached
+
+    reranked = openai_rerank(ctx.openai_api_key, query, rows[:20]) or rows
+    put_rerank_cache(ctx, cache_key, reranked)
+    return reranked
+
+
+def clear_winner(rows: list[dict[str, Any]]) -> bool:
+    scores = [float(row.get("score", 0) or 0) for row in rows[:3]]
+    return len(scores) == 3 and all(score > 0.85 for score in scores)
+
+
+def openai_rerank(api_key: str | None, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    if not api_key:
+        return None
+    payload = {
+        "model": os.environ.get("OZ_RERANK_MODEL", "gpt-4o-mini"),
+        "messages": [
+            {
+                "role": "system",
+                "content": "Rank documentation search results for a coding agent. Return JSON array of zero-based indexes only.",
+            },
+            {"role": "user", "content": json.dumps({"query": query, "results": rows})},
+        ],
+        "temperature": 0,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=data,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=8) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        content = body["choices"][0]["message"]["content"]
+        order = json.loads(content)
+        if not isinstance(order, list):
+            return None
+        ranked = [rows[idx] for idx in order if isinstance(idx, int) and 0 <= idx < len(rows)]
+        seen = {id(row) for row in ranked}
+        ranked.extend(row for row in rows if id(row) not in seen)
+        return ranked
+    except Exception:
+        return None
+
+
+def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
+    digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
+    return f"rerank:{digest}"
+
+
+def get_rerank_cache(ctx: RetrievalContext, cache_key: str) -> list[dict[str, Any]] | None:
+    client = dynamodb_client()
+    if client is None or not ctx.rerank_table:
+        return None
+    try:
+        response = client.get_item(TableName=ctx.rerank_table, Key={"cache_key": {"S": cache_key}})
+        item = response.get("Item")
+        if not item:
+            return None
+        expires_at = int(item.get("expires_at", {}).get("N", "0"))
+        if expires_at < int(time.time()):
+            return None
+        return json.loads(item["payload"]["S"])
+    except Exception:
+        return None
+
+
+def put_rerank_cache(ctx: RetrievalContext, cache_key: str, rows: list[dict[str, Any]]) -> None:
+    client = dynamodb_client()
+    if client is None or not ctx.rerank_table:
+        return
+    try:
+        client.put_item(
+            TableName=ctx.rerank_table,
+            Item={
+                "cache_key": {"S": cache_key},
+                "expires_at": {"N": str(int(time.time()) + 7 * 24 * 60 * 60)},
+                "payload": {"S": json.dumps(rows, sort_keys=True)},
+            },
+        )
+    except Exception:
+        return
+
+
+def postgres_connection(database_url: str | None) -> Any | None:
+    if not database_url:
+        return None
+    try:
+        import psycopg  # type: ignore
+    except ImportError:
+        return None
+    try:
+        return psycopg.connect(database_url)
+    except Exception:
+        return None
+
+
+def dynamodb_client() -> Any | None:
+    try:
+        import boto3  # type: ignore
+    except ImportError:
+        return None
+    return boto3.client("dynamodb")
+
+
+def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, str, str]] = set()
+    output: list[dict[str, str]] = []
+    for result in results:
+        vendor = result["vendor"]
+        library = result["library"].split("/", 1)[1]
+        version = result["version"]
+        key = (vendor, library, version)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append({"vendor": vendor, "library": library, "version": version})
+    return output
+
+
+def latest_entry(storage: RegistryStorage, vendor: str, library: str) -> dict[str, Any] | None:
+    matches = [
+        entry
+        for entry in storage.load_catalog()
+        if entry.get("vendor") == vendor and entry.get("library") == library
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda entry: entry.get("version", ""))
+    return matches[-1]
+
+
+def parse_scope(scope: str | None) -> tuple[str | None, str | None]:
+    if not scope:
+        return None, None
+    if "/" not in scope:
+        return "npm", scope
+    vendor, library = scope.split("/", 1)
+    return vendor, library
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows

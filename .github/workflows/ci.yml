@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: cargo test --workspace
+      - run: python -m py_compile lambda_entry.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+      - run: bash scripts/e2e-local.sh
+      - run: npm install
+        working-directory: infra/cdk
+      - run: npm run build
+        working-directory: infra/cdk

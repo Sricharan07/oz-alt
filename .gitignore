@@ -1,0 +1,17 @@
+target/
+/.codo/vendors/
+/.codo/tmp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+dist/
+*.egg-info/
+.DS_Store
+node_modules/
+**/node_modules/
+cdk.out/
+**/cdk.out/
+registry/admin/*.jsonl
