@@ -13,7 +13,7 @@ remote_home="$(mktemp -d)"
 trap 'rm -rf "$tmp_home" "$remote_home"; kill "${server_pid:-}" >/dev/null 2>&1 || true' EXIT
 
 oz() {
-  HOME="$tmp_home" target/debug/oz "$@"
+  OZ_DISABLE_KEYCHAIN=1 HOME="$tmp_home" target/debug/oz "$@"
 }
 
 oz registry build-packs
@@ -41,13 +41,13 @@ curl -fsS -X POST http://127.0.0.1:8765/search \
 curl -fsS http://127.0.0.1:8765/refs/vercel/next.js >/dev/null
 curl -fsS http://127.0.0.1:8765/admin >/dev/null
 
-HOME="$remote_home" target/debug/oz login --api-url http://127.0.0.1:8765
-HOME="$remote_home" target/debug/oz init
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz login --api-url http://127.0.0.1:8765
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz init
 rm -rf .codo/vendors
-HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware"
-HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware" --json >/dev/null
-HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js
-HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js --json >/dev/null
-HOME="$remote_home" target/debug/oz status
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware"
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware" --json >/dev/null
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js --json >/dev/null
+OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz status
 
 echo "local e2e ok"

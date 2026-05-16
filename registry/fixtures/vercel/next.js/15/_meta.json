@@ -1,11 +1,10 @@
 {
-  "vendor": "vercel",
+  "indexed_at": "2026-05-16T02:31:08.309474+00:00",
   "library": "next.js",
-  "version": "15",
+  "ref_sha": "local-crawl",
   "source_urls": [
     "https://nextjs.org/docs"
   ],
-  "indexed_at": "2026-05-15T00:00:00Z",
-  "ref_sha": "fixture-nextjs-15"
+  "vendor": "vercel",
+  "version": "15"
 }
-

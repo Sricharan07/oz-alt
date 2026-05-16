@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:16.829918+00:00",
+  "library": "stripe",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://docs.stripe.com/api"
+  ],
+  "vendor": "stripe",
+  "version": "latest"
+}

@@ -14,6 +14,7 @@ class RegistryStorage:
     catalog_bucket: str | None = None
     admin_bucket: str | None = None
     pack_prefix: str = "packs"
+    pack_public_base_url: str | None = None
     catalog_key: str = "catalog.json"
     admin_prefix: str = "admin"
 
@@ -26,6 +27,7 @@ class RegistryStorage:
             catalog_bucket=os.environ.get("OZ_CATALOG_BUCKET") or packs_bucket,
             admin_bucket=os.environ.get("OZ_ADMIN_BUCKET") or packs_bucket,
             pack_prefix=os.environ.get("OZ_PACK_PREFIX", "packs").strip("/"),
+            pack_public_base_url=(os.environ.get("OZ_PACK_PUBLIC_BASE_URL") or "").rstrip("/") or None,
             catalog_key=os.environ.get("OZ_CATALOG_KEY", "catalog.json").strip("/"),
             admin_prefix=os.environ.get("OZ_ADMIN_PREFIX", "admin").strip("/"),
         )
@@ -77,6 +79,11 @@ class RegistryStorage:
         if pack_path.exists():
             return pack_path.read_bytes()
         return None
+
+    def get_pack_url(self, vendor: str, library: str, version: str) -> str | None:
+        if not self.pack_public_base_url:
+            return None
+        return f"{self.pack_public_base_url}/{vendor}/{library}/{version}.ozpack"
 
     def append_admin_event(self, stream: str, event: dict[str, Any]) -> None:
         if self.admin_bucket:

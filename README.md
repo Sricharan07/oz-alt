@@ -1,55 +1,62 @@
 # Oz
 
-Oz is a local-first documentation registry for coding agents. This repo now contains a runnable local version of the PRD flow:
+Oz is a versioned documentation registry for coding agents. The CLI pulls library docs into `.codo/vendors/...` so agents can use normal file tools instead of guessing external APIs from memory.
 
-1. Initialize a project with `oz init`.
-2. Build immutable local registry packs with `oz registry build-packs`.
-3. Suggest an indexed library with `oz suggest`.
-4. Pull a versioned docs tree with `oz pull`, or let `oz search` auto-pull it.
-5. Let agents read files under `.codo/vendors/...` with their normal file tools.
+This repository contains the end-to-end beta product:
 
-The AWS deployment, device OAuth, hosted S3 packs, OpenAI reranking, and production telemetry storage are still implementation targets. The product loop itself is runnable locally.
+1. 15 launch libraries crawled into `registry/fixtures`.
+2. Immutable `.ozpack` bundles in `registry/packs`.
+3. A Rust CLI with `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `gc`, `doctor`, and `config`.
+4. A Python API that runs locally or in Lambda and serves `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, and admin routes.
+5. A Scrapling-first crawler with stdlib fallback, chunking, symbol extraction, and optional OpenAI embedding generation.
+6. CDK infrastructure for S3, Aurora Serverless v2/Postgres Data API, DynamoDB rerank cache, SQS crawler queue/DLQ, scheduled recrawls, API Gateway, Lambda, and budget guardrail.
 
 ## Repository Layout
 
 - `crates/oz-cli` - Rust CLI binary.
-- `crates/oz-objects` - content-addressed local object store and tree materialization.
-- `packages/oz-crawler` - Python Scrapling crawler that writes Oz fixture trees.
-- `packages/oz-api` - local HTTP API exposing PRD-shaped endpoints.
+- `crates/oz-objects` - content-addressed local object store and pack verification.
+- `packages/oz-crawler` - documentation crawler and local worker.
+- `packages/oz-api` - local/Lambda registry API.
 - `packages/oz-admin` - static admin entry point.
-- `registry/fixtures` - local development registry used by `oz pull`.
-- `registry/packs` - local `.ozpack` bundles generated from fixtures.
-- `registry/catalog.json` - machine-readable registry catalog.
-- `infra/cdk` - AWS CDK deployment stack.
-- `PRD.md` - product requirements.
+- `packages/oz-npm` - npm global wrapper package.
+- `registry/fixtures` - 15 seeded documentation trees.
+- `registry/packs` - generated `.ozpack` bundles.
+- `infra/cdk` - AWS deployment stack.
+- `infra/sql` - Aurora/Postgres schema and indexes.
+- `scripts` - e2e, seed build, S3 publish, migrations, install, release.
 
-## Try The Local Loop
-
-```bash
-cargo run -p oz -- registry build-packs
-cargo run -p oz -- init
-cargo run -p oz -- suggest "JWT authentication in Next.js middleware"
-cargo run -p oz -- search "middleware jwt cookies" vercel/next.js
-cargo run -p oz -- status
-```
-
-`oz search` auto-pulls indexed docs when needed. The pulled docs materialize under `.codo/vendors/vercel/next.js@15/`.
-
-Run the full local smoke test:
+## Local Verification
 
 ```bash
 bash scripts/e2e-local.sh
 ```
 
-Deployment instructions are in `docs/DEPLOYMENT.md`.
+This runs Rust tests, Python compile checks, CLI local mode, local API mode, login, suggest, search auto-pull, pack download, status, doctor, admin, and JSON output.
+
+Run the representative agent task eval:
+
+```bash
+bash scripts/eval-agent-tasks.sh
+```
+
+## Use The CLI Locally
+
+```bash
+cargo run -p oz -- registry build-packs
+cargo run -p oz -- init
+cargo run -p oz -- install --codex
+cargo run -p oz -- suggest "JWT authentication in Next.js middleware"
+cargo run -p oz -- search "middleware jwt cookies" vercel/next.js
+cargo run -p oz -- status
+```
+
+Pulled docs materialize under `.codo/vendors/<vendor>/<library>@<version>/`.
 
 ## Local API
 
 ```bash
-PYTHONPATH=packages/oz-api/src python3 -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765
+PYTHONPATH=packages/oz-api/src python3 -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 --require-auth
 ```
-
-Point the CLI at the API and use the remote pack/search path:
 
 ```bash
 target/debug/oz login --api-url http://127.0.0.1:8765
@@ -57,27 +64,14 @@ target/debug/oz suggest "JWT authentication in Next.js middleware"
 target/debug/oz search "middleware jwt cookies" vercel/next.js
 ```
 
-Useful endpoints:
-
-- `GET /health`
-- `POST /auth/device`
-- `POST /auth/token`
-- `POST /suggest`
-- `POST /search`
-- `GET /refs/<vendor>/<library>`
-- `GET /pack/<vendor>/<library>/<version>`
-- `POST /index-request`
-- `POST /telemetry`
-- `GET /admin/index-requests`
-- `GET /admin/telemetry`
-
-## Crawler
-
-The crawler uses Scrapling from `https://github.com/D4Vinci/Scrapling.git` and emits registry fixtures:
+## Seed Registry
 
 ```bash
-python -m pip install -e packages/oz-crawler
-oz-crawl crawl https://nextjs.org/docs --vendor vercel --library next.js --version 15
+OZ_SEED_MAX_PAGES=24 bash scripts/build-seed-registry.sh
 ```
 
-The crawler writes Oz-compatible fixture trees with `README.md`, `INDEX.md`, `guides/`, `_symbols/`, and `_meta.json`. Deep sitemap traversal, embedding, and hosted pack upload come next.
+This crawls the 15 launch libraries from `registry/seed_libraries.json`, writes fixture trees, rebuilds `.ozpack` bundles, and refreshes `registry/catalog.json`.
+
+## Deployment
+
+See `docs/DEPLOYMENT.md`.

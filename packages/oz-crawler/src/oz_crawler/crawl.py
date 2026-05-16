@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
-from bs4 import BeautifulSoup
+from oz_crawler.embeddings import row_with_embedding
 from oz_crawler.normalize import NormalizedPage, normalize_html
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:  # pragma: no cover - Lambda fallback when optional crawler deps are absent
+    BeautifulSoup = None  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,8 @@ def crawl_single_page(
         raise RuntimeError(f"no pages crawled from {url}")
 
     target = registry_root / vendor / library / version
+    if target.exists():
+        shutil.rmtree(target)
     (target / "_symbols").mkdir(parents=True, exist_ok=True)
     (target / "guides").mkdir(parents=True, exist_ok=True)
     (target / "api-reference").mkdir(parents=True, exist_ok=True)
@@ -42,6 +51,14 @@ def crawl_single_page(
     page_title = title or pages[0].title or f"{library} {version}"
     (target / "README.md").write_text(
         f"# {page_title}\n\nDocumentation crawled from {url}.\n",
+        encoding="utf-8",
+    )
+    (target / "api-reference" / "README.md").write_text(
+        f"# {page_title} API Reference\n\nAPI reference entries extracted from {url}.\n",
+        encoding="utf-8",
+    )
+    (target / "examples" / "README.md").write_text(
+        f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
         encoding="utf-8",
     )
     guide_links: list[tuple[str, str]] = []
@@ -106,10 +123,10 @@ def crawl_pages(url: str, *, title: str | None, max_pages: int) -> list[Normaliz
 def fetch_html(url: str) -> str:
     try:
         from scrapling.fetchers import Fetcher
-    except ImportError as exc:
-        raise RuntimeError(
-            "Scrapling is not installed. Run `python -m pip install -e packages/oz-crawler`."
-        ) from exc
+    except ImportError:
+        req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
+        with urlopen(req, timeout=20) as response:
+            return response.read().decode("utf-8", errors="replace")
 
     page = Fetcher.get(url)
     html = extract_html(page)
@@ -139,6 +156,8 @@ def extract_html(page: Any) -> str:
 
 def discover_same_site_links(url: str, html: str) -> list[str]:
     parsed = urlparse(url)
+    if BeautifulSoup is None:
+        return discover_same_site_links_fallback(url, html)
     soup = BeautifulSoup(html, "html.parser")
     seen: set[str] = set()
     output: list[str] = []
@@ -146,6 +165,22 @@ def discover_same_site_links(url: str, html: str) -> list[str]:
         href = anchor.get("href")
         if not href:
             continue
+        absolute = urljoin(url, href).split("#", 1)[0]
+        parsed_absolute = urlparse(absolute)
+        if parsed_absolute.netloc != parsed.netloc:
+            continue
+        if absolute in seen or absolute == url:
+            continue
+        seen.add(absolute)
+        output.append(absolute)
+    return output
+
+
+def discover_same_site_links_fallback(url: str, html: str) -> list[str]:
+    parsed = urlparse(url)
+    seen: set[str] = set()
+    output: list[str] = []
+    for href in re.findall(r"(?i)<a[^>]+href=['\"]([^'\"]+)['\"]", html):
         absolute = urljoin(url, href).split("#", 1)[0]
         parsed_absolute = urlparse(absolute)
         if parsed_absolute.netloc != parsed.netloc:
@@ -171,7 +206,14 @@ def discover_declared_doc_links(url: str) -> list[str]:
     if sitemap:
         links.extend(extract_sitemap_urls(sitemap))
 
-    return [link for link in links if urlparse(link).netloc == parsed.netloc]
+    return [link for link in links if same_netloc(link, parsed.netloc)]
+
+
+def same_netloc(url: str, netloc: str) -> bool:
+    try:
+        return urlparse(url).netloc == netloc
+    except ValueError:
+        return False
 
 
 def extract_urls(text: str, *, base_url: str) -> list[str]:
@@ -230,19 +272,22 @@ def write_symbols(target: Path, pages: list[NormalizedPage]) -> None:
 
 
 def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
-    rows: list[dict[str, str | int]] = []
+    rows: list[dict[str, Any]] = []
     for page in pages:
         slug = slugify(page.title or page.source_url)
         source_path = f"guides/{slug}.md"
         for idx, chunk in enumerate(chunk_markdown(page.markdown), start=1):
             rows.append(
-                {
-                    "id": f"{source_path}#{idx}",
-                    "path": source_path,
-                    "source_url": page.source_url,
-                    "ordinal": idx,
-                    "text": chunk,
-                }
+                row_with_embedding(
+                    {
+                        "id": f"{source_path}#{idx}",
+                        "path": source_path,
+                        "source_url": page.source_url,
+                        "ordinal": idx,
+                        "text": chunk,
+                    },
+                    chunk,
+                )
             )
     (target / "_chunks.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
@@ -305,16 +350,34 @@ def code_blocks(markdown: str) -> list[tuple[str, str]]:
 
 def find_symbols(code: str) -> list[tuple[str, str]]:
     patterns = [
-        ("function", r"(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"),
-        ("class", r"(?:export\s+)?class\s+([A-Za-z_$][\w$]*)"),
-        ("type", r"(?:export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)"),
-        ("constant", r"(?:export\s+)?const\s+([A-Za-z_$][\w$]*)"),
+        ("function", r"export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"),
+        ("class", r"(?:export\s+)?class\s+([A-Z][A-Za-z0-9_$]*)"),
+        ("type", r"(?:export\s+)?(?:interface|type)\s+([A-Z][A-Za-z0-9_$]*)"),
+        ("constant", r"export\s+const\s+([A-Za-z_$][\w$]*)"),
     ]
     symbols: list[tuple[str, str]] = []
     for kind, pattern in patterns:
         for match in re.finditer(pattern, code):
-            symbols.append((kind, match.group(1)))
+            symbol = match.group(1)
+            if symbol.lower() not in SYMBOL_STOP_WORDS:
+                symbols.append((kind, symbol))
     return symbols
+
+
+SYMBOL_STOP_WORDS = {
+    "and",
+    "as",
+    "for",
+    "from",
+    "in",
+    "is",
+    "of",
+    "or",
+    "that",
+    "the",
+    "to",
+    "with",
+}
 
 
 def first_line(code: str) -> str:

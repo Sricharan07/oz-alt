@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:12.325263+00:00",
+  "library": "vue",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://vuejs.org/guide/introduction.html"
+  ],
+  "vendor": "vuejs",
+  "version": "3"
+}

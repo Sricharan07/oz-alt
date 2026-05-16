@@ -1,6 +1,7 @@
-# Next.js 15 Documentation Index
+# Next.js Docs Documentation Index
 
-- [Middleware](guides/middleware.md) - intercept requests before rendering, read cookies, and return redirects or rewrites.
-- [NextRequest](./_symbols/NextRequest.md) - request object used by middleware and route handlers.
-- [NextResponse](./_symbols/NextResponse.md) - response helper for redirects, rewrites, cookies, and JSON responses.
-
+- [README](README.md) - normalized documentation fetched from https://nextjs.org/docs.
+- [Next.js Docs](guides/next-js-docs.md) - crawled guide page.
+- [https://nextjs.org/docs/llms.txt](guides/https-nextjs-org-docs-llms-txt.md) - crawled guide page.
+- [Hello, Next.js!](guides/hello-next-js.md) - crawled guide page.
+- [Symbols](_symbols/) - extracted public API entries from code examples.

@@ -1,6 +1,6 @@
 # Architecture
 
-## Local Development Flow
+## Local Flow
 
 ```text
 registry/fixtures/<vendor>/<library>/<version>/
@@ -12,27 +12,50 @@ registry/packs/<vendor>/<library>/<version>.ozpack
     -> agent Read/Grep/Glob
 ```
 
-`oz pull` prefers local `.ozpack` files, verifies their tree and blob SHA-256 values, ingests blobs into the global object store, and then materializes the requested library into the project with hardlinks. If hardlinks are unavailable, it copies the object bytes.
+`oz pull` verifies pack blob SHA-256 values and the tree manifest SHA before ingesting into the global object store. Materialization uses hardlinks and falls back to copies.
 
-## Object Store
+## Cloud Flow
 
-The object store is content-addressed by SHA-256. `.ozpack` files are zstd-compressed JSON bundles containing a manifest and base64-encoded blobs. This is optimized for local development clarity; production can replace the transport format without changing the CLI materialization model.
+```text
+SQS / scheduled recrawl
+    -> crawler Lambda
+    -> registry fixtures/chunks/symbols
+    -> packs in S3
+    -> catalog in S3 + metadata/chunks in Aurora
+    -> API Gateway + Lambda
+    -> oz CLI
+```
+
+The API uses the same handlers locally and in Lambda. `RegistryStorage` reads catalog, packs, and admin streams from local files or S3 depending on environment. Retrieval uses Aurora/Postgres Data API or `OZ_DATABASE_URL` when configured, then falls back to catalog/chunk files for local development.
+
+## Storage
+
+- Local CAS: `~/.codo/objects/blobs/<prefix>/<sha256>`.
+- Pack transport: zstd-compressed JSON bundle with manifest and base64 blobs.
+- Cloud objects: S3 objects bucket with Intelligent-Tiering.
+- Cloud packs/catalog/admin streams: S3 packs bucket.
+- Metadata/search: Aurora Serverless v2 Postgres with pgvector and Postgres FTS.
+- Rerank cache: DynamoDB with 7-day TTL.
+
+## Auth
+
+`oz login` uses the device-flow-shaped `/auth/device` and `/auth/token` endpoints. Tokens are HMAC JWTs issued by the API. The CLI stores tokens in the OS keychain when available and falls back to `~/.codo/config.json` only when keychain access is unavailable or disabled for tests.
 
 ## Crawler
 
-`packages/oz-crawler` fetches pages with Scrapling, removes common non-content elements, converts the main document body to Markdown, extracts simple symbols from code fences, and writes an Oz-compatible fixture directory.
+The crawler fetches docs with Scrapling when installed and uses a stdlib fetch/normalize fallback in Lambda. It discovers `/llms-full.txt`, `/llms.txt`, `/sitemap.xml`, and same-site links, then writes:
 
-The crawler does not yet perform robust sitemap traversal or language-aware AST symbol extraction. Keep that work isolated behind fixture generation so the CLI remains independent from crawling complexity.
+- `README.md`
+- `INDEX.md`
+- `guides/*.md`
+- `api-reference/`
+- `examples/`
+- `_symbols/*.md`
+- `_chunks.jsonl` with `chunk_sha` and optional embeddings
+- `_meta.json`
 
-## Local API
+Embeddings are SHA-cached and generated only when `OPENAI_API_KEY` is present.
 
-`packages/oz-api` exposes a local HTTP registry:
+## Agent Contract
 
-- `POST /auth/device` and `POST /auth/token` provide a local device-flow-compatible login shim.
-- `POST /suggest` ranks libraries from `registry/catalog.json`.
-- `POST /search` returns local `.codo/vendors/...` coordinates.
-- `GET /refs/<vendor>/<library>` returns the newest local catalog ref.
-- `GET /pack/<vendor>/<library>/<version>` serves the immutable pack file.
-- `POST /index-request` and `POST /telemetry` append JSONL events under `registry/admin/`.
-
-When `oz config set api_url <url>` or `oz login --api-url <url>` is set, the CLI uses this API for suggest/search/pull. Without `api_url`, it uses local registry fixtures and packs directly.
+`oz install` writes the locked Oz skill into Codex, Claude Code, Cursor, Cline, and Continue project config files. On normal CLI commands, existing installed skill blocks are silently refreshed unless `auto_update_skill` is disabled.

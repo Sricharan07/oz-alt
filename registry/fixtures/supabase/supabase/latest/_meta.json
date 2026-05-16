@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:18.598987+00:00",
+  "library": "supabase",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://supabase.com/docs"
+  ],
+  "vendor": "supabase",
+  "version": "latest"
+}

@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:19.862652+00:00",
+  "library": "prisma",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://www.prisma.io/docs"
+  ],
+  "vendor": "prisma",
+  "version": "latest"
+}

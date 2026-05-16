@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oz Status</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fcfcfc;
+      --text: #202124;
+      --muted: #5f6368;
+      --line: #dadce0;
+      --ok: #137333;
+      --surface: #ffffff;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 32px 20px;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 16px;
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 24px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .ok {
+      color: var(--ok);
+      font-weight: 600;
+    }
+    footer {
+      color: var(--muted);
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Oz Status</h1>
+      <div class="ok">Operational</div>
+    </header>
+    <table>
+      <thead>
+        <tr><th>Component</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Registry API</td><td class="ok">Operational</td></tr>
+        <tr><td>Pack downloads</td><td class="ok">Operational</td></tr>
+        <tr><td>Suggest and search</td><td class="ok">Operational</td></tr>
+        <tr><td>Crawler queue</td><td class="ok">Operational</td></tr>
+        <tr><td>Admin dashboard</td><td class="ok">Operational</td></tr>
+      </tbody>
+    </table>
+    <footer>Incident updates should follow docs/INCIDENT_RESPONSE.md.</footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+create index if not exists libraries_search_document_idx on libraries using gin (search_document);
+create index if not exists chunks_search_document_idx on chunks using gin (search_document);
+create index if not exists chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops);
+create index if not exists chunks_version_path_idx on chunks (version_id, path);
+create index if not exists library_versions_library_version_idx on library_versions (library_id, version);
+create index if not exists refs_library_channel_idx on refs (library_id, channel);
+create index if not exists index_requests_status_updated_idx on index_requests (status, updated_at desc);
+create index if not exists telemetry_events_event_created_idx on telemetry_events (event, created_at desc);
+create index if not exists suggest_logs_cache_idx on suggest_logs (query_hash, fingerprint_hash, created_at desc);

@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:28.238097+00:00",
+  "library": "sdk",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://vercel.com/docs"
+  ],
+  "vendor": "vercel",
+  "version": "latest"
+}

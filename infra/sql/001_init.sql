@@ -1,0 +1,144 @@
+create extension if not exists vector;
+create extension if not exists pgcrypto;
+
+create table if not exists vendors (
+  id bigserial primary key,
+  name text not null unique,
+  display_name text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists libraries (
+  id bigserial primary key,
+  vendor_id bigint not null references vendors(id) on delete cascade,
+  name text not null,
+  description text not null default '',
+  source_url text,
+  search_document tsvector generated always as (
+    setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(description, '')), 'B')
+  ) stored,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (vendor_id, name)
+);
+
+create table if not exists library_versions (
+  id bigserial primary key,
+  library_id bigint not null references libraries(id) on delete cascade,
+  version text not null,
+  ref_sha text not null,
+  commit_sha text,
+  pack_key text,
+  indexed_at timestamptz,
+  last_crawled_at timestamptz,
+  crawl_error_count integer not null default 0,
+  pull_count bigint not null default 0,
+  created_at timestamptz not null default now(),
+  unique (library_id, version)
+);
+
+create table if not exists refs (
+  id bigserial primary key,
+  library_id bigint not null references libraries(id) on delete cascade,
+  channel text not null default 'latest',
+  version_id bigint not null references library_versions(id) on delete cascade,
+  ref_sha text not null,
+  updated_at timestamptz not null default now(),
+  unique (library_id, channel)
+);
+
+create table if not exists commits (
+  sha text primary key,
+  tree_sha text not null,
+  parent_sha text,
+  library_id bigint not null references libraries(id) on delete cascade,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  committed_at timestamptz not null default now()
+);
+
+create table if not exists trees (
+  sha text primary key,
+  children jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists blobs_meta (
+  sha256 text primary key,
+  byte_size bigint not null,
+  content_type text,
+  first_seen_at timestamptz not null default now()
+);
+
+create table if not exists chunks (
+  id bigserial primary key,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  path text not null,
+  start_line integer not null default 1,
+  end_line integer,
+  source_url text,
+  ordinal integer not null default 1,
+  chunk_sha text not null,
+  content text not null,
+  embedding vector(1536),
+  search_document tsvector generated always as (
+    setweight(to_tsvector('english', coalesce(path, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(content, '')), 'B')
+  ) stored,
+  created_at timestamptz not null default now(),
+  unique (version_id, chunk_sha)
+);
+
+create table if not exists users (
+  id uuid primary key default gen_random_uuid(),
+  subject text not null unique,
+  telemetry_opt_out boolean not null default false,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz
+);
+
+create table if not exists index_requests (
+  id bigserial primary key,
+  library_name text,
+  vendor_hint text,
+  source_url_hint text,
+  requesting_user text,
+  request_count integer not null default 1,
+  status text not null default 'queued',
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists telemetry_events (
+  id bigserial primary key,
+  event text not null,
+  anonymous_user_id text,
+  library_names text[] not null default '{}',
+  query_length integer,
+  result_count integer,
+  properties jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists suggest_logs (
+  id bigserial primary key,
+  query_hash text not null,
+  fingerprint_hash text not null,
+  result_count integer not null,
+  reranked boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists crawler_jobs (
+  id bigserial primary key,
+  library_id bigint references libraries(id) on delete set null,
+  source_url text not null,
+  status text not null default 'queued',
+  attempts integer not null default 0,
+  max_pages integer not null default 128,
+  last_error text,
+  queued_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);

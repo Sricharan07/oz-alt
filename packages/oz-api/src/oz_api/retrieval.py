@@ -16,6 +16,9 @@ from oz_api.storage import RegistryStorage, normalize_query
 class RetrievalContext:
     storage: RegistryStorage
     database_url: str | None = None
+    db_resource_arn: str | None = None
+    db_secret_arn: str | None = None
+    db_name: str = "oz"
     rerank_table: str | None = None
     openai_api_key: str | None = None
 
@@ -24,6 +27,9 @@ class RetrievalContext:
         return cls(
             storage=storage,
             database_url=os.environ.get("OZ_DATABASE_URL"),
+            db_resource_arn=os.environ.get("OZ_DB_RESOURCE_ARN"),
+            db_secret_arn=os.environ.get("OZ_DB_SECRET_ARN"),
+            db_name=os.environ.get("OZ_DB_NAME", "oz"),
             rerank_table=os.environ.get("OZ_RERANK_TABLE"),
             openai_api_key=os.environ.get("OPENAI_API_KEY"),
         )
@@ -133,7 +139,17 @@ def search_from_fixtures(
                 )
 
     hits.sort(key=lambda hit: (-hit["score"], hit["path"], hit["line"]))
-    return hits[:max_results]
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, int | None]] = set()
+    for hit in hits:
+        key = (str(hit["path"]), hit.get("line"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(hit)
+        if len(deduped) >= max_results:
+            break
+    return deduped
 
 
 def suggest_from_postgres(
@@ -142,6 +158,10 @@ def suggest_from_postgres(
     max_results: int,
     fingerprint: str,
 ) -> list[dict[str, Any]] | None:
+    data_api_rows = suggest_from_data_api(ctx, query, max_results)
+    if data_api_rows is not None:
+        return data_api_rows
+
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
@@ -186,13 +206,26 @@ def search_from_postgres(
     max_results: int,
     fingerprint: str,
 ) -> list[dict[str, Any]] | None:
+    data_api_rows = search_from_data_api(ctx, query, library_scope, max_results)
+    if data_api_rows is not None:
+        return data_api_rows
+
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
     terms = " ".join(normalize_query(query))
+    embedding = embedding_for_query(ctx, query)
+    vector = vector_literal(embedding) if embedding else None
     scope_vendor, scope_library = parse_scope(library_scope)
     where_scope = ""
-    params: list[Any] = [terms, terms]
+    if vector:
+        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) + coalesce(1 - (c.embedding <=> %s::vector), 0)"
+        where_sql = "(c.search_document @@ websearch_to_tsquery('english', %s) or c.embedding is not null)"
+        params: list[Any] = [terms, vector, terms]
+    else:
+        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)"
+        where_sql = "c.search_document @@ websearch_to_tsquery('english', %s)"
+        params = [terms, terms]
     if scope_vendor:
         where_scope = "and v.name = %s and l.name = %s"
         params.extend([scope_vendor, scope_library])
@@ -201,7 +234,7 @@ def search_from_postgres(
         select
           '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
           c.start_line,
-          greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+          {score_sql} as score,
           v.name || '/' || l.name as library,
           v.name as vendor,
           lv.version
@@ -209,7 +242,7 @@ def search_from_postgres(
         join library_versions lv on lv.id = c.version_id
         join libraries l on l.id = lv.library_id
         join vendors v on v.id = l.vendor_id
-        where c.search_document @@ websearch_to_tsquery('english', %s)
+        where {where_sql}
         {where_scope}
         order by score desc, path asc, c.start_line asc
         limit %s
@@ -232,6 +265,157 @@ def search_from_postgres(
         ]
     except Exception:
         return None
+
+
+def suggest_from_data_api(
+    ctx: RetrievalContext,
+    query: str,
+    max_results: int,
+) -> list[dict[str, Any]] | None:
+    terms = " ".join(normalize_query(query))
+    sql = """
+        select
+          v.name as vendor,
+          l.name as library,
+          lv.version,
+          greatest(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) as score,
+          coalesce(l.description, '') as reason
+        from libraries l
+        join vendors v on v.id = l.vendor_id
+        join library_versions lv on lv.library_id = l.id
+        where l.search_document @@ websearch_to_tsquery('english', :terms)
+        order by score desc, v.name asc, l.name asc
+        limit :max_results
+    """
+    rows = execute_data_api(
+        ctx,
+        sql,
+        [
+            {"name": "terms", "value": {"stringValue": terms}},
+            {"name": "max_results", "value": {"longValue": max_results}},
+        ],
+    )
+    if rows is None:
+        return None
+    return [
+        {
+            "vendor": string_field(row[0]),
+            "library": string_field(row[1]),
+            "version": string_field(row[2]),
+            "score": numeric_field(row[3]),
+            "reason": string_field(row[4]),
+        }
+        for row in rows
+    ]
+
+
+def search_from_data_api(
+    ctx: RetrievalContext,
+    query: str,
+    library_scope: str | None,
+    max_results: int,
+) -> list[dict[str, Any]] | None:
+    terms = " ".join(normalize_query(query))
+    embedding = embedding_for_query(ctx, query)
+    vector = vector_literal(embedding) if embedding else None
+    scope_vendor, scope_library = parse_scope(library_scope)
+    where_scope = ""
+    params: list[dict[str, Any]] = [
+        {"name": "terms", "value": {"stringValue": terms}},
+        {"name": "max_results", "value": {"longValue": max_results}},
+    ]
+    if vector:
+        params.append({"name": "embedding", "value": {"stringValue": vector}})
+        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) + coalesce(1 - (c.embedding <=> (:embedding)::vector), 0)"
+        where_sql = "(c.search_document @@ websearch_to_tsquery('english', :terms) or c.embedding is not null)"
+    else:
+        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)"
+        where_sql = "c.search_document @@ websearch_to_tsquery('english', :terms)"
+    if scope_vendor:
+        where_scope = "and v.name = :vendor and l.name = :library"
+        params.extend(
+            [
+                {"name": "vendor", "value": {"stringValue": scope_vendor}},
+                {"name": "library", "value": {"stringValue": scope_library or ""}},
+            ]
+        )
+    sql = f"""
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+          c.start_line,
+          {score_sql} as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version
+        from chunks c
+        join library_versions lv on lv.id = c.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        where {where_sql}
+        {where_scope}
+        order by score desc, path asc, c.start_line asc
+        limit :max_results
+    """
+    rows = execute_data_api(ctx, sql, params)
+    if rows is None:
+        return None
+    return [
+        {
+            "path": string_field(row[0]),
+            "line": int(numeric_field(row[1])),
+            "score": numeric_field(row[2]),
+            "library": string_field(row[3]),
+            "vendor": string_field(row[4]),
+            "version": string_field(row[5]),
+        }
+        for row in rows
+    ]
+
+
+def execute_data_api(
+    ctx: RetrievalContext,
+    sql: str,
+    parameters: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]] | None:
+    if not ctx.db_resource_arn or not ctx.db_secret_arn:
+        return None
+    client = rds_data_client()
+    if client is None:
+        return None
+    try:
+        response = client.execute_statement(
+            resourceArn=ctx.db_resource_arn,
+            secretArn=ctx.db_secret_arn,
+            database=ctx.db_name,
+            sql=sql,
+            parameters=parameters,
+        )
+        return list(response.get("records", []))
+    except Exception:
+        return None
+
+
+def string_field(field: dict[str, Any]) -> str:
+    if "stringValue" in field:
+        return str(field["stringValue"])
+    if "longValue" in field:
+        return str(field["longValue"])
+    if "doubleValue" in field:
+        return str(field["doubleValue"])
+    return ""
+
+
+def numeric_field(field: dict[str, Any]) -> float:
+    if "doubleValue" in field:
+        return float(field["doubleValue"])
+    if "longValue" in field:
+        return float(field["longValue"])
+    if "stringValue" in field:
+        try:
+            return float(field["stringValue"])
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def maybe_rerank(
@@ -295,6 +479,37 @@ def openai_rerank(api_key: str | None, query: str, rows: list[dict[str, Any]]) -
         return None
 
 
+def embedding_for_query(ctx: RetrievalContext, query: str) -> list[float] | None:
+    if not ctx.openai_api_key:
+        return None
+    payload = {
+        "model": os.environ.get("OZ_EMBEDDING_MODEL", "text-embedding-3-small"),
+        "input": query,
+    }
+    req = request.Request(
+        "https://api.openai.com/v1/embeddings",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {ctx.openai_api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=8) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        embedding = body["data"][0]["embedding"]
+        if isinstance(embedding, list):
+            return [float(value) for value in embedding]
+    except Exception:
+        return None
+    return None
+
+
+def vector_literal(values: list[float]) -> str:
+    return "[" + ",".join(f"{value:.8g}" for value in values) + "]"
+
+
 def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
     digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
     return f"rerank:{digest}"
@@ -353,6 +568,14 @@ def dynamodb_client() -> Any | None:
     except ImportError:
         return None
     return boto3.client("dynamodb")
+
+
+def rds_data_client() -> Any | None:
+    try:
+        import boto3  # type: ignore
+    except ImportError:
+        return None
+    return boto3.client("rds-data")
 
 
 def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:

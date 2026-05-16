@@ -1,0 +1,10 @@
+{
+  "indexed_at": "2026-05-16T02:31:09.533431+00:00",
+  "library": "react",
+  "ref_sha": "local-crawl",
+  "source_urls": [
+    "https://react.dev/reference/react"
+  ],
+  "vendor": "facebook",
+  "version": "19"
+}
