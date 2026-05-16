@@ -12,9 +12,14 @@ from oz_crawler.normalize import NormalizedPage
 
 def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
     rows: list[dict[str, Any]] = []
+    seen_chunk_shas: set[str] = set()
     for page in pages:
         source_path = source_path_for_page(page)
         for idx, chunk in enumerate(chunk_markdown(page.markdown), start=1):
+            chunk_sha = stable_chunk_sha(target, source_path, idx, chunk)
+            if chunk_sha in seen_chunk_shas:
+                continue
+            seen_chunk_shas.add(chunk_sha)
             row = row_with_embedding(
                 {
                     "id": f"{source_path}#{idx}",
@@ -25,7 +30,7 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                 },
                 chunk,
             )
-            row["chunk_sha"] = stable_chunk_sha(target, source_path, idx, chunk)
+            row["chunk_sha"] = chunk_sha
             rows.append(row)
     (target / "_chunks.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),

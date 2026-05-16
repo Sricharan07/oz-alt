@@ -71,7 +71,10 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
 
         fixture = fixture_path(storage, entry)
         line_cache: dict[str, str] = {}
+        current_chunk_shas: list[str] = []
         for row in chunk_rows(storage, entry):
+            chunk_sha = chunk_sha_for_row(entry, row)
+            current_chunk_shas.append(chunk_sha)
             start_line, end_line = line_span(fixture, row, line_cache)
             embedding = embedding_for_chunk(row)
             writer.upsert_chunk(
@@ -81,10 +84,11 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
                 end_line=end_line,
                 source_url=str(row.get("source_url") or ""),
                 ordinal=int(row.get("ordinal") or 1),
-                chunk_sha=chunk_sha_for_row(entry, row),
+                chunk_sha=chunk_sha,
                 content=str(row.get("text") or ""),
                 embedding=embedding,
             )
+        writer.delete_stale_chunks(version_id, current_chunk_shas)
 
 
 def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -92,10 +96,23 @@ def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str
     if not chunks_path.exists():
         return []
     rows: list[dict[str, Any]] = []
+    seen_chunk_shas: set[str] = set()
     for line in chunks_path.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            rows.append(json.loads(line))
+            row = json.loads(line)
+            if not is_indexable_chunk(row):
+                continue
+            chunk_sha = chunk_sha_for_row(entry, row)
+            if chunk_sha in seen_chunk_shas:
+                continue
+            seen_chunk_shas.add(chunk_sha)
+            rows.append(row)
     return rows
+
+
+def is_indexable_chunk(row: dict[str, Any]) -> bool:
+    text = str(row.get("text") or "")
+    return bool(text.strip()) and "\x00" not in text
 
 
 def fixture_path(storage: RegistryStorage, entry: dict[str, Any]) -> Path:
@@ -128,7 +145,7 @@ def line_span(fixture: Path, row: dict[str, Any], cache: dict[str, str]) -> tupl
 
 
 def valid_embedding(value: Any) -> bool:
-    return isinstance(value, list) and len(value) == 1536 and all(isinstance(item, int | float) for item in value)
+    return isinstance(value, list) and len(value) == 1536 and all(isinstance(item, (int, float)) for item in value)
 
 
 def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
@@ -178,6 +195,9 @@ class IndexWriter:
         raise NotImplementedError
 
     def upsert_ref(self, library_id: int, version_id: int, ref_sha: str) -> None:
+        raise NotImplementedError
+
+    def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
         raise NotImplementedError
 
     def upsert_chunk(
@@ -272,6 +292,17 @@ class PostgresWriter(IndexWriter):
                   updated_at = now()
             """,
             (library_id, version_id, ref_sha),
+        )
+
+    def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
+        chunk_shas = sorted(set(current_chunk_shas))
+        if not chunk_shas:
+            self.execute("delete from chunks where version_id = %s", (version_id,))
+            return
+        placeholders = ", ".join(["%s"] * len(chunk_shas))
+        self.execute(
+            f"delete from chunks where version_id = %s and chunk_sha not in ({placeholders})",
+            (version_id, *chunk_shas),
         )
 
     def upsert_chunk(
@@ -387,6 +418,27 @@ class DataApiWriter(IndexWriter):
                 long_param("version_id", version_id),
                 string_param("ref_sha", ref_sha),
             ],
+        )
+
+    def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
+        chunk_shas = sorted(set(current_chunk_shas))
+        params = [long_param("version_id", version_id)]
+        if not chunk_shas:
+            self.execute("delete from chunks where version_id = :version_id", params)
+            return
+
+        placeholders = []
+        for index, chunk_sha in enumerate(chunk_shas):
+            name = f"chunk_sha_{index}"
+            placeholders.append(f":{name}")
+            params.append(string_param(name, chunk_sha))
+        self.execute(
+            f"""
+            delete from chunks
+            where version_id = :version_id
+              and chunk_sha not in ({", ".join(placeholders)})
+            """,
+            params,
         )
 
     def upsert_chunk(

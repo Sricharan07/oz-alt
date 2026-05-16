@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.text import decode_text_response
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ def openapi_artifacts(urls: list[str], *, limit: int) -> list[SourceArtifact]:
         if not re.search(r"(openapi|swagger).*\.(json|ya?ml)$", path):
             continue
         text = fetch_text(url)
-        if not text:
+        if not text or looks_like_html(text):
             continue
         output.append(
             SourceArtifact(
@@ -189,6 +190,11 @@ def parse_yaml_like_openapi(text: str) -> dict | None:
     return {"paths": paths} if paths else None
 
 
+def looks_like_html(text: str) -> bool:
+    prefix = text.lstrip()[:128].lower()
+    return prefix.startswith("<!doctype html") or prefix.startswith("<html") or "<body" in prefix
+
+
 def nested_string(value: dict, path: list[str]) -> str:
     current = value
     for key in path:
@@ -235,7 +241,7 @@ def fetch_text(url: str) -> str | None:
     try:
         req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
         with urlopen(req, timeout=20) as response:
-            return response.read().decode("utf-8", errors="replace")
+            return decode_text_response(response.read(), response.headers.get("content-type"))
     except Exception:
         return None
 

@@ -17,6 +17,7 @@ from oz_crawler.chunks import write_chunks
 from oz_crawler.normalize import NormalizedPage, normalize_html
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import write_symbols
+from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
 
 try:
     from bs4 import BeautifulSoup
@@ -220,6 +221,8 @@ def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[Crawl
         async def parse(self, response: Any) -> Any:
             response_url = response_source_url(response, fallback=url)
             html = extract_html(response)
+            if is_probably_binary_text(html):
+                return
             if html.strip() and len(self.pages) < max_pages:
                 self.pages.append(CrawledPage(source_url=response_url, html=html, title=response_title(response)))
                 yield {"url": response_url, "bytes": len(html)}
@@ -282,11 +285,14 @@ def fetch_html(url: str) -> str:
     except ImportError:
         req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
         with urlopen(req, timeout=20) as response:
-            return response.read().decode("utf-8", errors="replace")
+            text = decode_text_response(response.read(), response.headers.get("content-type"))
+            if text is None:
+                raise RuntimeError(f"{url} did not return textual documentation")
+            return text
 
     page = Fetcher.get(url, stealthy_headers=True)
     html = extract_html(page)
-    if not html.strip():
+    if is_probably_binary_text(html) or not html.strip():
         raise RuntimeError(f"Scrapling fetched {url}, but no HTML content was found on the response object")
     return html
 
@@ -304,7 +310,10 @@ def ensure_vendored_scrapling_path() -> None:
 def fetch_html_stdlib(url: str) -> str:
     req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
     with urlopen(req, timeout=20) as response:
-        return response.read().decode("utf-8", errors="replace")
+        text = decode_text_response(response.read(), response.headers.get("content-type"))
+        if text is None:
+            raise RuntimeError(f"{url} did not return textual documentation")
+        return text
 
 
 def fetch_text_optional(url: str, *, fetcher: str = "auto") -> str | None:
@@ -391,10 +400,15 @@ def is_crawlable_doc_url(url: str, netloc: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
-    path = parsed.path.lower()
-    if re.search(r"\.(png|jpe?g|gif|webp|svg|ico|css|js|mjs|map|woff2?|ttf|eot|pdf|zip|tar|gz|tgz|mp4|webm)$", path):
+    if not is_textual_url_candidate(url):
         return False
+    path = parsed.path.lower()
     if any(part in path for part in ("/blog/", "/pricing", "/careers", "/login", "/signup", "/account")):
+        return False
+    if "/api/" in path and not re.search(r"(docs|documentation|reference|openapi|swagger)", path):
+        return False
+    query = parsed.query.lower()
+    if query and re.search(r"(^|&)(image|img|og|product|screenshot|width|height)=", query):
         return False
     return same_site_or_subdomain(url, netloc)
 

@@ -11,6 +11,8 @@ from urllib import request
 
 from oz_api.storage import RegistryStorage, normalize_query
 
+_OPENAI_API_KEY_CACHE: str | None = None
+
 
 @dataclass(frozen=True)
 class RetrievalContext:
@@ -31,7 +33,7 @@ class RetrievalContext:
             db_secret_arn=os.environ.get("OZ_DB_SECRET_ARN"),
             db_name=os.environ.get("OZ_DB_NAME", "oz"),
             rerank_table=os.environ.get("OZ_RERANK_TABLE"),
-            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+            openai_api_key=openai_api_key_from_env(),
         )
 
 
@@ -39,6 +41,7 @@ def suggest(ctx: RetrievalContext, query: str, max_results: int, fingerprint: st
     rows = suggest_from_postgres(ctx, query, max_results, fingerprint)
     if rows is None:
         rows = suggest_from_catalog(ctx.storage, query, max_results)
+    rows = boost_named_suggestions(query, rows)
     return maybe_rerank(ctx, "suggest", query, fingerprint, rows)
 
 
@@ -678,6 +681,33 @@ def clear_winner(rows: list[dict[str, Any]]) -> bool:
     return len(scores) == 3 and all(score > 0.85 for score in scores)
 
 
+def boost_named_suggestions(query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    query_terms = set(normalize_query(query))
+    if not query_terms:
+        return rows
+    boosted: list[dict[str, Any]] = []
+    for row in rows:
+        copy = dict(row)
+        library_terms = set(normalize_query(str(copy.get("library") or "")))
+        vendor_terms = set(normalize_query(str(copy.get("vendor") or "")))
+        score = float(copy.get("score", 0) or 0)
+        if library_terms and library_terms.issubset(query_terms):
+            score += 25.0
+        if vendor_terms and vendor_terms.issubset(query_terms):
+            score += 10.0
+        copy["score"] = score
+        boosted.append(copy)
+    boosted.sort(
+        key=lambda row: (
+            -float(row.get("score", 0) or 0),
+            str(row.get("vendor") or ""),
+            str(row.get("library") or ""),
+            str(row.get("version") or ""),
+        )
+    )
+    return boosted
+
+
 def openai_rerank(api_key: str | None, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
     if not api_key:
         return None
@@ -745,8 +775,68 @@ def vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{value:.8g}" for value in values) + "]"
 
 
+def openai_api_key_from_env() -> str | None:
+    direct = normalized_openai_api_key(os.environ.get("OPENAI_API_KEY"))
+    if direct:
+        return direct
+
+    secret_arn = os.environ.get("OPENAI_API_KEY_SECRET_ARN") or os.environ.get("OZ_OPENAI_API_KEY_SECRET_ARN")
+    if not secret_arn:
+        return None
+
+    global _OPENAI_API_KEY_CACHE
+    if _OPENAI_API_KEY_CACHE is not None:
+        return _OPENAI_API_KEY_CACHE
+
+    try:
+        import boto3  # type: ignore
+
+        response = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    except Exception:
+        return None
+
+    value = secret_value_text(response)
+    key = normalized_openai_api_key(value)
+    if not key:
+        key = normalized_openai_api_key_from_json(value)
+    if key:
+        _OPENAI_API_KEY_CACHE = key
+    return key
+
+
+def secret_value_text(response: dict[str, Any]) -> str:
+    if response.get("SecretString"):
+        return str(response["SecretString"])
+    binary = response.get("SecretBinary")
+    if isinstance(binary, bytes):
+        return binary.decode("utf-8", errors="replace")
+    return ""
+
+
+def normalized_openai_api_key(value: str | None) -> str | None:
+    key = str(value or "").strip()
+    return key if key.startswith("sk-") else None
+
+
+def normalized_openai_api_key_from_json(value: str) -> str | None:
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for field in ("OPENAI_API_KEY", "openai_api_key", "api_key"):
+        key = normalized_openai_api_key(payload.get(field))
+        if key:
+            return key
+    return None
+
+
 def normalized_tsquery(query: str) -> str:
-    return " ".join(normalize_query(query)) or query.strip() or "documentation"
+    terms = normalize_query(query)
+    if terms:
+        return " OR ".join(terms)
+    return query.strip() or "documentation"
 
 
 def candidate_limit(max_results: int) -> int:

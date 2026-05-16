@@ -484,6 +484,8 @@ pub(crate) fn registry_command(project_root: &Path, command: RegistryCommand) ->
 
 pub(crate) fn doctor(project_root: &Path) -> Result<()> {
     let mut failed = false;
+    let config = read_config().unwrap_or_default();
+    let api_configured = configured_api_url(&config).is_some();
     check(
         "project lock",
         project_root.join(LOCK_FILE).exists(),
@@ -499,24 +501,29 @@ pub(crate) fn doctor(project_root: &Path) -> Result<()> {
         global_objects_root()?.exists(),
         &mut failed,
     );
-    check(
-        "development registry",
-        fixtures_root(project_root).is_some(),
-        &mut failed,
-    );
-    check(
-        "registry catalog",
-        catalog_path(project_root).is_some(),
-        &mut failed,
-    );
-    let config = read_config().unwrap_or_default();
-    if configured_api_url(&config).is_some() {
+    if api_configured {
         check(
             "network reachability",
             api_get_json::<serde_json::Value>(&config, "/health").is_ok(),
             &mut failed,
         );
         check("auth token", auth_token(&config).is_some(), &mut failed);
+        check(
+            "registry catalog",
+            remote_catalog_available(&config),
+            &mut failed,
+        );
+    } else {
+        check(
+            "development registry",
+            fixtures_root(project_root).is_some(),
+            &mut failed,
+        );
+        check(
+            "registry catalog",
+            catalog_path(project_root).is_some(),
+            &mut failed,
+        );
     }
 
     if failed {
@@ -524,6 +531,18 @@ pub(crate) fn doctor(project_root: &Path) -> Result<()> {
     }
     println!("oz doctor: ok");
     Ok(())
+}
+
+fn remote_catalog_available(config: &OzConfig) -> bool {
+    api_get_json::<serde_json::Value>(config, "/catalog")
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("libraries")
+                .and_then(|value| value.as_array())
+                .cloned()
+        })
+        .is_some_and(|libraries| !libraries.is_empty())
 }
 
 fn check(label: &str, ok: bool, failed: &mut bool) {

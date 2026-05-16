@@ -72,7 +72,6 @@ export class OzStack extends cdk.Stack {
 
     const objectsBucket = new s3.Bucket(this, "ObjectsBucket", {
       encryption: s3.BucketEncryption.S3_MANAGED,
-      intelligentTieringConfigurations: [{ name: "default" }],
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     });
@@ -105,6 +104,13 @@ export class OzStack extends cdk.Stack {
         passwordLength: 48,
         excludePunctuation: true
       }
+    });
+    const openAiApiKeySecret = new secretsmanager.Secret(this, "OpenAiApiKeySecret", {
+      generateSecretString: {
+        passwordLength: 48,
+        excludePunctuation: true
+      },
+      description: "OpenAI API key for Oz embeddings and reranking. Replace the generated value with a real sk-* key."
     });
 
     const vpc = new ec2.Vpc(this, "Vpc", {
@@ -169,6 +175,7 @@ export class OzStack extends cdk.Stack {
     databaseInstance.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
 
     const crawlerDlq = new sqs.Queue(this, "CrawlerDeadLetterQueue", {
+      visibilityTimeout: cdk.Duration.minutes(15),
       retentionPeriod: cdk.Duration.days(14)
     });
 
@@ -230,6 +237,7 @@ export class OzStack extends cdk.Stack {
         OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
         OZ_DB_NAME: "oz",
         OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
+        OPENAI_API_KEY_SECRET_ARN: openAiApiKeySecret.secretArn,
         OZ_REQUIRE_AUTH: "true",
         OZ_REQUIRE_OAUTH: requireOAuth.valueAsString,
         OZ_OAUTH_DEVICE_AUTH_URL: oauthDeviceAuthUrl.valueAsString,
@@ -246,6 +254,7 @@ export class OzStack extends cdk.Stack {
     rerankCache.grantReadWriteData(apiFunction);
     crawlerQueue.grantSendMessages(apiFunction);
     jwtSecret.grantRead(apiFunction);
+    openAiApiKeySecret.grantRead(apiFunction);
     apiFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         "rds-data:ExecuteStatement",
@@ -276,6 +285,7 @@ export class OzStack extends cdk.Stack {
         OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
         OZ_DB_NAME: "oz",
         OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
+        OPENAI_API_KEY_SECRET_ARN: openAiApiKeySecret.secretArn,
         OZ_PACK_SIGNING_KEY: packSigningKey.valueAsString,
         OZ_PACK_SIGNING_KEY_ID: packSigningKeyId.valueAsString,
         OZ_PACK_VERIFY_KEY: packVerifyKey.valueAsString,
@@ -287,6 +297,7 @@ export class OzStack extends cdk.Stack {
     objectsBucket.grantReadWrite(crawlerFunction);
     packsBucket.grantReadWrite(crawlerFunction);
     jwtSecret.grantRead(crawlerFunction);
+    openAiApiKeySecret.grantRead(crawlerFunction);
     crawlerFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         "rds-data:ExecuteStatement",
@@ -370,6 +381,7 @@ export class OzStack extends cdk.Stack {
         OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
         OZ_DB_NAME: "oz",
         OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
+        OPENAI_API_KEY_SECRET_ARN: openAiApiKeySecret.secretArn,
         OZ_PACK_SIGNING_KEY: packSigningKey.valueAsString,
         OZ_PACK_SIGNING_KEY_ID: packSigningKeyId.valueAsString,
         OZ_PACK_VERIFY_KEY: packVerifyKey.valueAsString,
@@ -379,6 +391,7 @@ export class OzStack extends cdk.Stack {
     objectsBucket.grantReadWrite(crawlerTaskDefinition.taskRole);
     packsBucket.grantReadWrite(crawlerTaskDefinition.taskRole);
     jwtSecret.grantRead(crawlerTaskDefinition.taskRole);
+    openAiApiKeySecret.grantRead(crawlerTaskDefinition.taskRole);
     crawlerTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
       actions: [
         "rds-data:ExecuteStatement",
@@ -480,5 +493,6 @@ export class OzStack extends cdk.Stack {
     new cdk.CfnOutput(this, "CrawlerFargateTaskArn", { value: crawlerTaskDefinition.taskDefinitionArn });
     new cdk.CfnOutput(this, "DatabaseClusterArn", { value: database.attrDbClusterArn });
     new cdk.CfnOutput(this, "DatabaseSecretArn", { value: database.attrMasterUserSecretSecretArn });
+    new cdk.CfnOutput(this, "OpenAiApiKeySecretArn", { value: openAiApiKeySecret.secretArn });
   }
 }

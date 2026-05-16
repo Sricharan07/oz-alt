@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
+from oz_api.admin import esc, render_admin
 from oz_api.auth import bearer_token, exchange_device_code, start_device_authorization, verify_token
 from oz_api.freshness import stale_libraries_from_payload
 from oz_api.limits import index_request_allowed
@@ -119,6 +120,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if raw_path == "/catalog" and method == "GET":
         return json_response({"libraries": storage.load_catalog()})
 
+    if raw_path in {"/admin", "/admin/"} and method == "GET":
+        return html_response(render_admin(storage))
+
+    if raw_path == "/admin/enqueue-crawl" and method == "GET":
+        params = parse_qs(event.get("rawQueryString", "") or "")
+        payload = {
+            "library_name": params.get("library_name", [""])[0],
+            "vendor": params.get("vendor", [""])[0],
+            "source_url": params.get("source_url", [""])[0],
+        }
+        missing = missing_required_crawler_fields(crawler_job_event(payload))
+        if missing:
+            return html_response(
+                f"<!doctype html><p>Missing crawler job fields: {esc(', '.join(missing))}</p>",
+                status=400,
+            )
+        enqueue_crawler_job(storage, payload)
+        return html_response('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status=202)
+
     if raw_path == "/admin/index-requests" and method == "GET":
         return json_response(storage.read_admin_events("index_requests"))
 
@@ -181,7 +201,8 @@ def is_authorized(event: dict[str, Any], raw_path: str) -> bool:
     if raw_path in {"/health", "/auth/device", "/auth/token", "/auth/verify"}:
         return True
     token = bearer_token(event.get("headers") or {})
-    return token == os.environ.get("OZ_DEV_TOKEN") or (token is not None and verify_token(token))
+    dev_token = os.environ.get("OZ_DEV_TOKEN")
+    return (bool(dev_token) and token == dev_token) or (token is not None and verify_token(token))
 
 
 def json_response(payload: Any, *, status: int = 200) -> dict[str, Any]:
@@ -189,6 +210,14 @@ def json_response(payload: Any, *, status: int = 200) -> dict[str, Any]:
         "statusCode": status,
         "headers": {"content-type": "application/json"},
         "body": json.dumps(payload, sort_keys=True),
+    }
+
+
+def html_response(body: str, *, status: int = 200) -> dict[str, Any]:
+    return {
+        "statusCode": status,
+        "headers": {"content-type": "text/html; charset=utf-8"},
+        "body": body,
     }
 
 
