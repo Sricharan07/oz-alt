@@ -21,6 +21,7 @@ from oz_api.retrieval import (
     suggest as retrieval_suggest,
     unique_libraries_to_pull as retrieval_unique_libraries_to_pull,
 )
+from oz_api.queue import crawler_job_event, enqueue_crawler_job, missing_required_crawler_fields
 from oz_api.storage import RegistryStorage
 from oz_api.telemetry import sanitize_telemetry
 
@@ -136,14 +137,12 @@ def render_admin(state: ServerState) -> str:
     index_requests = state.storage.read_admin_events("index_requests")
     telemetry = state.storage.read_admin_events("telemetry")
     crawler_jobs = state.storage.read_admin_events("crawler_jobs")
+    aggregated_requests = aggregate_index_requests(index_requests)
     rows = "\n".join(
         f"<tr><td>{esc(entry.get('vendor'))}/{esc(entry.get('library'))}</td><td>{esc(entry.get('version'))}</td><td>{esc(entry.get('description',''))}</td></tr>"
         for entry in catalog
     )
-    request_rows = "\n".join(
-        render_index_request_row(request)
-        for request in sorted(index_requests, key=lambda row: str(row.get("created_at", "")), reverse=True)
-    )
+    request_rows = "\n".join(render_index_request_row(request) for request in aggregated_requests)
     health_rows = "\n".join(render_catalog_health_row(entry, crawler_jobs, telemetry) for entry in catalog)
     job_rows = "\n".join(render_crawler_job_row(job) for job in crawler_jobs[-50:])
     zero_result_rows = "\n".join(render_zero_result_row(row) for row in top_zero_result_queries(telemetry))
@@ -169,7 +168,7 @@ def render_admin(state: ServerState) -> str:
   <div class="metric">Telemetry events: {len(telemetry)}</div>
   <div class="metric">Crawler jobs: {len(crawler_jobs)}</div>
   <h2>Index Requests</h2>
-  <table><thead><tr><th>Library</th><th>Vendor</th><th>Source</th><th>Requested by</th><th></th></tr></thead><tbody>{request_rows}</tbody></table>
+  <table><thead><tr><th>Library</th><th>Vendor</th><th>Source</th><th>Requests</th><th>Requested by</th><th></th></tr></thead><tbody>{request_rows}</tbody></table>
   <h2>Library Catalog</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Description</th></tr></thead><tbody>{rows}</tbody></table>
   <h2>Catalog Health</h2>
@@ -184,19 +183,56 @@ def render_admin(state: ServerState) -> str:
 </html>"""
 
 
+def aggregate_index_requests(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for request in requests:
+        library = str(request.get("library_name") or request.get("requested_library") or "")
+        vendor = str(request.get("vendor_hint") or "")
+        source = str(request.get("source_url_hint") or "")
+        key = (library, vendor, source)
+        row = grouped.setdefault(
+            key,
+            {
+                "library_name": library,
+                "vendor_hint": vendor,
+                "source_url_hint": source,
+                "request_count": 0,
+                "requesting_users": set(),
+                "latest_created_at": "",
+            },
+        )
+        row["request_count"] += 1
+        user = str(request.get("requesting_user") or "")
+        if user:
+            row["requesting_users"].add(user)
+        created_at = str(request.get("created_at") or "")
+        if created_at > row["latest_created_at"]:
+            row["latest_created_at"] = created_at
+    rows = []
+    for row in grouped.values():
+        row["requesting_user"] = ", ".join(sorted(row.pop("requesting_users")))
+        rows.append(row)
+    rows.sort(key=lambda row: (int(row["request_count"]), str(row["latest_created_at"])), reverse=True)
+    return rows
+
+
 def render_index_request_row(request: dict[str, Any]) -> str:
-    library = esc(request.get("library_name") or request.get("requested_library") or "")
-    vendor = esc(request.get("vendor_hint") or "")
-    source = esc(request.get("source_url_hint") or "")
+    library_raw = str(request.get("library_name") or request.get("requested_library") or "")
+    vendor_raw = str(request.get("vendor_hint") or "")
+    source_raw = str(request.get("source_url_hint") or "")
+    library = esc(library_raw)
+    vendor = esc(vendor_raw)
+    source = esc(source_raw)
     user = esc(request.get("requesting_user") or "")
+    count = esc(request.get("request_count") or 1)
     approve = ""
-    if library and source:
+    if library_raw and vendor_raw and source_raw:
         approve = (
             "<a class=\"button\" href=\"/admin/enqueue-crawl?"
-            f"library_name={url_component(library)}&vendor={url_component(vendor)}&source_url={url_component(source)}"
+            f"library_name={url_component(library_raw)}&vendor={url_component(vendor_raw)}&source_url={url_component(source_raw)}"
             "\">Approve crawl</a>"
         )
-    return f"<tr><td>{library}</td><td>{vendor}</td><td>{source}</td><td>{user}</td><td>{approve}</td></tr>"
+    return f"<tr><td>{library}</td><td>{vendor}</td><td>{source}</td><td>{count}</td><td>{user}</td><td>{approve}</td></tr>"
 
 
 def render_catalog_health_row(
@@ -282,14 +318,19 @@ def route_get(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
 
     if parsed.path == "/admin/enqueue-crawl":
         params = parse_qs(parsed.query)
-        event = {
-            "created_at": now(),
-            "status": "queued",
+        payload = {
             "library_name": params.get("library_name", [""])[0],
             "vendor": params.get("vendor", [""])[0],
             "source_url": params.get("source_url", [""])[0],
         }
-        state.storage.append_admin_event("crawler_jobs", event)
+        missing = missing_required_crawler_fields(crawler_job_event(payload))
+        if missing:
+            handler.send_html(
+                f"<!doctype html><p>Missing crawler job fields: {esc(', '.join(missing))}</p>",
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        enqueue_crawler_job(state.storage, payload)
         handler.send_html(
             "<!doctype html><meta http-equiv=\"refresh\" content=\"0; url=/admin\">",
             status=HTTPStatus.ACCEPTED,
@@ -419,14 +460,14 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
         return
 
     if parsed.path == "/crawler/enqueue":
-        event = {
-            "created_at": now(),
-            "status": "queued",
-            "library_name": payload.get("library_name"),
-            "vendor": payload.get("vendor"),
-            "source_url": payload.get("source_url"),
-        }
-        state.storage.append_admin_event("crawler_jobs", event)
+        missing = missing_required_crawler_fields(crawler_job_event(payload))
+        if missing:
+            handler.send_json(
+                {"error": "missing crawler job fields", "fields": missing},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        event = enqueue_crawler_job(state.storage, payload)
         handler.send_json({"ok": True, "job": event})
         return
 
@@ -481,197 +522,6 @@ def parse_pulled_library(value: str) -> tuple[str, str, str] | None:
     if not vendor or not library or not version:
         return None
     return vendor, library, version
-
-
-def suggest(state: ServerState, query: str, max_results: int) -> list[dict[str, Any]]:
-    terms = normalize_query(query)
-    rows: list[tuple[int, dict[str, Any]]] = []
-    for entry in load_catalog(state):
-        haystack = " ".join(
-            [
-                entry.get("vendor", ""),
-                entry.get("library", ""),
-                entry.get("version", ""),
-                entry.get("description", ""),
-                " ".join(entry.get("keywords", [])),
-            ]
-        ).lower()
-        score = sum(haystack.count(term) for term in terms)
-        if score:
-            rows.append((score, entry))
-    rows.sort(key=lambda item: (-item[0], item[1].get("vendor", ""), item[1].get("library", "")))
-    return [
-        {
-            "vendor": entry["vendor"],
-            "library": entry["library"],
-            "version": entry["version"],
-            "score": score,
-            "reason": entry.get("description", ""),
-        }
-        for score, entry in rows[:max_results]
-    ]
-
-
-def search(
-    state: ServerState,
-    query: str,
-    *,
-    library_scope: str | None,
-    max_results: int,
-) -> list[dict[str, Any]]:
-    terms = normalize_query(query)
-    scope_vendor, scope_library = parse_scope(library_scope)
-    hits: list[dict[str, Any]] = []
-
-    for fixture in state.fixtures_root.glob("*/*/*"):
-        if not fixture.is_dir():
-            continue
-        vendor, library, version = fixture.parts[-3:]
-        if scope_vendor and (vendor != scope_vendor or library != scope_library):
-            continue
-        chunk_path = fixture / "_chunks.jsonl"
-        if chunk_path.exists():
-            for row in read_jsonl(chunk_path):
-                normalized = str(row.get("text", "")).lower()
-                score = sum(1 for term in terms if term in normalized)
-                if score == 0:
-                    continue
-                hits.append(
-                    {
-                        "path": f".codo/vendors/{vendor}/{library}@{version}/{row.get('path')}",
-                        "line": 1,
-                        "score": score,
-                        "library": f"{vendor}/{library}",
-                        "vendor": vendor,
-                        "version": version,
-                    }
-                )
-            continue
-        for path in fixture.rglob("*.md"):
-            relative = path.relative_to(fixture)
-            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-                normalized = line.lower()
-                score = sum(1 for term in terms if term in normalized)
-                if score == 0:
-                    continue
-                hits.append(
-                    {
-                        "path": f".codo/vendors/{vendor}/{library}@{version}/{relative.as_posix()}",
-                        "line": line_number,
-                        "score": score,
-                        "library": f"{vendor}/{library}",
-                        "vendor": vendor,
-                        "version": version,
-                    }
-                )
-
-    hits.sort(key=lambda hit: (-hit["score"], hit["path"], hit["line"]))
-    return hits[:max_results]
-
-
-def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:
-    seen: set[tuple[str, str, str]] = set()
-    output: list[dict[str, str]] = []
-    for result in results:
-        vendor = result["vendor"]
-        library = result["library"].split("/", 1)[1]
-        version = result["version"]
-        key = (vendor, library, version)
-        if key in seen:
-            continue
-        seen.add(key)
-        output.append({"vendor": vendor, "library": library, "version": version})
-    return output
-
-
-def latest_entry(state: ServerState, vendor: str, library: str) -> dict[str, Any] | None:
-    matches = [
-        entry
-        for entry in load_catalog(state)
-        if entry.get("vendor") == vendor and entry.get("library") == library
-    ]
-    if not matches:
-        return None
-    matches.sort(key=lambda entry: entry.get("version", ""))
-    return matches[-1]
-
-
-def load_catalog(state: ServerState) -> list[dict[str, Any]]:
-    if not state.catalog_path.exists():
-        return discover_catalog(state)
-    data = json.loads(state.catalog_path.read_text(encoding="utf-8"))
-    return list(data.get("libraries", []))
-
-
-def discover_catalog(state: ServerState) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for fixture in state.fixtures_root.glob("*/*/*"):
-        if not fixture.is_dir():
-            continue
-        vendor, library, version = fixture.parts[-3:]
-        description = read_description(fixture, library)
-        rows.append(
-            {
-                "vendor": vendor,
-                "library": library,
-                "version": version,
-                "description": description,
-                "keywords": normalize_query(description),
-                "fixture_path": str(fixture.relative_to(state.repo_root)),
-                "pack_path": None,
-                "ref_sha": "local",
-            }
-        )
-    return rows
-
-
-def read_description(fixture: Path, library: str) -> str:
-    readme = fixture / "README.md"
-    if readme.exists():
-        for line in readme.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                return stripped
-    return f"{library} documentation"
-
-
-def normalize_query(query: str) -> list[str]:
-    terms: list[str] = []
-    current: list[str] = []
-    for char in query.lower():
-        if char.isalnum() or char == "_":
-            current.append(char)
-        elif current:
-            terms.append("".join(current))
-            current.clear()
-    if current:
-        terms.append("".join(current))
-    return terms
-
-
-def parse_scope(scope: str | None) -> tuple[str | None, str | None]:
-    if not scope:
-        return None, None
-    if "/" not in scope:
-        return "npm", scope
-    vendor, library = scope.split("/", 1)
-    return vendor, library
-
-
-def append_jsonl(path: Path, event: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(event, sort_keys=True) + "\n")
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    return rows
 
 
 def now() -> str:

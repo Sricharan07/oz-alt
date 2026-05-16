@@ -3,10 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+PYTHON="${PYTHON:-$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)}"
 
 cargo test --workspace
-python3 -m py_compile lambda_entry.py lambda_crawler_entry.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
-python3 scripts/index-registry-to-db.py --dry-run >/dev/null
+"$PYTHON" -m py_compile lambda_entry.py lambda_crawler_entry.py lambda_fargate_entry.py crawler_task.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+"$PYTHON" scripts/index-registry-to-db.py --dry-run >/dev/null
 cargo build -p oz
 
 tmp_home="$(mktemp -d)"
@@ -28,7 +29,7 @@ oz status
 oz doctor
 oz install --codex
 
-PYTHONPATH=packages/oz-api/src python3 -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
+PYTHONPATH=packages/oz-api/src "$PYTHON" -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
 server_pid="$!"
 sleep 1
 

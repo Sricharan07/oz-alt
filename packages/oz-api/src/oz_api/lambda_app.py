@@ -18,6 +18,7 @@ from oz_api.retrieval import (
     suggest,
     unique_libraries_to_pull,
 )
+from oz_api.queue import crawler_job_event, enqueue_crawler_job, missing_required_crawler_fields
 from oz_api.storage import RegistryStorage
 from oz_api.telemetry import sanitize_telemetry
 
@@ -142,6 +143,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             },
         )
         return json_response({"ok": True})
+
+    if raw_path == "/crawler/enqueue" and method == "POST":
+        missing = missing_required_crawler_fields(crawler_job_event(body))
+        if missing:
+            return json_response({"error": "missing crawler job fields", "fields": missing}, status=400)
+        event = enqueue_crawler_job(storage, body)
+        return json_response({"ok": True, "job": event})
 
     if raw_path == "/telemetry" and method == "POST":
         telemetry = sanitize_telemetry(body)

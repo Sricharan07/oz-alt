@@ -3,7 +3,9 @@ name = "oz-api"
 version = "0.1.0"
 description = "Local Oz registry API for end-to-end development."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "boto3>=1.35.0",
+]
 
 [project.scripts]
 oz-api = "oz_api.server:main"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+PYTHON="${PYTHON:-$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)}"
 
 cargo build -p oz >/dev/null
 
@@ -37,7 +38,7 @@ for task in "${tasks[@]}"; do
   scope="${task%%|*}"
   query="${task#*|}"
   output="$(oz search "$query" "$scope" --json)"
-  metrics="$(OZ_EVAL_OUTPUT="$output" python3 - "$scope" "$repo_root" <<'PY'
+  metrics="$(OZ_EVAL_OUTPUT="$output" "$PYTHON" - "$scope" "$repo_root" <<'PY'
 import json
 import pathlib
 import os

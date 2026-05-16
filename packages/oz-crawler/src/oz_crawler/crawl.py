@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import sys
-import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,8 +13,10 @@ from urllib.request import Request, urlopen
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
-from oz_crawler.embeddings import row_with_embedding
+from oz_crawler.chunks import write_chunks
 from oz_crawler.normalize import NormalizedPage, normalize_html
+from oz_crawler.sources import SourceArtifact, collect_source_artifacts
+from oz_crawler.symbols import write_symbols
 
 try:
     from bs4 import BeautifulSoup
@@ -98,6 +99,9 @@ def crawl_single_page(
         f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
         encoding="utf-8",
     )
+    artifacts = collect_source_artifacts(url, pages)
+    artifact_pages = artifact_normalized_pages(artifacts)
+    all_pages = pages + artifact_pages
     guide_links: list[tuple[str, str]] = []
     for page in pages:
         slug = slugify(page.title or page.source_url)
@@ -107,8 +111,13 @@ def crawl_single_page(
             f"# {page.title}\n\n**Source:** {page.source_url}\n\n{page.markdown}",
             encoding="utf-8",
         )
-    write_chunks(target, pages)
-    write_symbols(target, pages)
+    for artifact in artifacts:
+        artifact_path = target / artifact.path
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(artifact.markdown, encoding="utf-8")
+        guide_links.append((artifact.path, artifact.title))
+    write_chunks(target, all_pages)
+    write_symbols(target, all_pages)
     (target / "INDEX.md").write_text(
         build_index(title=page_title, source_url=url, guide_links=guide_links),
         encoding="utf-8",
@@ -131,6 +140,14 @@ def crawl_single_page(
     )
 
     return target
+
+
+def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[NormalizedPage]:
+    return [
+        NormalizedPage(title=artifact.title, markdown=artifact.markdown, source_url=f"oz-artifact:{artifact.path}")
+        for artifact in artifacts
+        if artifact.markdown.strip()
+    ]
 
 
 def crawl_pages(url: str, *, title: str | None, options: CrawlOptions) -> list[NormalizedPage]:
@@ -510,136 +527,6 @@ def build_index(*, title: str, source_url: str, guide_links: list[tuple[str, str
         ]
     )
     return "\n".join(lines)
-
-
-def write_symbols(target: Path, pages: list[NormalizedPage]) -> None:
-    symbols = extract_symbols(pages)
-    for symbol, payload in symbols.items():
-        (target / "_symbols" / f"{symbol}.md").write_text(payload, encoding="utf-8")
-
-
-def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
-    rows: list[dict[str, Any]] = []
-    for page in pages:
-        slug = slugify(page.title or page.source_url)
-        source_path = f"guides/{slug}.md"
-        for idx, chunk in enumerate(chunk_markdown(page.markdown), start=1):
-            row = row_with_embedding(
-                {
-                    "id": f"{source_path}#{idx}",
-                    "path": source_path,
-                    "source_url": page.source_url,
-                    "ordinal": idx,
-                    "text": chunk,
-                },
-                chunk,
-            )
-            row["chunk_sha"] = stable_chunk_sha(target, source_path, idx, chunk)
-            rows.append(
-                row
-            )
-    (target / "_chunks.jsonl").write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
-
-
-def chunk_markdown(markdown: str, *, max_chars: int = 4000) -> list[str]:
-    chunks: list[str] = []
-    current: list[str] = []
-    current_size = 0
-    for line in markdown.splitlines():
-        starts_heading = line.startswith("## ")
-        if starts_heading and current:
-            chunks.append("\n".join(current).strip())
-            current = []
-            current_size = 0
-        current.append(line)
-        current_size += len(line) + 1
-        if current_size >= max_chars:
-            chunks.append("\n".join(current).strip())
-            current = []
-            current_size = 0
-    if current:
-        chunks.append("\n".join(current).strip())
-    return [chunk for chunk in chunks if chunk]
-
-
-def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) -> str:
-    vendor, library, version = target.parts[-3:]
-    payload = "\0".join([vendor, library, version, source_path, str(ordinal), text])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def extract_symbols(pages: list[NormalizedPage]) -> dict[str, str]:
-    output: dict[str, str] = {}
-    for page in pages:
-        for language, code in code_blocks(page.markdown):
-            for kind, symbol in find_symbols(code):
-                output.setdefault(
-                    symbol,
-                    "\n".join(
-                        [
-                            f"# {symbol}",
-                            "",
-                            f"**Kind:** {kind}",
-                            f"**Signature:** `{first_line(code)}`",
-                            f"**Source:** {page.source_url}",
-                            "",
-                            "## Example",
-                            "",
-                            f"```{language or 'text'}",
-                            code.strip(),
-                            "```",
-                            "",
-                        ]
-                    ),
-                )
-    return output
-
-
-def code_blocks(markdown: str) -> list[tuple[str, str]]:
-    pattern = re.compile(r"```([A-Za-z0-9_-]*)\n(.*?)```", re.DOTALL)
-    return [(match.group(1), match.group(2)) for match in pattern.finditer(markdown)]
-
-
-def find_symbols(code: str) -> list[tuple[str, str]]:
-    patterns = [
-        ("function", r"export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)"),
-        ("class", r"(?:export\s+)?class\s+([A-Z][A-Za-z0-9_$]*)"),
-        ("type", r"(?:export\s+)?(?:interface|type)\s+([A-Z][A-Za-z0-9_$]*)"),
-        ("constant", r"export\s+const\s+([A-Za-z_$][\w$]*)"),
-    ]
-    symbols: list[tuple[str, str]] = []
-    for kind, pattern in patterns:
-        for match in re.finditer(pattern, code):
-            symbol = match.group(1)
-            if symbol.lower() not in SYMBOL_STOP_WORDS:
-                symbols.append((kind, symbol))
-    return symbols
-
-
-SYMBOL_STOP_WORDS = {
-    "and",
-    "as",
-    "for",
-    "from",
-    "in",
-    "is",
-    "of",
-    "or",
-    "that",
-    "the",
-    "to",
-    "with",
-}
-
-
-def first_line(code: str) -> str:
-    for line in code.splitlines():
-        if line.strip():
-            return line.strip()
-    return ""
 
 
 def slugify(value: str) -> str:

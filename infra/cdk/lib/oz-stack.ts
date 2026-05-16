@@ -6,11 +6,13 @@ import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
@@ -110,6 +112,11 @@ export class OzStack extends cdk.Stack {
       natGateways: 0,
       subnetConfiguration: [
         {
+          name: "public",
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24
+        },
+        {
           name: "isolated",
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
           cidrMask: 24
@@ -174,16 +181,31 @@ export class OzStack extends cdk.Stack {
       }
     });
 
-    const assetCode = lambda.Code.fromAsset(path.join(__dirname, "../../../../"), {
+    const repoRoot = path.join(__dirname, "../../../../");
+    const assetCode = lambda.Code.fromAsset(repoRoot, {
+      ignoreMode: cdk.IgnoreMode.GLOB,
       exclude: [
         ".git",
+        ".git/**",
+        "**/.git",
+        "**/.git/**",
         ".github",
+        ".github/**",
         ".codo",
+        ".codo/**",
         "target",
+        "target/**",
         "dist",
+        "dist/**",
         "node_modules",
+        "node_modules/**",
         "infra/cdk/node_modules",
+        "infra/cdk/node_modules/**",
         "infra/cdk/cdk.out",
+        "infra/cdk/cdk.out/**",
+        "cdk.out",
+        "cdk.out/**",
+        "**/cdk.out/**",
         "**/__pycache__",
         "**/.DS_Store"
       ]
@@ -280,6 +302,131 @@ export class OzStack extends cdk.Stack {
       batchSize: 1
     }));
 
+    const crawlerSubnets = vpc.selectSubnets({
+      subnetType: ec2.SubnetType.PUBLIC
+    });
+    const crawlerTaskSecurityGroup = new ec2.SecurityGroup(this, "CrawlerTaskSecurityGroup", {
+      vpc,
+      allowAllOutbound: true
+    });
+    const crawlerCluster = new ecs.Cluster(this, "CrawlerCluster", {
+      vpc,
+      enableFargateCapacityProviders: true,
+      containerInsightsV2: ecs.ContainerInsights.ENABLED
+    });
+    const crawlerTaskDefinition = new ecs.FargateTaskDefinition(this, "CrawlerFargateTask", {
+      cpu: 1024,
+      memoryLimitMiB: 4096
+    });
+    const crawlerLogGroup = new logs.LogGroup(this, "CrawlerFargateLogs", {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+    const crawlerContainerName = "CrawlerContainer";
+    crawlerTaskDefinition.addContainer(crawlerContainerName, {
+      image: ecs.ContainerImage.fromAsset(repoRoot, {
+        file: "Dockerfile.crawler",
+        ignoreMode: cdk.IgnoreMode.GLOB,
+        exclude: [
+          ".git",
+          ".git/**",
+          "**/.git",
+          "**/.git/**",
+          ".github",
+          ".github/**",
+          ".codo",
+          ".codo/**",
+          "dist",
+          "dist/**",
+          "target",
+          "target/**",
+          "node_modules",
+          "node_modules/**",
+          "infra/cdk/node_modules",
+          "infra/cdk/node_modules/**",
+          "infra/cdk/cdk.out",
+          "infra/cdk/cdk.out/**",
+          "cdk.out",
+          "cdk.out/**",
+          "**/cdk.out/**",
+          "registry/packs",
+          "registry/packs/**",
+          "**/__pycache__",
+          "**/.DS_Store"
+        ]
+      }),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "oz-crawler-fargate",
+        logGroup: crawlerLogGroup
+      }),
+      environment: {
+        OZ_OBJECTS_BUCKET: objectsBucket.bucketName,
+        OZ_PACKS_BUCKET: packsBucket.bucketName,
+        OZ_CATALOG_BUCKET: packsBucket.bucketName,
+        OZ_CATALOG_KEY: "catalog.json",
+        OZ_PACK_PREFIX: "packs",
+        OZ_PACK_PUBLIC_BASE_URL: packsBucket.urlForObject("packs"),
+        OZ_DB_RESOURCE_ARN: database.attrDbClusterArn,
+        OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
+        OZ_DB_NAME: "oz",
+        OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
+        OZ_PACK_SIGNING_KEY: packSigningKey.valueAsString,
+        OZ_PACK_SIGNING_KEY_ID: packSigningKeyId.valueAsString,
+        OZ_PACK_VERIFY_KEY: packVerifyKey.valueAsString,
+        OZ_PACK_REQUIRE_SIGNATURE: "true"
+      }
+    });
+    objectsBucket.grantReadWrite(crawlerTaskDefinition.taskRole);
+    packsBucket.grantReadWrite(crawlerTaskDefinition.taskRole);
+    jwtSecret.grantRead(crawlerTaskDefinition.taskRole);
+    crawlerTaskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: [
+        "rds-data:ExecuteStatement",
+        "rds-data:BatchExecuteStatement",
+        "secretsmanager:GetSecretValue"
+      ],
+      resources: [
+        database.attrDbClusterArn,
+        database.attrMasterUserSecretSecretArn
+      ]
+    }));
+
+    const fargateFailoverFunction = new lambda.Function(this, "CrawlerFargateFailoverFunction", {
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "lambda_fargate_entry.handler",
+      code: assetCode,
+      memorySize: 256,
+      timeout: cdk.Duration.minutes(2),
+      environment: {
+        OZ_PACKS_BUCKET: packsBucket.bucketName,
+        OZ_ADMIN_BUCKET: packsBucket.bucketName,
+        OZ_ADMIN_PREFIX: "admin",
+        OZ_FARGATE_CLUSTER: crawlerCluster.clusterName,
+        OZ_FARGATE_TASK_DEFINITION: crawlerTaskDefinition.taskDefinitionArn,
+        OZ_FARGATE_SUBNETS: crawlerSubnets.subnetIds.join(","),
+        OZ_FARGATE_SECURITY_GROUP: crawlerTaskSecurityGroup.securityGroupId,
+        OZ_FARGATE_CONTAINER: crawlerContainerName,
+        OZ_FARGATE_CAPACITY_PROVIDER: "FARGATE_SPOT"
+      }
+    });
+    crawlerDlq.grantConsumeMessages(fargateFailoverFunction);
+    packsBucket.grantReadWrite(fargateFailoverFunction);
+    fargateFailoverFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["ecs:RunTask"],
+      resources: [crawlerTaskDefinition.taskDefinitionArn]
+    }));
+    const passRoleArns = [crawlerTaskDefinition.taskRole.roleArn];
+    if (crawlerTaskDefinition.executionRole) {
+      passRoleArns.push(crawlerTaskDefinition.executionRole.roleArn);
+    }
+    fargateFailoverFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["iam:PassRole"],
+      resources: passRoleArns
+    }));
+    fargateFailoverFunction.addEventSource(new lambdaEventSources.SqsEventSource(crawlerDlq, {
+      batchSize: 1
+    }));
+
     new events.Rule(this, "DailyRecrawlSchedule", {
       schedule: events.Schedule.rate(cdk.Duration.days(1)),
       targets: [
@@ -329,6 +476,8 @@ export class OzStack extends cdk.Stack {
     new cdk.CfnOutput(this, "PacksBucketName", { value: packsBucket.bucketName });
     new cdk.CfnOutput(this, "CrawlerQueueUrl", { value: crawlerQueue.queueUrl });
     new cdk.CfnOutput(this, "CrawlerDeadLetterQueueUrl", { value: crawlerDlq.queueUrl });
+    new cdk.CfnOutput(this, "CrawlerClusterName", { value: crawlerCluster.clusterName });
+    new cdk.CfnOutput(this, "CrawlerFargateTaskArn", { value: crawlerTaskDefinition.taskDefinitionArn });
     new cdk.CfnOutput(this, "DatabaseClusterArn", { value: database.attrDbClusterArn });
     new cdk.CfnOutput(this, "DatabaseSecretArn", { value: database.attrMasterUserSecretSecretArn });
   }

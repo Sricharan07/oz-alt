@@ -1,4 +1,5 @@
 use super::*;
+use std::io::{IsTerminal, Write};
 
 pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
     let mut config = read_config()?;
@@ -25,15 +26,48 @@ pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
     )?;
     store_auth_token(&mut config, &token.access_token);
     if config.telemetry.is_none() {
-        config.telemetry = Some(true);
+        config.telemetry = Some(telemetry_preference()?);
     }
     write_config(&config)?;
     println!(
         "logged in to {}",
         config.api_url.as_deref().expect("api_url should be set")
     );
-    println!("telemetry is on by default and never sends query text; disable with `oz config set telemetry off`");
+    println!(
+        "telemetry is {}; it never sends query text",
+        if config.telemetry.unwrap_or(true) {
+            "on"
+        } else {
+            "off"
+        }
+    );
     Ok(())
+}
+
+fn telemetry_preference() -> Result<bool> {
+    if let Ok(value) = std::env::var("OZ_TELEMETRY") {
+        return parse_telemetry_preference(&value);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Ok(true);
+    }
+    print!("Enable anonymous telemetry? It never sends query text. [Y/n] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        return Ok(true);
+    }
+    parse_telemetry_preference(trimmed)
+}
+
+fn parse_telemetry_preference(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Ok(true),
+        "0" | "false" | "no" | "n" | "off" => Ok(false),
+        other => bail!("invalid telemetry preference `{other}`; use on or off"),
+    }
 }
 
 fn poll_device_token(base_url: &str, start: &DeviceStartResponse) -> Result<TokenResponse> {
