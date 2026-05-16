@@ -51,6 +51,8 @@ cargo run -p oz -- status
 ```
 
 Pulled docs materialize under `.codo/vendors/<vendor>/<library>@<version>/`.
+`oz install --codex` writes both project `AGENTS.md` instructions and a real Codex skill at
+`$CODEX_HOME/skills/oz/SKILL.md` (default: `~/.codex/skills/oz/SKILL.md`).
 
 ## Local API
 

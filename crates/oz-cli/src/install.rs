@@ -42,27 +42,28 @@ pub(crate) fn install_skill(project_root: &Path, targets: InstallTargets) -> Res
     let mut installed = Vec::new();
     if targets.codex {
         write_markdown_skill(&project_root.join("AGENTS.md"))?;
-        installed.push("Codex");
+        let skill_path = write_codex_skill()?;
+        installed.push(format!("Codex ({})", skill_path.display()));
     }
     if targets.claude_code {
         write_markdown_skill(&project_root.join("CLAUDE.md"))?;
         let claude_skill = project_root.join(".claude").join("skills").join("oz.md");
         write_markdown_skill(&claude_skill)?;
-        installed.push("Claude Code");
+        installed.push("Claude Code".to_string());
     }
     if targets.cursor {
         write_markdown_skill(&project_root.join(".cursorrules"))?;
         let cursor_rule = project_root.join(".cursor").join("rules").join("oz.mdc");
         write_markdown_skill(&cursor_rule)?;
-        installed.push("Cursor");
+        installed.push("Cursor".to_string());
     }
     if targets.cline {
         write_markdown_skill(&project_root.join(".clinerules"))?;
-        installed.push("Cline");
+        installed.push("Cline".to_string());
     }
     if targets.continue_agent {
         write_continue_config(&project_root.join(".continuerc"))?;
-        installed.push("Continue");
+        installed.push("Continue".to_string());
     }
     installed.sort();
     println!("installed Oz instructions for {}", installed.join(", "));
@@ -130,6 +131,38 @@ fn write_markdown_skill(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_codex_skill() -> Result<PathBuf> {
+    let path = codex_skill_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&path, codex_skill_document())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
+}
+
+fn codex_skill_path() -> Result<PathBuf> {
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+        .context("failed to locate Codex home directory")?;
+    Ok(codex_home.join("skills").join("oz").join("SKILL.md"))
+}
+
+fn codex_skill_document() -> String {
+    format!(
+        r#"---
+name: oz
+description: Use when working with external libraries or SDKs in a codebase and you need version-accurate documentation before writing code. Pull docs with Oz first, then search the local .codo/vendors files with normal Read, Grep, and Glob tools.
+---
+
+{}
+"#,
+        oz_skill()
+    )
+}
+
 pub(crate) fn sync_installed_skill(project_root: &Path) -> Result<()> {
     let config = read_config().unwrap_or_default();
     if config.auto_update_skill == Some(false) {
@@ -152,6 +185,12 @@ pub(crate) fn sync_installed_skill(project_root: &Path) -> Result<()> {
     let content = fs::read_to_string(&continue_path).unwrap_or_default();
     if content.contains("ozSkill") {
         write_continue_config(&continue_path)?;
+    }
+    if codex_skill_path()
+        .map(|path| path.exists())
+        .unwrap_or(false)
+    {
+        write_codex_skill()?;
     }
     Ok(())
 }
