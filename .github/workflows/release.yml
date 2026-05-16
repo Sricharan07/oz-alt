@@ -75,6 +75,7 @@ jobs:
           repository: Sricharan07/oz
           token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          overwrite_files: true
           files: dist/*
 
   build-darwin-x64:
@@ -119,4 +120,5 @@ jobs:
           repository: Sricharan07/oz
           token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          overwrite_files: true
           files: dist/*

@@ -46,7 +46,7 @@ const KEYCHAIN_SERVICE: &str = "dev.oz.auth-token";
 const KEYCHAIN_ACCOUNT: &str = "oz-cli";
 
 #[derive(Debug, Parser)]
-#[command(name = "oz")]
+#[command(name = "oz", version)]
 #[command(about = "Version-pinned local documentation for coding agents")]
 struct Cli {
     #[command(subcommand)]
