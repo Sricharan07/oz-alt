@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { existsSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 
 const platform = process.platform;
@@ -14,7 +14,13 @@ const candidates = [
   join(__dirname, "..", "..", "..", "target", "debug", binaryName)
 ].filter(Boolean);
 
-const binary = candidates.find((candidate) => existsSync(candidate));
+const binary = candidates.find((candidate) => {
+  try {
+    return existsSync(candidate) && statSync(candidate).size > 0;
+  } catch {
+    return false;
+  }
+});
 if (!binary) {
   console.error("oz binary is not installed. Install from GitHub Releases, Homebrew, or run scripts/install.sh.");
   process.exit(127);
