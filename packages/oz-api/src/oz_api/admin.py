@@ -38,6 +38,7 @@ def render_admin(storage: RegistryStorage) -> str:
 </head>
 <body>
   <h1>Oz Admin</h1>
+  <p><a href="/admin/logout">Log out</a></p>
   <div class="metric">Libraries: {len(catalog)}</div>
   <div class="metric">Index requests: {len(index_requests)}</div>
   <div class="metric">Telemetry events: {len(telemetry)}</div>

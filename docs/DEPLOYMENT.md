@@ -117,6 +117,23 @@ OZ_OAUTH_SCOPE='openid profile email'
 
 `/auth/device` proxies the provider's device authorization response. `/auth/token` exchanges the device code with the provider and issues the Oz JWT used by the CLI.
 
+## Admin
+
+The deployed admin panel is served by the API Lambda at:
+
+```bash
+https://api.claw.codes/admin
+```
+
+Open the page in a browser and paste an Oz access token from:
+
+```bash
+oz config get auth_token
+```
+
+The admin login stores the token in a secure, HttpOnly cookie scoped to `/admin`.
+Use `/admin/logout` to clear the browser session.
+
 ## Pack Signing
 
 Set the Ed25519 signing seed wherever packs are built:

@@ -31,7 +31,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     raw_path = event.get("rawPath") or event.get("path", "/")
     body = parse_body(event)
 
+    if raw_path == "/admin/login" and method == "GET":
+        return admin_login_response()
+
+    if raw_path == "/admin/login" and method == "POST":
+        return admin_login_submit_response(event)
+
+    if raw_path == "/admin/logout" and method == "GET":
+        return admin_logout_response()
+
     if not is_authorized(event, raw_path):
+        if raw_path.startswith("/admin"):
+            return admin_login_response(status=401)
         return json_response({"error": "unauthorized"}, status=401)
 
     if raw_path == "/health" and method == "GET":
@@ -192,6 +203,9 @@ def parse_body(event: dict[str, Any]) -> dict[str, Any]:
         return {}
     if event.get("isBase64Encoded"):
         raw = base64.b64decode(raw).decode("utf-8")
+    content_type = header_value(event.get("headers") or {}, "Content-Type") or ""
+    if "json" not in content_type.lower():
+        return {}
     return json.loads(raw)
 
 
@@ -201,8 +215,100 @@ def is_authorized(event: dict[str, Any], raw_path: str) -> bool:
     if raw_path in {"/health", "/auth/device", "/auth/token", "/auth/verify"}:
         return True
     token = bearer_token(event.get("headers") or {})
+    if raw_path.startswith("/admin"):
+        token = token or cookie_token(event, "oz_admin_token")
     dev_token = os.environ.get("OZ_DEV_TOKEN")
     return (bool(dev_token) and token == dev_token) or (token is not None and verify_token(token))
+
+
+def cookie_token(event: dict[str, Any], name: str) -> str | None:
+    cookies: list[str] = []
+    raw_cookies = event.get("cookies")
+    if isinstance(raw_cookies, list):
+        cookies.extend(str(cookie) for cookie in raw_cookies)
+    cookie_header = header_value(event.get("headers") or {}, "Cookie")
+    if cookie_header:
+        cookies.extend(part.strip() for part in cookie_header.split(";"))
+    prefix = f"{name}="
+    for cookie in cookies:
+        if cookie.startswith(prefix):
+            return cookie[len(prefix) :]
+    return None
+
+
+def header_value(headers: dict[str, str] | Any, key: str) -> str | None:
+    if not hasattr(headers, "get"):
+        return None
+    return headers.get(key) or headers.get(key.lower())
+
+
+def admin_login_response(*, status: int = 200, error: str = "") -> dict[str, Any]:
+    error_html = f"<p class=\"error\">{esc(error)}</p>" if error else ""
+    return html_response(
+        f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Oz Admin Login</title>
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f7f7f4; color: #202124; font-family: ui-sans-serif, system-ui, sans-serif; }}
+    main {{ width: min(420px, calc(100vw - 32px)); border: 1px solid #d8dee4; background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 16px 40px rgba(0,0,0,.08); }}
+    h1 {{ margin: 0 0 16px; font-size: 22px; }}
+    label {{ display: block; margin: 0 0 8px; font-size: 13px; color: #51565c; }}
+    input {{ box-sizing: border-box; width: 100%; border: 1px solid #c7cbd1; border-radius: 6px; padding: 10px 12px; font: inherit; }}
+    button {{ margin-top: 14px; width: 100%; border: 0; border-radius: 6px; background: #202124; color: #fff; padding: 10px 12px; font: inherit; cursor: pointer; }}
+    .error {{ margin: 0 0 12px; color: #b42318; font-size: 13px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Oz Admin</h1>
+    {error_html}
+    <form method="post" action="/admin/login">
+      <label for="token">Oz access token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" autofocus>
+      <button type="submit">Open admin</button>
+    </form>
+  </main>
+</body>
+</html>""",
+        status=status,
+    )
+
+
+def admin_login_submit_response(event: dict[str, Any]) -> dict[str, Any]:
+    token = parse_form_body(event).get("token", [""])[0].strip()
+    if not token or not verify_token(token):
+        return admin_login_response(status=401, error="Invalid or expired Oz token.")
+    return {
+        "statusCode": 303,
+        "headers": {
+            "location": "/admin",
+            "set-cookie": (
+                f"oz_admin_token={token}; Path=/admin; Max-Age=86400; "
+                "HttpOnly; Secure; SameSite=Lax"
+            ),
+        },
+        "body": "",
+    }
+
+
+def admin_logout_response() -> dict[str, Any]:
+    return {
+        "statusCode": 303,
+        "headers": {
+            "location": "/admin/login",
+            "set-cookie": "oz_admin_token=; Path=/admin; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+        },
+        "body": "",
+    }
+
+
+def parse_form_body(event: dict[str, Any]) -> dict[str, list[str]]:
+    raw = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        raw = base64.b64decode(raw).decode("utf-8")
+    return parse_qs(raw)
 
 
 def json_response(payload: Any, *, status: int = 200) -> dict[str, Any]:
