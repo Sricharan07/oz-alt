@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import sys
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -523,17 +524,19 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
         slug = slugify(page.title or page.source_url)
         source_path = f"guides/{slug}.md"
         for idx, chunk in enumerate(chunk_markdown(page.markdown), start=1):
+            row = row_with_embedding(
+                {
+                    "id": f"{source_path}#{idx}",
+                    "path": source_path,
+                    "source_url": page.source_url,
+                    "ordinal": idx,
+                    "text": chunk,
+                },
+                chunk,
+            )
+            row["chunk_sha"] = stable_chunk_sha(target, source_path, idx, chunk)
             rows.append(
-                row_with_embedding(
-                    {
-                        "id": f"{source_path}#{idx}",
-                        "path": source_path,
-                        "source_url": page.source_url,
-                        "ordinal": idx,
-                        "text": chunk,
-                    },
-                    chunk,
-                )
+                row
             )
     (target / "_chunks.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
@@ -560,6 +563,12 @@ def chunk_markdown(markdown: str, *, max_chars: int = 4000) -> list[str]:
     if current:
         chunks.append("\n".join(current).strip())
     return [chunk for chunk in chunks if chunk]
+
+
+def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) -> str:
+    vendor, library, version = target.parts[-3:]
+    payload = "\0".join([vendor, library, version, source_path, str(ordinal), text])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def extract_symbols(pages: list[NormalizedPage]) -> dict[str, str]:

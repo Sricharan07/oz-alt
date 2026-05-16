@@ -4,6 +4,8 @@ Last updated: May 16, 2026
 
 Oz collects the minimum operational data needed to run the public beta.
 
+The API sanitizes telemetry server-side. Unknown properties are dropped before storage, so privacy does not depend only on CLI behavior.
+
 ## What Oz Collects
 
 - CLI command event name.

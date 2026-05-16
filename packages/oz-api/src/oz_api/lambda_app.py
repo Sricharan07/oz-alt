@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
-from oz_api.auth import bearer_token, issue_token, verify_token
+from oz_api.auth import bearer_token, exchange_device_code, start_device_authorization, verify_token
+from oz_api.freshness import stale_libraries_from_payload
 from oz_api.limits import index_request_allowed
 from oz_api.retrieval import (
     RetrievalContext,
@@ -18,6 +19,7 @@ from oz_api.retrieval import (
     unique_libraries_to_pull,
 )
 from oz_api.storage import RegistryStorage
+from oz_api.telemetry import sanitize_telemetry
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -34,20 +36,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return json_response({"ok": True, "service": "oz-api"})
 
     if raw_path == "/auth/device" and method == "POST":
-        return json_response(
-            {
-                "device_code": "lambda-device-code",
-                "user_code": "OZ-LAMBDA",
-                "verification_uri": os.environ.get("OZ_VERIFY_URL", "https://example.com/auth/verify"),
-                "interval": 1,
-                "expires_in": 600,
-            }
-        )
+        return json_response(start_device_authorization())
 
     if raw_path == "/auth/token" and method == "POST":
-        if body.get("device_code") not in {"lambda-device-code", "local-device-code"}:
-            return json_response({"error": "invalid device_code"}, status=400)
-        return json_response({"access_token": issue_token("lambda-device-code"), "token_type": "Bearer"})
+        token = exchange_device_code(str(body.get("device_code") or ""))
+        if token.get("error"):
+            return json_response(token, status=400)
+        return json_response(token)
 
     if raw_path == "/suggest" and method == "POST":
         return json_response(
@@ -58,7 +53,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     int(body.get("max_results", 10)),
                     fingerprint=str(body.get("project_fingerprint", "")),
                 ),
-                "stale_libraries": [],
+                "stale_libraries": stale_libraries_from_payload(storage, body),
             }
         )
 
@@ -74,7 +69,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             {
                 "results": results,
                 "libraries_to_pull": unique_libraries_to_pull(results),
-                "stale_libraries": [],
+                "stale_libraries": stale_libraries_from_payload(storage, body),
             }
         )
 
@@ -149,12 +144,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return json_response({"ok": True})
 
     if raw_path == "/telemetry" and method == "POST":
+        telemetry = sanitize_telemetry(body)
         storage.append_admin_event(
             "telemetry",
             {
                 "created_at": now(),
-                "event": body.get("event"),
-                "properties": body.get("properties", {}),
+                "event": telemetry["event"],
+                "properties": telemetry["properties"],
             },
         )
         return json_response({"ok": True})

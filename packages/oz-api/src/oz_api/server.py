@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from oz_api.auth import bearer_token, issue_token, verify_token
+from oz_api.auth import bearer_token, exchange_device_code, start_device_authorization, verify_token
 from oz_api.limits import index_request_allowed
+from oz_api.freshness import stale_libraries_from_payload
 from oz_api.retrieval import (
     RetrievalContext,
     latest_entry as retrieval_latest_entry,
@@ -21,6 +22,7 @@ from oz_api.retrieval import (
     unique_libraries_to_pull as retrieval_unique_libraries_to_pull,
 )
 from oz_api.storage import RegistryStorage
+from oz_api.telemetry import sanitize_telemetry
 
 
 @dataclass(frozen=True)
@@ -347,28 +349,18 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
     payload = handler.read_json()
 
     if parsed.path == "/auth/device":
-        handler.send_json(
-            {
-                "device_code": "local-device-code",
-                "user_code": "LOCAL-OZ",
-                "verification_uri": "http://127.0.0.1:8765/auth/verify",
-                "interval": 1,
-                "expires_in": 600,
-            }
-        )
+        handler.send_json(start_device_authorization())
         return
 
     if parsed.path == "/auth/token":
-        if payload.get("device_code") != "local-device-code":
-            handler.send_json({"error": "invalid device_code"}, status=HTTPStatus.BAD_REQUEST)
+        token = exchange_device_code(str(payload.get("device_code") or ""))
+        if token.get("error"):
+            status = HTTPStatus.BAD_REQUEST
+            if token.get("error") in {"authorization_pending", "slow_down"}:
+                status = HTTPStatus.BAD_REQUEST
+            handler.send_json(token, status=status)
             return
-        handler.send_json(
-            {
-                "access_token": issue_token("local-dev-device"),
-                "token_type": "Bearer",
-                "expires_in": 86400,
-            }
-        )
+        handler.send_json(token)
         return
 
     if parsed.path == "/suggest":
@@ -383,7 +375,7 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
                     max_results,
                     fingerprint=str(payload.get("project_fingerprint", "")),
                 ),
-                "stale_libraries": [],
+                "stale_libraries": stale_libraries_from_payload(state.storage, payload),
             }
         )
         return
@@ -401,7 +393,13 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
             fingerprint=str(payload.get("project_fingerprint", "")),
         )
         libraries_to_pull = retrieval_unique_libraries_to_pull(results)
-        handler.send_json({"results": results, "libraries_to_pull": libraries_to_pull, "stale_libraries": []})
+        handler.send_json(
+            {
+                "results": results,
+                "libraries_to_pull": libraries_to_pull,
+                "stale_libraries": stale_libraries_from_payload(state.storage, payload),
+            }
+        )
         return
 
     if parsed.path == "/index-request":
@@ -433,10 +431,11 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
         return
 
     if parsed.path == "/telemetry":
+        telemetry = sanitize_telemetry(payload)
         event = {
             "created_at": now(),
-            "event": payload.get("event"),
-            "properties": payload.get("properties", {}),
+            "event": telemetry["event"],
+            "properties": telemetry["properties"],
         }
         state.storage.append_admin_event("telemetry", event)
         handler.send_json({"ok": True})

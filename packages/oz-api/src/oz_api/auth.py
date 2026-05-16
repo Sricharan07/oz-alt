@@ -7,6 +7,7 @@ import json
 import os
 import time
 from typing import Any
+from urllib import request, parse
 
 _JWT_SECRET_CACHE: str | None = None
 
@@ -95,3 +96,86 @@ def b64_decode(value: str) -> bytes:
 
 def sign(value: bytes, secret: str) -> str:
     return b64_encode(hmac.new(secret.encode("utf-8"), value, hashlib.sha256).digest())
+
+
+def oauth_configured() -> bool:
+    return bool(
+        os.environ.get("OZ_OAUTH_DEVICE_AUTH_URL")
+        and os.environ.get("OZ_OAUTH_TOKEN_URL")
+        and os.environ.get("OZ_OAUTH_CLIENT_ID")
+    )
+
+
+def oauth_required() -> bool:
+    return os.environ.get("OZ_REQUIRE_OAUTH", "").lower() in {"1", "true", "yes", "on"}
+
+
+def start_device_authorization() -> dict[str, Any]:
+    if not oauth_configured():
+        if oauth_required():
+            raise RuntimeError("OAuth device flow is required but not configured")
+        return {
+            "device_code": "local-device-code",
+            "user_code": "LOCAL-OZ",
+            "verification_uri": os.environ.get("OZ_VERIFY_URL", "http://127.0.0.1:8765/auth/verify"),
+            "interval": 1,
+            "expires_in": 600,
+        }
+
+    body = {
+        "client_id": os.environ["OZ_OAUTH_CLIENT_ID"],
+        "scope": os.environ.get("OZ_OAUTH_SCOPE", "openid profile email"),
+    }
+    return post_form(os.environ["OZ_OAUTH_DEVICE_AUTH_URL"], body)
+
+
+def exchange_device_code(device_code: str) -> dict[str, Any]:
+    if not oauth_configured():
+        if oauth_required():
+            raise RuntimeError("OAuth device flow is required but not configured")
+        if device_code != "local-device-code":
+            return {"error": "invalid_device_code"}
+        return {"access_token": issue_token("local-dev-device"), "token_type": "Bearer", "expires_in": 86400}
+
+    provider = post_form(
+        os.environ["OZ_OAUTH_TOKEN_URL"],
+        {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "client_id": os.environ["OZ_OAUTH_CLIENT_ID"],
+            "device_code": device_code,
+        },
+        tolerate_http_error=True,
+    )
+    if provider.get("error"):
+        return provider
+
+    provider_access_token = str(provider.get("access_token") or "")
+    if not provider_access_token:
+        return {"error": "invalid_token_response"}
+    subject = f"oauth:{hashlib.sha256(provider_access_token.encode('utf-8')).hexdigest()[:32]}"
+    expires_in = int(provider.get("expires_in") or 86400)
+    return {
+        "access_token": issue_token(subject, expires_in=expires_in),
+        "token_type": "Bearer",
+        "expires_in": expires_in,
+    }
+
+
+def post_form(url: str, body: dict[str, Any], *, tolerate_http_error: bool = False) -> dict[str, Any]:
+    data = parse.urlencode(body).encode("utf-8")
+    req = request.Request(
+        url,
+        data=data,
+        headers={"content-type": "application/x-www-form-urlencoded", "accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        if tolerate_http_error and hasattr(exc, "read"):
+            try:
+                return json.loads(exc.read().decode("utf-8"))  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        raise

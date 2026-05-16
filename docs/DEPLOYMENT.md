@@ -26,6 +26,8 @@ The crawler uses the vendored D4Vinci/Scrapling source under `third_party/Scrapl
 pip install -e packages/oz-crawler
 ```
 
+The crawler package requires Python 3.11 or newer. The vendored Scrapling source is imported from `third_party/Scrapling` before site packages so the crawler does not silently drift to another Scrapling release.
+
 For browser-backed Scrapling modes, run Scrapling's browser install step in the runtime image before using `--fetcher dynamic` or `--fetcher stealth`.
 
 ## Deploy AWS Stack
@@ -35,7 +37,14 @@ cd infra/cdk
 npm install
 npm run build
 npm run synth
-npm run deploy -- --parameters BudgetAlertEmail=ops@example.com
+npm run deploy -- \
+  --parameters BudgetAlertEmail=ops@example.com \
+  --parameters RequireOAuth=true \
+  --parameters OAuthDeviceAuthUrl=https://idp.example.com/oauth/device/code \
+  --parameters OAuthTokenUrl=https://idp.example.com/oauth/token \
+  --parameters OAuthClientId=oz-cli \
+  --parameters PackSigningKey=<ed25519-signing-seed> \
+  --parameters PackVerifyKey=<ed25519-public-key>
 ```
 
 The stack creates:
@@ -80,6 +89,38 @@ python3 scripts/index-registry-to-db.py
 
 The importer writes vendors, libraries, latest refs, and chunk rows. If `_chunks.jsonl` rows contain 1536-dimensional embeddings, they are stored in `pgvector`; if they do not, the importer generates them when `OPENAI_API_KEY` is set. Without embeddings, the same rows remain searchable through Postgres full-text search.
 
+## Auth
+
+Local development uses the built-in device-code fallback. Production should require a real OAuth device provider:
+
+```bash
+OZ_REQUIRE_OAUTH=1
+OZ_OAUTH_DEVICE_AUTH_URL='https://idp.example.com/oauth/device/code'
+OZ_OAUTH_TOKEN_URL='https://idp.example.com/oauth/token'
+OZ_OAUTH_CLIENT_ID='oz-cli'
+OZ_OAUTH_SCOPE='openid profile email'
+```
+
+`/auth/device` proxies the provider's device authorization response. `/auth/token` exchanges the device code with the provider and issues the Oz JWT used by the CLI.
+
+## Pack Signing
+
+Set the Ed25519 signing seed wherever packs are built:
+
+```bash
+OZ_PACK_SIGNING_KEY='<32-byte Ed25519 signing seed as hex/base64url/base64>'
+OZ_PACK_SIGNING_KEY_ID='prod-2026-05'
+```
+
+Set the Ed25519 public verification key for any production client or API process that ingests packs:
+
+```bash
+OZ_PACK_VERIFY_KEY='<32-byte Ed25519 public key as hex/base64url/base64>'
+OZ_PACK_REQUIRE_SIGNATURE=1
+```
+
+Unsigned local packs still work unless verification is configured or signatures are required.
+
 ## Publish Registry Packs
 
 After CDK deploy, publish the generated catalog and packs to the packs bucket output:
@@ -97,6 +138,12 @@ The API Lambda reads:
 - `OZ_DB_RESOURCE_ARN`
 - `OZ_DB_SECRET_ARN`
 - `OZ_RERANK_TABLE`
+- `OZ_OAUTH_DEVICE_AUTH_URL`
+- `OZ_OAUTH_TOKEN_URL`
+- `OZ_OAUTH_CLIENT_ID`
+- `OZ_PACK_SIGNING_KEY`
+- `OZ_PACK_SIGNING_KEY_ID`
+- `OZ_PACK_VERIFY_KEY`
 
 ## Local API
 
@@ -116,7 +163,13 @@ oz search "middleware jwt cookies" vercel/next.js
 bash scripts/release-local.sh 0.1.0
 ```
 
-This creates a release tarball, SHA256 file, and Homebrew formula for the current platform. The npm wrapper lives under `packages/oz-npm`.
+This creates a raw binary asset, SHA256 files, a release tarball, and a Homebrew formula for the current platform. The npm wrapper downloads the raw binary asset for the user's platform.
+
+Tagged releases are built by `.github/workflows/release.yml` and publish Linux, macOS, and Windows assets. The curl installer uses those release assets:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oz-docs/oz/main/scripts/install-release.sh | sh
+```
 
 ## Launch Eval
 

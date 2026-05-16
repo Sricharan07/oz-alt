@@ -25,6 +25,48 @@ export class OzStack extends cdk.Stack {
       default: "alerts@example.com",
       description: "Email address for the Oz beta $200 monthly budget alert."
     });
+    const requireOAuth = new cdk.CfnParameter(this, "RequireOAuth", {
+      type: "String",
+      default: "true",
+      allowedValues: ["true", "false"],
+      description: "Require a configured OAuth device provider for CLI login."
+    });
+    const oauthDeviceAuthUrl = new cdk.CfnParameter(this, "OAuthDeviceAuthUrl", {
+      type: "String",
+      default: "",
+      description: "OAuth device authorization endpoint."
+    });
+    const oauthTokenUrl = new cdk.CfnParameter(this, "OAuthTokenUrl", {
+      type: "String",
+      default: "",
+      description: "OAuth token endpoint."
+    });
+    const oauthClientId = new cdk.CfnParameter(this, "OAuthClientId", {
+      type: "String",
+      default: "",
+      description: "OAuth device flow client id."
+    });
+    const oauthScope = new cdk.CfnParameter(this, "OAuthScope", {
+      type: "String",
+      default: "openid profile email",
+      description: "OAuth scopes requested by the CLI device flow."
+    });
+    const packSigningKey = new cdk.CfnParameter(this, "PackSigningKey", {
+      type: "String",
+      default: "",
+      noEcho: true,
+      description: "32-byte Ed25519 signing seed as hex/base64url/base64 for packs built in Lambda."
+    });
+    const packSigningKeyId = new cdk.CfnParameter(this, "PackSigningKeyId", {
+      type: "String",
+      default: "prod",
+      description: "Key id written into signed pack manifests."
+    });
+    const packVerifyKey = new cdk.CfnParameter(this, "PackVerifyKey", {
+      type: "String",
+      default: "",
+      description: "32-byte Ed25519 public verification key as hex/base64url/base64."
+    });
 
     const objectsBucket = new s3.Bucket(this, "ObjectsBucket", {
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -166,7 +208,14 @@ export class OzStack extends cdk.Stack {
         OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
         OZ_DB_NAME: "oz",
         OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
-        OZ_REQUIRE_AUTH: "true"
+        OZ_REQUIRE_AUTH: "true",
+        OZ_REQUIRE_OAUTH: requireOAuth.valueAsString,
+        OZ_OAUTH_DEVICE_AUTH_URL: oauthDeviceAuthUrl.valueAsString,
+        OZ_OAUTH_TOKEN_URL: oauthTokenUrl.valueAsString,
+        OZ_OAUTH_CLIENT_ID: oauthClientId.valueAsString,
+        OZ_OAUTH_SCOPE: oauthScope.valueAsString,
+        OZ_PACK_VERIFY_KEY: packVerifyKey.valueAsString,
+        OZ_PACK_REQUIRE_SIGNATURE: "true"
       }
     });
 
@@ -204,7 +253,11 @@ export class OzStack extends cdk.Stack {
         OZ_DB_RESOURCE_ARN: database.attrDbClusterArn,
         OZ_DB_SECRET_ARN: database.attrMasterUserSecretSecretArn,
         OZ_DB_NAME: "oz",
-        OZ_JWT_SECRET_ARN: jwtSecret.secretArn
+        OZ_JWT_SECRET_ARN: jwtSecret.secretArn,
+        OZ_PACK_SIGNING_KEY: packSigningKey.valueAsString,
+        OZ_PACK_SIGNING_KEY_ID: packSigningKeyId.valueAsString,
+        OZ_PACK_VERIFY_KEY: packVerifyKey.valueAsString,
+        OZ_PACK_REQUIRE_SIGNATURE: "true"
       }
     });
     crawlerQueue.grantConsumeMessages(crawlerFunction);

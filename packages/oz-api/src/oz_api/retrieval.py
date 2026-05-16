@@ -165,47 +165,87 @@ def suggest_from_postgres(
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
-    terms = " ".join(normalize_query(query))
+    terms = normalized_tsquery(query)
     embedding = embedding_for_query(ctx, query)
     vector = vector_literal(embedding) if embedding else None
+    candidates = candidate_limit(max_results)
     if vector:
-        score_sql = """
-          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) +
-          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) +
-          coalesce(greatest(1 - (c.embedding <=> %s::vector), 0), 0)
+        sql = """
+            with fts_candidates as (
+              select
+                v.name as vendor,
+                l.name as library,
+                lv.version,
+                coalesce(l.description, '') as reason,
+                greatest(
+                  coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
+                  coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
+                ) as fts_score,
+                0::float8 as vector_score
+              from libraries l
+              join vendors v on v.id = l.vendor_id
+              join library_versions lv on lv.library_id = l.id
+              left join chunks c on c.version_id = lv.id
+              where l.search_document @@ websearch_to_tsquery('english', %s)
+                 or c.search_document @@ websearch_to_tsquery('english', %s)
+              order by fts_score desc, v.name asc, l.name asc
+              limit %s
+            ),
+            vector_candidates as (
+              select
+                v.name as vendor,
+                l.name as library,
+                lv.version,
+                coalesce(l.description, '') as reason,
+                0::float8 as fts_score,
+                greatest(1 - (c.embedding <=> %s::vector), 0) as vector_score
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.embedding is not null
+              order by c.embedding <=> %s::vector
+              limit %s
+            ),
+            ranked as (
+              select vendor, library, version, max(reason) as reason, max(fts_score) + max(vector_score) as score
+              from (
+                select * from fts_candidates
+                union all
+                select * from vector_candidates
+              ) candidates
+              group by vendor, library, version
+            )
+            select vendor, library, version, score, reason
+            from ranked
+            order by score desc, vendor asc, library asc, version asc
+            limit %s
         """
-        where_sql = """
-          l.search_document @@ websearch_to_tsquery('english', %s)
-          or c.search_document @@ websearch_to_tsquery('english', %s)
-          or c.embedding is not null
-        """
-        params: list[Any] = [terms, terms, vector, terms, terms, max_results]
+        params: list[Any] = [terms, terms, terms, terms, candidates, vector, vector, candidates, max_results]
     else:
-        score_sql = """
-          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0) +
-          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
-        """
-        where_sql = """
-          l.search_document @@ websearch_to_tsquery('english', %s)
-          or c.search_document @@ websearch_to_tsquery('english', %s)
+        sql = """
+            select
+              v.name as vendor,
+              l.name as library,
+              lv.version,
+              max(
+                greatest(
+                  coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
+                  coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
+                )
+              ) as score,
+              coalesce(l.description, '') as reason
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            join library_versions lv on lv.library_id = l.id
+            left join chunks c on c.version_id = lv.id
+            where l.search_document @@ websearch_to_tsquery('english', %s)
+               or c.search_document @@ websearch_to_tsquery('english', %s)
+            group by v.name, l.name, lv.version, l.description
+            order by score desc, v.name asc, l.name asc, lv.version asc
+            limit %s
         """
         params = [terms, terms, terms, terms, max_results]
-    sql = f"""
-        select
-          v.name as vendor,
-          l.name as library,
-          lv.version,
-          max({score_sql}) as score,
-          coalesce(l.description, '') as reason
-        from libraries l
-        join vendors v on v.id = l.vendor_id
-        join library_versions lv on lv.library_id = l.id
-        left join chunks c on c.version_id = lv.id
-        where {where_sql}
-        group by v.name, l.name, lv.version, l.description
-        order by score desc, v.name asc, l.name asc, lv.version asc
-        limit %s
-    """
     try:
         with connection:
             with connection.cursor() as cursor:
@@ -239,40 +279,96 @@ def search_from_postgres(
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
-    terms = " ".join(normalize_query(query))
+    terms = normalized_tsquery(query)
     embedding = embedding_for_query(ctx, query)
     vector = vector_literal(embedding) if embedding else None
     scope_vendor, scope_library = parse_scope(library_scope)
     where_scope = ""
+    candidates = candidate_limit(max_results)
     if vector:
-        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) + coalesce(1 - (c.embedding <=> %s::vector), 0)"
-        where_sql = "(c.search_document @@ websearch_to_tsquery('english', %s) or c.embedding is not null)"
-        params: list[Any] = [terms, vector, terms]
+        where_scope = "and v.name = %s and l.name = %s" if scope_vendor else ""
+        fts_params: list[Any] = [terms, terms]
+        vector_params: list[Any] = [vector]
+        if scope_vendor:
+            fts_params.extend([scope_vendor, scope_library])
+            vector_params.extend([scope_vendor, scope_library])
+        fts_params.append(candidates)
+        vector_params.extend([vector, candidates, max_results])
+        params = fts_params + vector_params
+        sql = f"""
+            with fts_candidates as (
+              select
+                '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+                c.start_line,
+                greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as fts_score,
+                0::float8 as vector_score,
+                v.name || '/' || l.name as library,
+                v.name as vendor,
+                lv.version
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.search_document @@ websearch_to_tsquery('english', %s)
+              {where_scope}
+              order by fts_score desc, path asc, c.start_line asc
+              limit %s
+            ),
+            vector_candidates as (
+              select
+                '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+                c.start_line,
+                0::float8 as fts_score,
+                greatest(1 - (c.embedding <=> %s::vector), 0) as vector_score,
+                v.name || '/' || l.name as library,
+                v.name as vendor,
+                lv.version
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.embedding is not null
+              {where_scope}
+              order by c.embedding <=> %s::vector
+              limit %s
+            ),
+            ranked as (
+              select path, start_line, max(fts_score) + max(vector_score) as score, library, vendor, version
+              from (
+                select * from fts_candidates
+                union all
+                select * from vector_candidates
+              ) candidates
+              group by path, start_line, library, vendor, version
+            )
+            select path, start_line, score, library, vendor, version
+            from ranked
+            order by score desc, path asc, start_line asc
+            limit %s
+        """
     else:
-        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)"
-        where_sql = "c.search_document @@ websearch_to_tsquery('english', %s)"
-        params = [terms, terms]
-    if scope_vendor:
-        where_scope = "and v.name = %s and l.name = %s"
-        params.extend([scope_vendor, scope_library])
-    params.append(max_results)
-    sql = f"""
-        select
-          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
-          c.start_line,
-          {score_sql} as score,
-          v.name || '/' || l.name as library,
-          v.name as vendor,
-          lv.version
-        from chunks c
-        join library_versions lv on lv.id = c.version_id
-        join libraries l on l.id = lv.library_id
-        join vendors v on v.id = l.vendor_id
-        where {where_sql}
-        {where_scope}
-        order by score desc, path asc, c.start_line asc
-        limit %s
-    """
+        if scope_vendor:
+            where_scope = "and v.name = %s and l.name = %s"
+            params = [terms, terms, scope_vendor, scope_library, max_results]
+        else:
+            params = [terms, terms, max_results]
+        sql = f"""
+            select
+              '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+              c.start_line,
+              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+              v.name || '/' || l.name as library,
+              v.name as vendor,
+              lv.version
+            from chunks c
+            join library_versions lv on lv.id = c.version_id
+            join libraries l on l.id = lv.library_id
+            join vendors v on v.id = l.vendor_id
+            where c.search_document @@ websearch_to_tsquery('english', %s)
+            {where_scope}
+            order by score desc, path asc, c.start_line asc
+            limit %s
+        """
     try:
         with connection:
             with connection.cursor() as cursor:
@@ -298,50 +394,91 @@ def suggest_from_data_api(
     query: str,
     max_results: int,
 ) -> list[dict[str, Any]] | None:
-    terms = " ".join(normalize_query(query))
+    terms = normalized_tsquery(query)
     embedding = embedding_for_query(ctx, query)
     vector = vector_literal(embedding) if embedding else None
+    candidates = candidate_limit(max_results)
     params: list[dict[str, Any]] = [
         {"name": "terms", "value": {"stringValue": terms}},
         {"name": "max_results", "value": {"longValue": max_results}},
     ]
     if vector:
         params.append({"name": "embedding", "value": {"stringValue": vector}})
-        score_sql = """
-          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) +
-          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) +
-          coalesce(greatest(1 - (c.embedding <=> (:embedding)::vector), 0), 0)
-        """
-        where_sql = """
-          l.search_document @@ websearch_to_tsquery('english', :terms)
-          or c.search_document @@ websearch_to_tsquery('english', :terms)
-          or c.embedding is not null
+        params.append({"name": "candidate_limit", "value": {"longValue": candidates}})
+        sql = """
+            with fts_candidates as (
+              select
+                v.name as vendor,
+                l.name as library,
+                lv.version,
+                coalesce(l.description, '') as reason,
+                greatest(
+                  coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0),
+                  coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
+                ) as fts_score,
+                0::float8 as vector_score
+              from libraries l
+              join vendors v on v.id = l.vendor_id
+              join library_versions lv on lv.library_id = l.id
+              left join chunks c on c.version_id = lv.id
+              where l.search_document @@ websearch_to_tsquery('english', :terms)
+                 or c.search_document @@ websearch_to_tsquery('english', :terms)
+              order by fts_score desc, v.name asc, l.name asc
+              limit :candidate_limit
+            ),
+            vector_candidates as (
+              select
+                v.name as vendor,
+                l.name as library,
+                lv.version,
+                coalesce(l.description, '') as reason,
+                0::float8 as fts_score,
+                greatest(1 - (c.embedding <=> (:embedding)::vector), 0) as vector_score
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.embedding is not null
+              order by c.embedding <=> (:embedding)::vector
+              limit :candidate_limit
+            ),
+            ranked as (
+              select vendor, library, version, max(reason) as reason, max(fts_score) + max(vector_score) as score
+              from (
+                select * from fts_candidates
+                union all
+                select * from vector_candidates
+              ) candidates
+              group by vendor, library, version
+            )
+            select vendor, library, version, score, reason
+            from ranked
+            order by score desc, vendor asc, library asc, version asc
+            limit :max_results
         """
     else:
-        score_sql = """
-          coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0) +
-          coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
+        sql = """
+            select
+              v.name as vendor,
+              l.name as library,
+              lv.version,
+              max(
+                greatest(
+                  coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0),
+                  coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
+                )
+              ) as score,
+              coalesce(l.description, '') as reason
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            join library_versions lv on lv.library_id = l.id
+            left join chunks c on c.version_id = lv.id
+            where l.search_document @@ websearch_to_tsquery('english', :terms)
+               or c.search_document @@ websearch_to_tsquery('english', :terms)
+            group by v.name, l.name, lv.version, l.description
+            order by score desc, v.name asc, l.name asc, lv.version asc
+            limit :max_results
         """
-        where_sql = """
-          l.search_document @@ websearch_to_tsquery('english', :terms)
-          or c.search_document @@ websearch_to_tsquery('english', :terms)
-        """
-    sql = f"""
-        select
-          v.name as vendor,
-          l.name as library,
-          lv.version,
-          max({score_sql}) as score,
-          coalesce(l.description, '') as reason
-        from libraries l
-        join vendors v on v.id = l.vendor_id
-        join library_versions lv on lv.library_id = l.id
-        left join chunks c on c.version_id = lv.id
-        where {where_sql}
-        group by v.name, l.name, lv.version, l.description
-        order by score desc, v.name asc, l.name asc, lv.version asc
-        limit :max_results
-    """
     rows = execute_data_api(ctx, sql, params)
     if rows is None:
         return None
@@ -363,22 +500,19 @@ def search_from_data_api(
     library_scope: str | None,
     max_results: int,
 ) -> list[dict[str, Any]] | None:
-    terms = " ".join(normalize_query(query))
+    terms = normalized_tsquery(query)
     embedding = embedding_for_query(ctx, query)
     vector = vector_literal(embedding) if embedding else None
     scope_vendor, scope_library = parse_scope(library_scope)
     where_scope = ""
+    candidates = candidate_limit(max_results)
     params: list[dict[str, Any]] = [
         {"name": "terms", "value": {"stringValue": terms}},
         {"name": "max_results", "value": {"longValue": max_results}},
     ]
     if vector:
         params.append({"name": "embedding", "value": {"stringValue": vector}})
-        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) + coalesce(1 - (c.embedding <=> (:embedding)::vector), 0)"
-        where_sql = "(c.search_document @@ websearch_to_tsquery('english', :terms) or c.embedding is not null)"
-    else:
-        score_sql = "greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)"
-        where_sql = "c.search_document @@ websearch_to_tsquery('english', :terms)"
+        params.append({"name": "candidate_limit", "value": {"longValue": candidates}})
     if scope_vendor:
         where_scope = "and v.name = :vendor and l.name = :library"
         params.extend(
@@ -387,23 +521,76 @@ def search_from_data_api(
                 {"name": "library", "value": {"stringValue": scope_library or ""}},
             ]
         )
-    sql = f"""
-        select
-          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
-          c.start_line,
-          {score_sql} as score,
-          v.name || '/' || l.name as library,
-          v.name as vendor,
-          lv.version
-        from chunks c
-        join library_versions lv on lv.id = c.version_id
-        join libraries l on l.id = lv.library_id
-        join vendors v on v.id = l.vendor_id
-        where {where_sql}
-        {where_scope}
-        order by score desc, path asc, c.start_line asc
-        limit :max_results
-    """
+    if vector:
+        sql = f"""
+            with fts_candidates as (
+              select
+                '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+                c.start_line,
+                greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) as fts_score,
+                0::float8 as vector_score,
+                v.name || '/' || l.name as library,
+                v.name as vendor,
+                lv.version
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.search_document @@ websearch_to_tsquery('english', :terms)
+              {where_scope}
+              order by fts_score desc, path asc, c.start_line asc
+              limit :candidate_limit
+            ),
+            vector_candidates as (
+              select
+                '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+                c.start_line,
+                0::float8 as fts_score,
+                greatest(1 - (c.embedding <=> (:embedding)::vector), 0) as vector_score,
+                v.name || '/' || l.name as library,
+                v.name as vendor,
+                lv.version
+              from chunks c
+              join library_versions lv on lv.id = c.version_id
+              join libraries l on l.id = lv.library_id
+              join vendors v on v.id = l.vendor_id
+              where c.embedding is not null
+              {where_scope}
+              order by c.embedding <=> (:embedding)::vector
+              limit :candidate_limit
+            ),
+            ranked as (
+              select path, start_line, max(fts_score) + max(vector_score) as score, library, vendor, version
+              from (
+                select * from fts_candidates
+                union all
+                select * from vector_candidates
+              ) candidates
+              group by path, start_line, library, vendor, version
+            )
+            select path, start_line, score, library, vendor, version
+            from ranked
+            order by score desc, path asc, start_line asc
+            limit :max_results
+        """
+    else:
+        sql = f"""
+            select
+              '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+              c.start_line,
+              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) as score,
+              v.name || '/' || l.name as library,
+              v.name as vendor,
+              lv.version
+            from chunks c
+            join library_versions lv on lv.id = c.version_id
+            join libraries l on l.id = lv.library_id
+            join vendors v on v.id = l.vendor_id
+            where c.search_document @@ websearch_to_tsquery('english', :terms)
+            {where_scope}
+            order by score desc, path asc, c.start_line asc
+            limit :max_results
+        """
     rows = execute_data_api(ctx, sql, params)
     if rows is None:
         return None
@@ -558,6 +745,14 @@ def vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{value:.8g}" for value in values) + "]"
 
 
+def normalized_tsquery(query: str) -> str:
+    return " ".join(normalize_query(query)) or query.strip() or "documentation"
+
+
+def candidate_limit(max_results: int) -> int:
+    return max(max_results * 10, 50)
+
+
 def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
     digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
     return f"rerank:{digest}"
@@ -615,7 +810,10 @@ def dynamodb_client() -> Any | None:
         import boto3  # type: ignore
     except ImportError:
         return None
-    return boto3.client("dynamodb")
+    try:
+        return boto3.client("dynamodb")
+    except Exception:
+        return None
 
 
 def rds_data_client() -> Any | None:
@@ -623,7 +821,10 @@ def rds_data_client() -> Any | None:
         import boto3  # type: ignore
     except ImportError:
         return None
-    return boto3.client("rds-data")
+    try:
+        return boto3.client("rds-data")
+    except Exception:
+        return None
 
 
 def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:

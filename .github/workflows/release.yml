@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix"
+        required: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: oz-linux-x64
+            binary: oz
+          - os: ubuntu-24.04-arm
+            asset: oz-linux-arm64
+            binary: oz
+          - os: macos-13
+            asset: oz-darwin-x64
+            binary: oz
+          - os: macos-14
+            asset: oz-darwin-arm64
+            binary: oz
+          - os: windows-latest
+            asset: oz-win32-x64.exe
+            binary: oz.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build CLI
+        run: cargo build --release -p oz
+      - name: Stage asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+          (cd dist && shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
+          if [[ "${{ matrix.asset }}" == *.exe ]]; then
+            zip -j "dist/${{ matrix.asset }}.zip" "dist/${{ matrix.asset }}" README.md PRD.md
+          else
+            cp README.md PRD.md dist/
+            tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist "${{ matrix.asset }}" README.md PRD.md
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+            dist/${{ matrix.asset }}.tar.gz
+            dist/${{ matrix.asset }}.zip
+          if-no-files-found: ignore
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          files: dist/*

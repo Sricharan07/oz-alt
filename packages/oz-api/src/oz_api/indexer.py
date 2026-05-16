@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -80,7 +81,7 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
                 end_line=end_line,
                 source_url=str(row.get("source_url") or ""),
                 ordinal=int(row.get("ordinal") or 1),
-                chunk_sha=str(row.get("chunk_sha") or ""),
+                chunk_sha=chunk_sha_for_row(entry, row),
                 content=str(row.get("text") or ""),
                 embedding=embedding,
             )
@@ -128,6 +129,23 @@ def line_span(fixture: Path, row: dict[str, Any], cache: dict[str, str]) -> tupl
 
 def valid_embedding(value: Any) -> bool:
     return isinstance(value, list) and len(value) == 1536 and all(isinstance(item, int | float) for item in value)
+
+
+def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
+    existing = str(row.get("chunk_sha") or "")
+    if len(existing) == 64 and all(char in "0123456789abcdef" for char in existing.lower()):
+        return existing
+    payload = "\0".join(
+        [
+            str(entry.get("vendor") or ""),
+            str(entry.get("library") or ""),
+            str(entry.get("version") or ""),
+            str(row.get("path") or "README.md"),
+            str(row.get("ordinal") or 1),
+            str(row.get("text") or ""),
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def embedding_for_chunk(row: dict[str, Any]) -> list[float] | None:

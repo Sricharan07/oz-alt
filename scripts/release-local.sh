@@ -23,6 +23,12 @@ case "$os-$arch" in
   *) target="$os-$arch" ;;
 esac
 
+binary_asset="dist/oz-$target"
+cp "$dist_dir/oz" "$binary_asset"
+chmod 0755 "$binary_asset"
+binary_sha="$(shasum -a 256 "$binary_asset" | awk '{print $1}')"
+printf '%s  %s\n' "$binary_sha" "$(basename "$binary_asset")" > "$binary_asset.sha256"
+
 archive="dist/oz-$target.tar.gz"
 tar -C "$dist_dir" -czf "$archive" oz README.md PRD.md
 sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
@@ -53,4 +59,6 @@ PY
 
 echo "wrote $archive"
 echo "wrote $archive.sha256"
+echo "wrote $binary_asset"
+echo "wrote $binary_asset.sha256"
 echo "wrote dist/homebrew/oz.rb"

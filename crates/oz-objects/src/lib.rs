@@ -1,7 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +34,15 @@ pub struct PackManifest {
     pub version: String,
     pub tree_sha256: String,
     pub blobs: Vec<BlobEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<PackSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PackSignature {
+    pub alg: String,
+    pub key_id: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -197,14 +208,16 @@ pub fn write_pack(
 
     manifest.sort_blobs();
     blobs.sort_by(|a, b| a.path.cmp(&b.path));
-    let pack_manifest = PackManifest {
+    let mut pack_manifest = PackManifest {
         schema_version: PACK_SCHEMA_VERSION,
         vendor: vendor.to_string(),
         library: library.to_string(),
         version: version.to_string(),
         tree_sha256: tree_sha256(&manifest)?,
         blobs: manifest.blobs,
+        signature: None,
     };
+    sign_pack_manifest(&mut pack_manifest)?;
     let pack = PackFile {
         manifest: pack_manifest.clone(),
         blobs,
@@ -248,6 +261,7 @@ fn ingest_pack_file(objects_root: &Path, pack: PackFile, label: &str) -> Result<
             label
         );
     }
+    verify_pack_manifest_signature(&pack.manifest, label)?;
 
     for blob in &pack.blobs {
         let bytes = base64::engine::general_purpose::STANDARD
@@ -283,6 +297,107 @@ fn ingest_pack_file(objects_root: &Path, pack: PackFile, label: &str) -> Result<
     Ok(tree)
 }
 
+fn sign_pack_manifest(manifest: &mut PackManifest) -> Result<()> {
+    let Some(key) = env::var("OZ_PACK_SIGNING_KEY")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let key_id = env::var("OZ_PACK_SIGNING_KEY_ID").unwrap_or_else(|_| "local".to_string());
+    let signing_key = signing_key_from_config(&key)?;
+    let signature = signing_key.sign(&unsigned_manifest_payload(manifest)?);
+    manifest.signature = Some(PackSignature {
+        alg: "Ed25519".to_string(),
+        key_id,
+        value: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+    });
+    Ok(())
+}
+
+fn verify_pack_manifest_signature(manifest: &PackManifest, label: &str) -> Result<()> {
+    let require_signature = env::var("OZ_PACK_REQUIRE_SIGNATURE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    let verify_key = env::var("OZ_PACK_VERIFY_KEY")
+        .ok()
+        .filter(|value| !value.is_empty());
+
+    let Some(signature) = &manifest.signature else {
+        if require_signature || verify_key.is_some() {
+            bail!("pack {label} is unsigned");
+        }
+        return Ok(());
+    };
+    if signature.alg != "Ed25519" {
+        bail!(
+            "pack {label} uses unsupported signature algorithm {}",
+            signature.alg
+        );
+    }
+    let Some(key) = verify_key else {
+        if require_signature {
+            bail!("pack {label} is signed but no OZ_PACK_VERIFY_KEY is configured");
+        }
+        return Ok(());
+    };
+    let verifying_key = verifying_key_from_config(&key)?;
+    let signature_bytes = decode_config_key(&signature.value, 64, "pack signature")?;
+    let signature: Signature = signature_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("pack {label} has an invalid Ed25519 signature"))?;
+    verifying_key
+        .verify(&unsigned_manifest_payload(manifest)?, &signature)
+        .map_err(|_| anyhow!("pack {label} failed manifest signature verification"))?;
+    Ok(())
+}
+
+fn unsigned_manifest_payload(manifest: &PackManifest) -> Result<Vec<u8>> {
+    let mut unsigned = manifest.clone();
+    unsigned.signature = None;
+    Ok(serde_json::to_vec(&unsigned)?)
+}
+
+fn signing_key_from_config(value: &str) -> Result<SigningKey> {
+    let bytes = decode_config_key(value, 32, "OZ_PACK_SIGNING_KEY")?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow!("OZ_PACK_SIGNING_KEY must decode to 32 bytes"))?;
+    Ok(SigningKey::from_bytes(&key_bytes))
+}
+
+fn verifying_key_from_config(value: &str) -> Result<VerifyingKey> {
+    let bytes = decode_config_key(value, 32, "OZ_PACK_VERIFY_KEY")?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow!("OZ_PACK_VERIFY_KEY must decode to 32 bytes"))?;
+    VerifyingKey::from_bytes(&key_bytes)
+        .context("OZ_PACK_VERIFY_KEY is not a valid Ed25519 public key")
+}
+
+fn decode_config_key(value: &str, expected_len: usize, label: &str) -> Result<Vec<u8>> {
+    let trimmed = value.trim();
+    if trimmed.len() == expected_len * 2 && trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let bytes =
+            hex::decode(trimmed).with_context(|| format!("failed to decode {label} hex"))?;
+        if bytes.len() == expected_len {
+            return Ok(bytes);
+        }
+    }
+    for engine in [
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        &base64::engine::general_purpose::STANDARD,
+    ] {
+        if let Ok(bytes) = engine.decode(trimmed) {
+            if bytes.len() == expected_len {
+                return Ok(bytes);
+            }
+        }
+    }
+    bail!("{label} must be {expected_len} bytes encoded as hex, base64url, or base64")
+}
+
 fn read_pack_file(path: &Path) -> Result<PackFile> {
     let compressed =
         fs::read(path).with_context(|| format!("failed to read pack {}", path.display()))?;
@@ -291,9 +406,8 @@ fn read_pack_file(path: &Path) -> Result<PackFile> {
 
 fn parse_pack_bytes(compressed: &[u8], label: &str) -> Result<PackFile> {
     match zstd::stream::decode_all(Cursor::new(compressed)) {
-        Ok(decoded) => {
-            serde_json::from_slice(&decoded).with_context(|| format!("failed to parse pack {label}"))
-        }
+        Ok(decoded) => serde_json::from_slice(&decoded)
+            .with_context(|| format!("failed to parse pack {label}")),
         Err(error) => {
             if compressed.first().copied() == Some(b'{') {
                 return serde_json::from_slice(compressed)
@@ -392,6 +506,9 @@ mod tests {
 
     #[test]
     fn writes_and_ingests_a_pack() {
+        std::env::remove_var("OZ_PACK_SIGNING_KEY");
+        std::env::remove_var("OZ_PACK_VERIFY_KEY");
+        std::env::remove_var("OZ_PACK_REQUIRE_SIGNATURE");
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let objects = temp.path().join("objects");
@@ -433,5 +550,27 @@ mod tests {
             fs::read_to_string(target_from_raw_json.join("guides").join("start.md")).unwrap(),
             "# Start\n"
         );
+
+        let signed_pack = temp.path().join("signed.ozpack");
+        let signing_seed = [7u8; 32];
+        let signing_key = SigningKey::from_bytes(&signing_seed);
+        let verifying_key = VerifyingKey::from(&signing_key);
+        std::env::set_var("OZ_PACK_SIGNING_KEY", hex::encode(signing_seed));
+        std::env::set_var("OZ_PACK_VERIFY_KEY", hex::encode(verifying_key.to_bytes()));
+        let signed_manifest = write_pack(&source, &signed_pack, "demo", "lib", "1").unwrap();
+        assert!(signed_manifest.signature.is_some());
+        ingest_pack(&objects, &signed_pack).unwrap();
+
+        let wrong_key = VerifyingKey::from(&SigningKey::from_bytes(&[9u8; 32]));
+        std::env::set_var("OZ_PACK_VERIFY_KEY", hex::encode(wrong_key.to_bytes()));
+        assert!(ingest_pack(&objects, &signed_pack).is_err());
+        std::env::remove_var("OZ_PACK_VERIFY_KEY");
+        std::env::set_var("OZ_PACK_REQUIRE_SIGNATURE", "1");
+        assert!(ingest_pack(&objects, &signed_pack).is_err());
+        std::env::set_var("OZ_PACK_VERIFY_KEY", hex::encode(verifying_key.to_bytes()));
+        ingest_pack(&objects, &signed_pack).unwrap();
+        std::env::remove_var("OZ_PACK_SIGNING_KEY");
+        std::env::remove_var("OZ_PACK_VERIFY_KEY");
+        std::env::remove_var("OZ_PACK_REQUIRE_SIGNATURE");
     }
 }
