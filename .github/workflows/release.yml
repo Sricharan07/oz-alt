@@ -42,9 +42,13 @@ jobs:
         run: |
           mkdir -p dist
           cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
-          (cd dist && shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
+          if command -v shasum >/dev/null 2>&1; then
+            (cd dist && shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
+          else
+            (cd dist && sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
+          fi
           if [[ "${{ matrix.asset }}" == *.exe ]]; then
-            zip -j "dist/${{ matrix.asset }}.zip" "dist/${{ matrix.asset }}"
+            powershell -NoProfile -Command "Compress-Archive -Path 'dist/${{ matrix.asset }}' -DestinationPath 'dist/${{ matrix.asset }}.zip' -Force"
           else
             cp "target/release/${{ matrix.binary }}" "dist/oz"
             tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist oz
