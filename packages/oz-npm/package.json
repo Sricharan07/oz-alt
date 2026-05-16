@@ -1,5 +1,5 @@
 {
-  "name": "@oz-docs/oz",
+  "name": "@hiringbae/oz",
   "version": "0.1.0",
   "description": "Oz CLI wrapper for version-pinned documentation pulls.",
   "license": "MIT",

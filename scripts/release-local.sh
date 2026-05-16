@@ -5,13 +5,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 version="${1:-dev}"
+repo="${OZ_REPO:-Sricharan07/oz}"
 dist_dir="dist/oz-$version"
 mkdir -p "$dist_dir"
 
 cargo build --release -p oz
 cp target/release/oz "$dist_dir/oz"
-cp README.md "$dist_dir/README.md"
-cp PRD.md "$dist_dir/PRD.md"
 
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"
 arch="$(uname -m)"
@@ -30,19 +29,19 @@ binary_sha="$(shasum -a 256 "$binary_asset" | awk '{print $1}')"
 printf '%s  %s\n' "$binary_sha" "$(basename "$binary_asset")" > "$binary_asset.sha256"
 
 archive="dist/oz-$target.tar.gz"
-tar -C "$dist_dir" -czf "$archive" oz README.md PRD.md
+tar -C "$dist_dir" -czf "$archive" oz
 sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
 printf '%s  %s\n' "$sha" "$(basename "$archive")" > "$archive.sha256"
 
 mkdir -p dist/homebrew
-python3 - "$version" "$target" "$sha" > dist/homebrew/oz.rb <<'PY'
+python3 - "$version" "$target" "$sha" "$repo" > dist/homebrew/oz.rb <<'PY'
 import sys
 
-version, target, sha = sys.argv[1:4]
+version, target, sha, repo = sys.argv[1:5]
 print(f'''class Oz < Formula
   desc "Version-pinned documentation registry CLI for coding agents"
-  homepage "https://github.com/oz-docs/oz"
-  url "https://github.com/oz-docs/oz/releases/download/v{version}/oz-{target}.tar.gz"
+  homepage "https://github.com/{repo}"
+  url "https://github.com/{repo}/releases/download/v{version}/oz-{target}.tar.gz"
   sha256 "{sha}"
   version "{version}"
   license "MIT"

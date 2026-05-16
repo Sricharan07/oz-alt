@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.profiles import LibraryProfile
 
 SYMBOL_STOP_WORDS = {"and", "as", "for", "from", "in", "is", "of", "or", "that", "the", "to", "with"}
 
@@ -34,17 +35,50 @@ class ExtractedSymbol:
         )
 
 
-def write_symbols(target: Path, pages: list[NormalizedPage]) -> None:
-    for symbol, payload in extract_symbols(pages).items():
+def write_symbols(target: Path, pages: list[NormalizedPage], *, profile: LibraryProfile | None = None) -> None:
+    for symbol, payload in extract_symbols(pages, profile=profile).items():
         (target / "_symbols" / f"{symbol}.md").write_text(payload, encoding="utf-8")
 
 
-def extract_symbols(pages: list[NormalizedPage]) -> dict[str, str]:
+def extract_symbols(pages: list[NormalizedPage], *, profile: LibraryProfile | None = None) -> dict[str, str]:
     output: dict[str, str] = {}
+    seen_lower: set[str] = set()
+    if profile is not None:
+        for expected in profile.expected_symbols:
+            payload = symbol_from_expected(pages, expected)
+            if payload:
+                output[expected] = payload
+                seen_lower.add(expected.lower())
     for page in pages:
-        for language, code in code_blocks(page.markdown):
-            for symbol in symbols_from_code(code, language):
-                output.setdefault(symbol.name, symbol.render(page.source_url, language))
+        for symbol, language in extract_page_symbols(page, profile=profile):
+            if symbol.name.lower() in seen_lower:
+                continue
+            output.setdefault(symbol.name, symbol.render(page.source_url, language))
+            seen_lower.add(symbol.name.lower())
+    return output
+
+
+def extract_page_symbol_names(page: NormalizedPage, *, profile: LibraryProfile | None = None) -> list[str]:
+    names = [symbol.name for symbol, _language in extract_page_symbols(page, profile=profile)]
+    if profile is not None:
+        lower_text = page.markdown.lower()
+        for expected in profile.expected_symbols:
+            if expected.lower() in lower_text:
+                names.append(expected)
+    return sorted(set(names), key=lambda item: item.lower())
+
+
+def extract_page_symbols(
+    page: NormalizedPage,
+    *,
+    profile: LibraryProfile | None = None,
+) -> list[tuple[ExtractedSymbol, str]]:
+    output: list[tuple[ExtractedSymbol, str]] = []
+    for language, code in code_blocks(page.markdown):
+        for symbol in symbols_from_code(code, language):
+            output.append((symbol, language))
+    for symbol in symbols_from_markdown(page, profile=profile):
+        output.append((symbol, "markdown"))
     return output
 
 
@@ -127,6 +161,77 @@ def regex_symbols(code: str) -> list[ExtractedSymbol]:
             if is_symbol_name(name):
                 symbols.append(ExtractedSymbol(name=name, kind=kind, signature=first_line(code), example=code))
     return symbols
+
+
+def symbols_from_markdown(
+    page: NormalizedPage,
+    *,
+    profile: LibraryProfile | None = None,
+) -> list[ExtractedSymbol]:
+    output: list[ExtractedSymbol] = []
+    expected = expected_symbol_lookup(profile)
+    for line in page.markdown.splitlines():
+        match = re.match(r"^#{1,4}\s+(`?)([A-Za-z_$][A-Za-z0-9_.$-]*)`?", line.strip())
+        if not match:
+            continue
+        fenced = bool(match.group(1))
+        name = match.group(2).strip("`")
+        normalized = safe_symbol_name(name).lower()
+        if is_symbol_name(name) and looks_like_public_symbol(name, fenced=fenced, expected=normalized in expected):
+            output.append(
+                ExtractedSymbol(
+                    name=safe_symbol_name(name),
+                    kind="heading",
+                    signature=name,
+                    example=context_for_symbol(page.markdown, name),
+                )
+            )
+    return output
+
+
+def expected_symbol_lookup(profile: LibraryProfile | None) -> set[str]:
+    if profile is None:
+        return set()
+    return {safe_symbol_name(symbol).lower() for symbol in profile.expected_symbols}
+
+
+def symbol_from_expected(pages: list[NormalizedPage], expected: str) -> str | None:
+    needle = expected.lower()
+    for page in pages:
+        if needle not in page.markdown.lower():
+            continue
+        symbol = ExtractedSymbol(
+            name=expected,
+            kind="expected",
+            signature=expected,
+            example=context_for_symbol(page.markdown, expected),
+        )
+        return symbol.render(page.source_url, "markdown")
+    return None
+
+
+def context_for_symbol(markdown: str, symbol: str, *, radius: int = 8) -> str:
+    lines = markdown.splitlines()
+    for index, line in enumerate(lines):
+        if symbol.lower() in line.lower():
+            start = max(0, index - radius)
+            end = min(len(lines), index + radius + 1)
+            return "\n".join(lines[start:end]).strip()
+    return symbol
+
+
+def looks_like_public_symbol(name: str, *, fenced: bool = False, expected: bool = False) -> bool:
+    if expected:
+        return True
+    if fenced and re.search(r"[A-Z_$]|\.", name):
+        return True
+    if name.startswith("use") and len(name) > 3 and name[3].isupper():
+        return True
+    return bool(re.search(r"[.$]", name))
+
+
+def safe_symbol_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-") or "symbol"
 
 
 def dedupe_symbols(symbols: list[ExtractedSymbol]) -> list[ExtractedSymbol]:

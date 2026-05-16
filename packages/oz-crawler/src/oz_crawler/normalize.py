@@ -14,11 +14,36 @@ except ImportError:  # pragma: no cover - Lambda fallback when optional crawler 
     md = None  # type: ignore
 
 
+SECRET_TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"sk_(test|live)_[A-Za-z0-9]{3,}"), r"sk_\1_REDACTED"),
+    (re.compile(r"rk_(test|live)_[A-Za-z0-9]{3,}"), r"rk_\1_REDACTED"),
+    (re.compile(r"pk_(test|live)_[A-Za-z0-9]{3,}"), r"pk_\1_REDACTED"),
+    (re.compile(r"whsec_[A-Za-z0-9]{3,}"), "whsec_REDACTED"),
+    (re.compile(r"sk-proj-[A-Za-z0-9_-]{12,}"), "sk-proj-REDACTED"),
+    (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), "sk-REDACTED"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA_REDACTED"),
+    (re.compile(r"\bASIA[0-9A-Z]{16}\b"), "ASIA_REDACTED"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"), "gh_REDACTED"),
+    (re.compile(r"\bnpm_[A-Za-z0-9]{20,}\b"), "npm_REDACTED"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"), "xox_REDACTED"),
+    (re.compile(r"sk_(test|live)_REDACTED(?:\.\.\.[A-Za-z0-9]+)?(?:sk_(?:test|live)_REDACTED)?"), r"sk_\1_REDACTED"),
+    (re.compile(r"rk_(test|live)_REDACTED(?:\.\.\.[A-Za-z0-9]+)?(?:rk_(?:test|live)_REDACTED)?"), r"rk_\1_REDACTED"),
+    (re.compile(r"pk_(test|live)_REDACTED(?:\.\.\.[A-Za-z0-9]+)?(?:pk_(?:test|live)_REDACTED)?"), r"pk_\1_REDACTED"),
+    (re.compile(r"sk_(test|live)_REDACTED(?:_(?:test|live)_REDACTED)+"), r"sk_\1_REDACTED"),
+    (re.compile(r"rk_(test|live)_REDACTED(?:_(?:test|live)_REDACTED)+"), r"rk_\1_REDACTED"),
+    (re.compile(r"pk_(test|live)_REDACTED(?:_(?:test|live)_REDACTED)+"), r"pk_\1_REDACTED"),
+)
+
+
 @dataclass(frozen=True)
 class NormalizedPage:
     title: str
     markdown: str
     source_url: str
+    path: str | None = None
+    content_type: str = "guide"
+    quality_score: float = 1.0
+    symbols: tuple[str, ...] = ()
 
 
 def normalize_html(html: str, *, source_url: str, title: str | None = None) -> NormalizedPage:
@@ -72,7 +97,7 @@ def regex_title(html: str) -> str:
 def clean_markdown(markdown: str) -> str:
     lines: list[str] = []
     previous_blank = False
-    for raw_line in markdown.splitlines():
+    for raw_line in sanitize_secret_tokens(markdown).splitlines():
         line = raw_line.rstrip()
         blank = not line.strip()
         if blank and previous_blank:
@@ -80,3 +105,10 @@ def clean_markdown(markdown: str) -> str:
         lines.append(line)
         previous_blank = blank
     return "\n".join(lines).strip() + "\n"
+
+
+def sanitize_secret_tokens(text: str) -> str:
+    sanitized = text
+    for pattern, replacement in SECRET_TOKEN_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized

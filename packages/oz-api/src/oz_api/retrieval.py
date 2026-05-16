@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib import request
 
+from oz_api.ranking import local_chunk_score, local_markdown_score
 from oz_api.storage import RegistryStorage, normalize_query
 
 _OPENAI_API_KEY_CACHE: str | None = None
@@ -108,14 +109,13 @@ def search_from_fixtures(
         chunk_path = fixture / "_chunks.jsonl"
         if chunk_path.exists():
             for row in read_jsonl(chunk_path):
-                normalized = str(row.get("text", "")).lower()
-                score = sum(1 for term in terms if term in normalized)
-                if score == 0:
+                score = local_chunk_score(row, terms)
+                if score <= 0:
                     continue
                 hits.append(
                     {
                         "path": f".codo/vendors/{vendor}/{library}@{version}/{row.get('path')}",
-                        "line": 1,
+                        "line": int(row.get("start_line") or 1),
                         "score": score,
                         "library": f"{vendor}/{library}",
                         "vendor": vendor,
@@ -125,27 +125,26 @@ def search_from_fixtures(
             continue
         for path in fixture.rglob("*.md"):
             relative = path.relative_to(fixture)
-            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-                normalized = line.lower()
-                score = sum(1 for term in terms if term in normalized)
-                if score == 0:
-                    continue
-                hits.append(
-                    {
-                        "path": f".codo/vendors/{vendor}/{library}@{version}/{relative.as_posix()}",
-                        "line": line_number,
-                        "score": score,
-                        "library": f"{vendor}/{library}",
-                        "vendor": vendor,
-                        "version": version,
-                    }
-                )
+            content = path.read_text(encoding="utf-8")
+            score = local_markdown_score(content, relative.as_posix(), terms)
+            if score <= 0:
+                continue
+            hits.append(
+                {
+                    "path": f".codo/vendors/{vendor}/{library}@{version}/{relative.as_posix()}",
+                    "line": 1,
+                    "score": score,
+                    "library": f"{vendor}/{library}",
+                    "vendor": vendor,
+                    "version": version,
+                }
+            )
 
     hits.sort(key=lambda hit: (-hit["score"], hit["path"], hit["line"]))
     deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, int | None]] = set()
+    seen: set[str] = set()
     for hit in hits:
-        key = (str(hit["path"]), hit.get("line"))
+        key = str(hit["path"])
         if key in seen:
             continue
         seen.add(key)
@@ -184,7 +183,9 @@ def suggest_from_postgres(
                   coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
                   coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
                 ) as fts_score,
-                0::float8 as vector_score
+                0::float8 as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score
               from libraries l
               join vendors v on v.id = l.vendor_id
               join library_versions lv on lv.library_id = l.id
@@ -201,7 +202,9 @@ def suggest_from_postgres(
                 lv.version,
                 coalesce(l.description, '') as reason,
                 0::float8 as fts_score,
-                greatest(1 - (c.embedding <=> %s::vector), 0) as vector_score
+                greatest(1 - (c.embedding <=> %s::vector), 0) as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score
               from chunks c
               join library_versions lv on lv.id = c.version_id
               join libraries l on l.id = lv.library_id
@@ -211,7 +214,12 @@ def suggest_from_postgres(
               limit %s
             ),
             ranked as (
-              select vendor, library, version, max(reason) as reason, max(fts_score) + max(vector_score) as score
+              select
+                vendor,
+                library,
+                version,
+                max(reason) as reason,
+                max(fts_score) + max(vector_score) + (max(quality_score) * 0.15) + max(type_score) as score
               from (
                 select * from fts_candidates
                 union all
@@ -236,7 +244,7 @@ def suggest_from_postgres(
                   coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
                   coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
                 )
-              ) as score,
+              ) + (max(greatest(coalesce(c.quality_score, 1), 0)) * 0.15) + max(content_type_score(c.content_type)) as score,
               coalesce(l.description, '') as reason
             from libraries l
             join vendors v on v.id = l.vendor_id
@@ -305,6 +313,8 @@ def search_from_postgres(
                 c.start_line,
                 greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as fts_score,
                 0::float8 as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
                 lv.version
@@ -323,6 +333,8 @@ def search_from_postgres(
                 c.start_line,
                 0::float8 as fts_score,
                 greatest(1 - (c.embedding <=> %s::vector), 0) as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
                 lv.version
@@ -336,7 +348,13 @@ def search_from_postgres(
               limit %s
             ),
             ranked as (
-              select path, start_line, max(fts_score) + max(vector_score) as score, library, vendor, version
+              select
+                path,
+                start_line,
+                max(fts_score) + max(vector_score) + (max(quality_score) * 0.15) + max(type_score) as score,
+                library,
+                vendor,
+                version
               from (
                 select * from fts_candidates
                 union all
@@ -359,7 +377,9 @@ def search_from_postgres(
             select
               '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
               c.start_line,
-              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0) as score,
+              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
+                + (greatest(coalesce(c.quality_score, 1), 0) * 0.15)
+                + content_type_score(c.content_type) as score,
               v.name || '/' || l.name as library,
               v.name as vendor,
               lv.version
@@ -419,7 +439,9 @@ def suggest_from_data_api(
                   coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0),
                   coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
                 ) as fts_score,
-                0::float8 as vector_score
+                0::float8 as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score
               from libraries l
               join vendors v on v.id = l.vendor_id
               join library_versions lv on lv.library_id = l.id
@@ -436,7 +458,9 @@ def suggest_from_data_api(
                 lv.version,
                 coalesce(l.description, '') as reason,
                 0::float8 as fts_score,
-                greatest(1 - (c.embedding <=> (:embedding)::vector), 0) as vector_score
+                greatest(1 - (c.embedding <=> (:embedding)::vector), 0) as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score
               from chunks c
               join library_versions lv on lv.id = c.version_id
               join libraries l on l.id = lv.library_id
@@ -446,7 +470,12 @@ def suggest_from_data_api(
               limit :candidate_limit
             ),
             ranked as (
-              select vendor, library, version, max(reason) as reason, max(fts_score) + max(vector_score) as score
+              select
+                vendor,
+                library,
+                version,
+                max(reason) as reason,
+                max(fts_score) + max(vector_score) + (max(quality_score) * 0.15) + max(type_score) as score
               from (
                 select * from fts_candidates
                 union all
@@ -470,7 +499,7 @@ def suggest_from_data_api(
                   coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', :terms)), 0),
                   coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
                 )
-              ) as score,
+              ) + (max(greatest(coalesce(c.quality_score, 1), 0)) * 0.15) + max(content_type_score(c.content_type)) as score,
               coalesce(l.description, '') as reason
             from libraries l
             join vendors v on v.id = l.vendor_id
@@ -532,6 +561,8 @@ def search_from_data_api(
                 c.start_line,
                 greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) as fts_score,
                 0::float8 as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
                 lv.version
@@ -550,6 +581,8 @@ def search_from_data_api(
                 c.start_line,
                 0::float8 as fts_score,
                 greatest(1 - (c.embedding <=> (:embedding)::vector), 0) as vector_score,
+                greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+                content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
                 lv.version
@@ -563,7 +596,13 @@ def search_from_data_api(
               limit :candidate_limit
             ),
             ranked as (
-              select path, start_line, max(fts_score) + max(vector_score) as score, library, vendor, version
+              select
+                path,
+                start_line,
+                max(fts_score) + max(vector_score) + (max(quality_score) * 0.15) + max(type_score) as score,
+                library,
+                vendor,
+                version
               from (
                 select * from fts_candidates
                 union all
@@ -581,7 +620,9 @@ def search_from_data_api(
             select
               '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
               c.start_line,
-              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0) as score,
+              greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', :terms)), 0)
+                + (greatest(coalesce(c.quality_score, 1), 0) * 0.15)
+                + content_type_score(c.content_type) as score,
               v.name || '/' || l.name as library,
               v.name as vendor,
               lv.version
@@ -803,7 +844,6 @@ def openai_api_key_from_env() -> str | None:
         _OPENAI_API_KEY_CACHE = key
     return key
 
-
 def secret_value_text(response: dict[str, Any]) -> str:
     if response.get("SecretString"):
         return str(response["SecretString"])
@@ -812,11 +852,9 @@ def secret_value_text(response: dict[str, Any]) -> str:
         return binary.decode("utf-8", errors="replace")
     return ""
 
-
 def normalized_openai_api_key(value: str | None) -> str | None:
     key = str(value or "").strip()
     return key if key.startswith("sk-") else None
-
 
 def normalized_openai_api_key_from_json(value: str) -> str | None:
     try:
@@ -831,13 +869,11 @@ def normalized_openai_api_key_from_json(value: str) -> str | None:
             return key
     return None
 
-
 def normalized_tsquery(query: str) -> str:
     terms = normalize_query(query)
     if terms:
         return " OR ".join(terms)
     return query.strip() or "documentation"
-
 
 def candidate_limit(max_results: int) -> int:
     return max(max_results * 10, 50)
@@ -846,7 +882,6 @@ def candidate_limit(max_results: int) -> int:
 def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
     digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
     return f"rerank:{digest}"
-
 
 def get_rerank_cache(ctx: RetrievalContext, cache_key: str) -> list[dict[str, Any]] | None:
     client = dynamodb_client()

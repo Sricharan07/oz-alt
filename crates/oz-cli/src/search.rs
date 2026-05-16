@@ -36,8 +36,10 @@ pub(crate) fn search_docs(
             .then(a.line.cmp(&b.line))
     });
 
+    let mut seen_paths = HashSet::new();
     let output = hits
         .into_iter()
+        .filter(|hit| seen_paths.insert(hit.path.clone()))
         .take(20)
         .map(|hit| {
             serde_json::json!({
@@ -135,11 +137,32 @@ fn search_vendor_tree(
         return Ok(hits);
     }
 
+    let chunk_indexes = WalkDir::new(root)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "_chunks.jsonl")
+        .map(|entry| entry.path().to_path_buf())
+        .collect::<Vec<_>>();
+    let chunked_roots = chunk_indexes
+        .iter()
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect::<Vec<_>>();
+
+    for chunk_index in &chunk_indexes {
+        if path_matches_scope(chunk_index, scope) {
+            collect_chunk_hits(chunk_index, terms, &mut hits)?;
+        }
+    }
+
     for entry in WalkDir::new(root).sort_by_file_name() {
         let entry = entry.with_context(|| format!("failed walking {}", root.display()))?;
         if !entry.file_type().is_file()
             || entry.path().extension().and_then(|s| s.to_str()) != Some("md")
         {
+            continue;
+        }
+        if chunked_roots.iter().any(|root| entry.path().starts_with(root)) {
             continue;
         }
         if !path_matches_scope(entry.path(), scope) {
@@ -153,6 +176,45 @@ fn search_vendor_tree(
         }
     }
     Ok(hits)
+}
+
+fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -> Result<()> {
+    let library_root = path.parent().context("_chunks.jsonl should have a parent")?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let row = serde_json::from_str::<serde_json::Value>(line)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        let score = chunk_score(&row, terms);
+        if score == 0 {
+            continue;
+        }
+        let relative_path = row
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or("README.md");
+        let line = row
+            .get("start_line")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(1) as usize;
+        hits.push(SearchHit {
+            path: library_root.join(relative_path),
+            line,
+            score,
+            preview: row
+                .get("text")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(160)
+                .collect(),
+        });
+    }
+    Ok(())
 }
 
 fn path_matches_scope(path: &Path, scope: &Option<(String, String)>) -> bool {
@@ -189,4 +251,92 @@ fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -
         }
     }
     Ok(())
+}
+
+fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
+    let text = json_string(row, "text").to_ascii_lowercase();
+    let path = json_string(row, "path").to_ascii_lowercase();
+    let headings = json_string_array(row, "heading_path").join(" ").to_ascii_lowercase();
+    let symbols = json_string_array(row, "symbols").join(" ").to_ascii_lowercase();
+    let compact_path = compact(&path);
+    let compact_symbols = compact(&symbols);
+
+    let text_hits = terms
+        .iter()
+        .map(|term| text.matches(term.as_str()).count())
+        .sum::<usize>();
+    let distinct_text_hits = terms.iter().filter(|term| text.contains(term.as_str())).count();
+    let path_hits = terms
+        .iter()
+        .filter(|term| path.contains(term.as_str()) || compact_path.contains(&compact(term)))
+        .count();
+    let heading_hits = terms
+        .iter()
+        .filter(|term| headings.contains(term.as_str()))
+        .count();
+    let symbol_hits = terms
+        .iter()
+        .filter(|term| symbols.contains(term.as_str()) || compact_symbols.contains(&compact(term)))
+        .count();
+    if text_hits == 0 && path_hits == 0 && heading_hits == 0 && symbol_hits == 0 {
+        return 0;
+    }
+
+    let coverage_bonus = if terms.is_empty() {
+        0
+    } else {
+        (distinct_text_hits * 40) / terms.len()
+    };
+    let path_penalty = if path.contains("changelog")
+        || path.contains("release-notes")
+        || path.contains("releases")
+        || path.contains("migration-guide")
+    {
+        60
+    } else {
+        0
+    };
+    let content_type = json_string(row, "content_type");
+    let type_bonus = match content_type.as_str() {
+        "api_reference" => 5,
+        "types" => 4,
+        "example" => 2,
+        "index" => 0,
+        _ => 0,
+    };
+    let score = (text_hits.min(80))
+        + (distinct_text_hits * 18)
+        + coverage_bonus
+        + (path_hits * 10)
+        + (heading_hits * 16)
+        + (symbol_hits * 35)
+        + type_bonus;
+    score.saturating_sub(path_penalty)
+}
+
+fn json_string(row: &serde_json::Value, key: &str) -> String {
+    row.get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn json_string_array(row: &serde_json::Value, key: &str) -> Vec<String> {
+    row.get(key)
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn compact(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
 }

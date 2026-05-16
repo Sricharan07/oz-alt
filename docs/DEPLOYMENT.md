@@ -159,16 +159,30 @@ oz search "middleware jwt cookies" vercel/next.js
 
 ## Release
 
+The source repository can remain private. Public installers and GitHub release
+assets are published to `Sricharan07/oz`, which contains only a minimal README,
+the curl installer, and release artifacts.
+
+Sync the public installer repo first:
+
+```bash
+bash scripts/sync-public-release-repo.sh
+```
+
 ```bash
 bash scripts/release-local.sh 0.1.0
 ```
 
 This creates a raw binary asset, SHA256 files, a release tarball, and a Homebrew formula for the current platform. The npm wrapper downloads the raw binary asset for the user's platform.
 
-Tagged releases are built by `.github/workflows/release.yml` and publish Linux, macOS, and Windows assets. The curl installer uses those release assets:
+Tagged releases are built by `.github/workflows/release.yml` and publish Linux, macOS, and Windows assets to the public release repo. Add a `PUBLIC_RELEASE_TOKEN` GitHub Actions secret with write access to `Sricharan07/oz`; the default private-repo `GITHUB_TOKEN` cannot publish to a different repo.
+
+The npm package name is `@hiringbae/oz` and keeps the executable command as `oz`.
+
+The curl installer uses those release assets:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oz-docs/oz/main/scripts/install-release.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Sricharan07/oz/main/scripts/install-release.sh | sh
 ```
 
 ## Launch Eval

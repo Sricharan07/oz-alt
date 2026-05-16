@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,10 +14,14 @@ from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 from oz_crawler.chunks import write_chunks
-from oz_crawler.normalize import NormalizedPage, normalize_html
+from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
+from oz_crawler.profiles import LibraryProfile, load_profile, url_allowed_by_profile
+from oz_crawler.quality import QualityResult, score_page
+from oz_crawler.splitting import assign_page_paths
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
-from oz_crawler.symbols import write_symbols
+from oz_crawler.symbols import extract_page_symbol_names, write_symbols
 from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
+from oz_crawler.validation import validate_fixture, write_validation
 
 try:
     from bs4 import BeautifulSoup
@@ -41,6 +45,8 @@ class CrawlOptions:
     crawldir: Path | None = None
     headless: bool = True
     network_idle: bool = True
+    require_profile: bool = False
+    fail_on_validation: bool = False
 
     @classmethod
     def from_env(cls, *, max_pages: int) -> "CrawlOptions":
@@ -53,6 +59,8 @@ class CrawlOptions:
             crawldir=Path(os.environ["OZ_CRAWLER_CRAWLDIR"]) if os.environ.get("OZ_CRAWLER_CRAWLDIR") else None,
             headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
             network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
+            require_profile=os.environ.get("OZ_CRAWLER_REQUIRE_PROFILE", "0").lower() in {"1", "true", "yes"},
+            fail_on_validation=os.environ.get("OZ_CRAWLER_FAIL_ON_VALIDATION", "0").lower() in {"1", "true", "yes"},
         )
 
 
@@ -75,7 +83,11 @@ def crawl_single_page(
     options: CrawlOptions | None = None,
 ) -> Path:
     crawl_options = options or CrawlOptions.from_env(max_pages=max_pages)
-    pages = crawl_pages(url, title=title, options=crawl_options)
+    profile = load_profile(registry_root, vendor, library)
+    if crawl_options.require_profile and profile is None:
+        raise RuntimeError(f"no library profile found for {vendor}/{library}")
+
+    pages = crawl_pages(url, title=title, options=crawl_options, profile=profile)
     if not pages:
         raise RuntimeError(f"no pages crawled from {url}")
 
@@ -100,25 +112,25 @@ def crawl_single_page(
         f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
         encoding="utf-8",
     )
-    artifacts = collect_source_artifacts(url, pages)
+    artifacts = collect_source_artifacts(url, pages, profile=profile)
     artifact_pages = artifact_normalized_pages(artifacts)
-    all_pages = pages + artifact_pages
+    all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile)
+    if not all_pages:
+        write_rejections(target, rejected)
+        raise RuntimeError(f"all crawled pages were rejected for {vendor}/{library}")
+
     guide_links: list[tuple[str, str]] = []
-    for page in pages:
-        slug = slugify(page.title or page.source_url)
-        relative = f"guides/{slug}.md"
+    for page in all_pages:
+        relative = page.path or f"guides/{slugify(page.title or page.source_url)}.md"
         guide_links.append((relative, page.title or page.source_url))
+        (target / relative).parent.mkdir(parents=True, exist_ok=True)
         (target / relative).write_text(
             f"# {page.title}\n\n**Source:** {page.source_url}\n\n{page.markdown}",
             encoding="utf-8",
         )
-    for artifact in artifacts:
-        artifact_path = target / artifact.path
-        artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text(artifact.markdown, encoding="utf-8")
-        guide_links.append((artifact.path, artifact.title))
+    write_rejections(target, rejected)
     write_chunks(target, all_pages)
-    write_symbols(target, all_pages)
+    write_symbols(target, all_pages, profile=profile)
     (target / "INDEX.md").write_text(
         build_index(title=page_title, source_url=url, guide_links=guide_links),
         encoding="utf-8",
@@ -132,6 +144,8 @@ def crawl_single_page(
                 "source_urls": [url],
                 "indexed_at": datetime.now(timezone.utc).isoformat(),
                 "ref_sha": "local-crawl",
+                "profile": profile.key if profile else None,
+                "rejected_pages": len(rejected),
             },
             indent=2,
             sort_keys=True,
@@ -139,28 +153,48 @@ def crawl_single_page(
         + "\n",
         encoding="utf-8",
     )
+    validation = validate_fixture(target, profile)
+    write_validation(target, validation)
+    if crawl_options.fail_on_validation and not validation.passed:
+        raise RuntimeError("; ".join(validation.errors))
 
     return target
 
 
 def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[NormalizedPage]:
     return [
-        NormalizedPage(title=artifact.title, markdown=artifact.markdown, source_url=f"oz-artifact:{artifact.path}")
+        NormalizedPage(
+            title=sanitize_secret_tokens(artifact.title),
+            markdown=clean_markdown(artifact.markdown),
+            source_url=artifact.source_url,
+            path=artifact.path,
+        )
         for artifact in artifacts
         if artifact.markdown.strip()
     ]
 
 
-def crawl_pages(url: str, *, title: str | None, options: CrawlOptions) -> list[NormalizedPage]:
+def crawl_pages(
+    url: str,
+    *,
+    title: str | None,
+    options: CrawlOptions,
+    profile: LibraryProfile | None = None,
+) -> list[NormalizedPage]:
     if options.max_pages <= 0:
         return []
-    crawled = crawl_pages_with_scrapling(url, options=options)
+    crawled = crawl_pages_with_scrapling(url, options=options, profile=profile)
     if crawled is None:
-        crawled = crawl_pages_with_stdlib(url, options=options)
+        crawled = crawl_pages_with_stdlib(url, options=options, profile=profile)
     return [normalize_html(page.html, source_url=page.source_url, title=title or page.title) for page in crawled]
 
 
-def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[CrawledPage] | None:
+def crawl_pages_with_scrapling(
+    url: str,
+    *,
+    options: CrawlOptions,
+    profile: LibraryProfile | None = None,
+) -> list[CrawledPage] | None:
     if options.fetcher.lower() == "stdlib":
         return None
     ensure_vendored_scrapling_path()
@@ -175,6 +209,8 @@ def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[Crawl
     max_pages = options.max_pages
     fetcher_mode = options.fetcher.lower()
     declared_links = discover_declared_doc_links(url)
+    if profile is not None:
+        declared_links.extend(profile.preferred_urls)
 
     class OzDocsSpider(Spider):  # type: ignore[misc, valid-type]
         name = "oz_docs"
@@ -227,7 +263,13 @@ def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[Crawl
                 self.pages.append(CrawledPage(source_url=response_url, html=html, title=response_title(response)))
                 yield {"url": response_url, "bytes": len(html)}
 
-            for link in candidate_doc_links(url, response_url, html, declared_links if response_url == url else []):
+            for link in candidate_doc_links(
+                url,
+                response_url,
+                html,
+                declared_links if response_url == url else [],
+                profile=profile,
+            ):
                 if len(self.seen) >= max_pages:
                     break
                 if link in self.seen:
@@ -255,16 +297,23 @@ def crawl_pages_with_scrapling(url: str, *, options: CrawlOptions) -> list[Crawl
     return spider.pages
 
 
-def crawl_pages_with_stdlib(url: str, *, options: CrawlOptions) -> list[CrawledPage]:
+def crawl_pages_with_stdlib(
+    url: str,
+    *,
+    options: CrawlOptions,
+    profile: LibraryProfile | None = None,
+) -> list[CrawledPage]:
     first_html = fetch_html_stdlib(url)
     pages = [CrawledPage(source_url=url, html=first_html)]
     if options.max_pages <= 1:
         return pages
 
     discovered = discover_declared_doc_links(url, fetcher="stdlib")
+    if profile is not None:
+        discovered.extend(profile.preferred_urls)
     discovered.extend(discover_same_site_links(url, first_html))
     seen = {url}
-    for linked_url in candidate_doc_links(url, url, first_html, discovered):
+    for linked_url in candidate_doc_links(url, url, first_html, discovered, profile=profile):
         if len(pages) >= options.max_pages:
             break
         if linked_url in seen:
@@ -380,8 +429,17 @@ def discover_same_site_links(url: str, html: str) -> list[str]:
     return output
 
 
-def candidate_doc_links(seed_url: str, current_url: str, html: str, declared_links: list[str]) -> list[str]:
+def candidate_doc_links(
+    seed_url: str,
+    current_url: str,
+    html: str,
+    declared_links: list[str],
+    *,
+    profile: LibraryProfile | None = None,
+) -> list[str]:
     parsed_seed = urlparse(seed_url)
+    if parsed_seed.netloc.lower() == "github.com":
+        return []
     links = []
     links.extend(declared_links)
     links.extend(discover_same_site_links(current_url, html))
@@ -389,11 +447,57 @@ def candidate_doc_links(seed_url: str, current_url: str, html: str, declared_lin
         link
         for link in dedupe(links)
         if is_crawlable_doc_url(link, parsed_seed.netloc)
+        and url_allowed_by_profile(link, profile)
         and same_site_or_subdomain(link, parsed_seed.netloc)
         and link != current_url
     ]
-    filtered.sort(key=lambda link: (-doc_url_score(link), len(link), link))
+    preferred = set(profile.preferred_urls) if profile is not None else set()
+    filtered.sort(key=lambda link: (0 if link in preferred else 1, -doc_url_score(link), len(link), link))
     return filtered
+
+
+def prepare_pages(
+    pages: list[NormalizedPage],
+    *,
+    profile: LibraryProfile | None,
+) -> tuple[list[NormalizedPage], list[dict[str, Any]]]:
+    accepted: list[NormalizedPage] = []
+    rejected: list[dict[str, Any]] = []
+    sanitized_pages = [
+        replace(page, title=sanitize_secret_tokens(page.title), markdown=clean_markdown(page.markdown)) for page in pages
+    ]
+    for page in assign_page_paths(sanitized_pages):
+        quality = score_page(page, profile)
+        if not quality.accepted:
+            rejected.append(rejection_row(page, quality))
+            continue
+        accepted.append(
+            replace(
+                page,
+                quality_score=quality.score,
+                content_type=quality.content_type,
+                symbols=tuple(extract_page_symbol_names(page, profile=profile)),
+            )
+        )
+    return accepted, rejected
+
+
+def rejection_row(page: NormalizedPage, quality: QualityResult) -> dict[str, Any]:
+    return {
+        "title": page.title,
+        "source_url": page.source_url,
+        "score": quality.score,
+        "reasons": quality.reasons,
+        "content_type": quality.content_type,
+    }
+
+
+def write_rejections(target: Path, rejected: list[dict[str, Any]]) -> None:
+    path = target / "_rejected.jsonl"
+    if not rejected:
+        path.write_text("", encoding="utf-8")
+        return
+    path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rejected), encoding="utf-8")
 
 
 def is_crawlable_doc_url(url: str, netloc: str) -> bool:
@@ -403,6 +507,10 @@ def is_crawlable_doc_url(url: str, netloc: str) -> bool:
     if not is_textual_url_candidate(url):
         return False
     path = parsed.path.lower()
+    if path.endswith("/llms.txt") or path.endswith("/llms-full.txt"):
+        return False
+    if path.endswith("/sitemap.xml") or path.endswith("/sitemap_index.xml"):
+        return False
     if any(part in path for part in ("/blog/", "/pricing", "/careers", "/login", "/signup", "/account")):
         return False
     if "/api/" in path and not re.search(r"(docs|documentation|reference|openapi|swagger)", path):

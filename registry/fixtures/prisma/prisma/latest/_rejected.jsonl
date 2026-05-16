@@ -1,0 +1,3 @@
+{"content_type": "guide", "reasons": ["no headings"], "score": 0.0983, "source_url": "https://www.prisma.io/docs", "title": "Introduction to Prisma"}
+{"content_type": "guide", "reasons": ["no headings"], "score": 0.1439, "source_url": "https://www.prisma.io/docs/guides", "title": "Guides"}
+{"content_type": "junk", "reasons": ["url rejected by library profile"], "score": 0.0, "source_url": "env(\"DATABASE_URL\"),", "title": "env(\"DATABASE_URL\"),"}

@@ -1,6 +1,20 @@
 create extension if not exists vector;
 create extension if not exists pgcrypto;
 
+create or replace function content_type_score(value text)
+returns double precision
+language sql
+immutable
+as $$
+  select case coalesce(value, '')
+    when 'api_reference' then 0.18
+    when 'types' then 0.14
+    when 'example' then 0.08
+    when 'index' then -0.12
+    else 0
+  end
+$$;
+
 create table if not exists vendors (
   id bigserial primary key,
   name text not null unique,
@@ -79,10 +93,17 @@ create table if not exists chunks (
   source_url text,
   ordinal integer not null default 1,
   chunk_sha text not null,
+  heading_path jsonb not null default '[]'::jsonb,
+  symbols jsonb not null default '[]'::jsonb,
+  content_type text not null default 'guide',
+  quality_score double precision not null default 1,
   content text not null,
   embedding vector(1536),
   search_document tsvector generated always as (
     setweight(to_tsvector('english', coalesce(path, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(heading_path::text, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(symbols::text, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(content_type, '')), 'C') ||
     setweight(to_tsvector('english', coalesce(content, '')), 'B')
   ) stored,
   created_at timestamptz not null default now(),

@@ -1,0 +1,18 @@
+{
+  "library": "stripe/stripe",
+  "version": "latest",
+  "checks": [
+    {
+      "name": "webhook signature checkout session",
+      "query": "webhook signature checkout session",
+      "patterns": ["webhook", "signature", "checkout", "session"],
+      "expected_files": [
+        "guides/webhooks/signature.md",
+        "guides/checkout/fulfillment.md",
+        "api-reference/api/checkout/sessions.md"
+      ],
+      "must_include": ["webhook", "signature"],
+      "must_not_include": ["customer story", "contact sales", "try for free"]
+    }
+  ]
+}

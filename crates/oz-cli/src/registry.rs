@@ -522,6 +522,8 @@ pub(crate) fn build_packs(project_root: &Path) -> Result<()> {
         else {
             continue;
         };
+        ensure_fixture_quality_passed(entry.path())
+            .with_context(|| format!("fixture {} did not pass quality gates", entry.path().display()))?;
         let destination = packs
             .join(&vendor)
             .join(&library)
@@ -529,6 +531,34 @@ pub(crate) fn build_packs(project_root: &Path) -> Result<()> {
         write_pack(entry.path(), &destination, &vendor, &library, &version)?;
     }
     Ok(())
+}
+
+fn ensure_fixture_quality_passed(fixture: &Path) -> Result<()> {
+    let quality_path = fixture.join("_quality.json");
+    if !quality_path.exists() {
+        return Ok(());
+    }
+    let quality = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&quality_path)?)
+        .with_context(|| format!("failed to parse {}", quality_path.display()))?;
+    if quality
+        .get("passed")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let errors = quality
+        .get("errors")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_else(|| "unknown quality failure".to_string());
+    bail!("{}", errors)
 }
 
 pub(crate) fn latest_version(

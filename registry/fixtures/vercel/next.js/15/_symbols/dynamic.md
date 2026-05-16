@@ -2,7 +2,7 @@
 
 **Kind:** constant
 **Signature:** `Route Handlers can be nested anywhere inside the `app` directory, similar to `page.js` and `layout.js`. But there **cannot** be a `route.js` file at the same route segment level as `page.js`.`
-**Source:** https://nextjs.org/docs/llms-full.txt
+**Source:** https://nextjs.org/docs/app/getting-started/route-handlers
 
 ## Example
 

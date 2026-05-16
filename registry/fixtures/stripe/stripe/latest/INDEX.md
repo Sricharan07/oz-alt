@@ -1,7 +1,49 @@
 # API Reference Documentation Index
 
 - [README](README.md) - normalized documentation fetched from https://docs.stripe.com/api.
-- [API Reference](guides/api-reference.md) - crawled guide page.
-- [https://docs.stripe.com/testing.md](guides/https-docs-stripe-com-testing-md.md) - crawled guide page.
-- [https://docs.stripe.com/api.md](guides/https-docs-stripe-com-api-md.md) - crawled guide page.
+- [API Reference](guides/api.md) - crawled guide page.
+- [Receive Stripe events in your webhook endpoint](guides/webhooks.md) - crawled guide page.
+- [Resolve webhook signature verification errors](guides/webhooks/signature.md) - crawled guide page.
+- [Choose settlement preference](guides/payments/paypal/choose-settlement-preference.md) - crawled guide page.
+- [Stripe APIs](guides/apis.md) - crawled guide page.
+- [https://docs.stripe.com/api.md](guides/api-2.md) - crawled guide page.
+- [API v2 overview](guides/api-v2-overview.md) - crawled guide page.
+- [Tour of the API](guides/payments-api/tour.md) - crawled guide page.
+- [Older payment APIs](guides/payments/older-apis.md) - crawled guide page.
+- [https://docs.stripe.com/payments-api/tour.md](guides/payments-api/tour-2.md) - crawled guide page.
+- [Card payments on the Charges APILegacy](guides/payments/charges-api.md) - crawled guide page.
+- [Include-dependent response values in API v2](guides/api-includable-response-values.md) - crawled guide page.
+- [Enable currency conversion using the FX Quotes APIPublic preview](guides/payments/custom/localize-prices/fx-quotes-api.md) - crawled guide page.
+- [Migrating to new ACH Direct Debit APIs](guides/payments/ach-direct-debit/migrating-to-new-apis.md) - crawled guide page.
+- [The FX Quotes APIPublic preview](guides/payments/currencies/localize-prices/fx-quotes-api.md) - crawled guide page.
+- [Elements with Checkout Sessions API beta changelog](guides/checkout/elements-with-checkout-sessions-api/changelog.md) - crawled guide page.
+- [Checkout](guides/checkout/elements-with-checkout-sessions-api/changelog-2.md) - crawled guide page.
+- [Accept a payment](guides/payments/accept-a-payment.md) - crawled guide page.
+- [Accept a payment](guides/payments/accept-a-payment-2.md) - crawled guide page.
+- [Build a Stripe-hosted checkout page | Stripe Documentation](guides/checkout/quickstart.md) - crawled guide page.
+- [Build an advanced integration | Stripe Documentation](guides/payments/quickstart.md) - crawled guide page.
+- [Set up and deploy a webhook | Stripe Documentation](guides/webhooks/quickstart.md) - crawled guide page.
+- [https://docs.stripe.com/checkout/quickstart.md](guides/checkout/quickstart-2.md) - crawled guide page.
+- [https://docs.stripe.com/payments/quickstart.md](guides/payments/quickstart-2.md) - crawled guide page.
+- [Authentication](api-reference/api/authentication.md) - crawled guide page.
+- [Balance](api-reference/api/balance.md) - crawled guide page.
+- [Charges](api-reference/api/charges.md) - crawled guide page.
+- [Checkout Sessions](api-reference/api/checkout/sessions.md) - crawled guide page.
+- [Create a Checkout Session](api-reference/api/checkout/sessions/create.md) - crawled guide page.
+- [Customers](api-reference/api/customers.md) - crawled guide page.
+- [Events](api-reference/api/events.md) - crawled guide page.
+- [Types of events](api-reference/api/events/types.md) - crawled guide page.
+- [List all payments for an invoice](api-reference/api/invoice-payment/list.md) - crawled guide page.
+- [Payment Intents](api-reference/api/payment_intents.md) - crawled guide page.
+- [Create a PaymentIntent](api-reference/api/payment_intents/create.md) - crawled guide page.
+- [Payment Methods](api-reference/api/payment_methods.md) - crawled guide page.
+- [Attach a PaymentMethod to a Customer](api-reference/api/payment_methods/attach.md) - crawled guide page.
+- [Products](api-reference/api/products.md) - crawled guide page.
+- [Subscriptions](api-reference/api/subscriptions.md) - crawled guide page.
+- [Create a Calculation](api-reference/api/tax/calculations/create.md) - crawled guide page.
+- [The Account object](api-reference/api/v2/core/accounts/object.md) - crawled guide page.
+- [Versioning](api-reference/api/versioning.md) - crawled guide page.
+- [Elements with Checkout Sessions API beta changelog](guides/checkout/elements-with-checkout-sessions-api/changelog-3.md) - crawled guide page.
+- [Fulfill orders](guides/checkout/fulfillment.md) - crawled guide page.
+- [Accept a payment](guides/payments/accept-a-payment-3.md) - crawled guide page.
 - [Symbols](_symbols/) - extracted public API entries from code examples.

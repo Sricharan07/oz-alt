@@ -1,7 +1,9 @@
 {
-  "indexed_at": "2026-05-16T02:31:09.533431+00:00",
+  "indexed_at": "2026-05-16T09:21:02.728205+00:00",
   "library": "react",
+  "profile": "facebook/react",
   "ref_sha": "local-crawl",
+  "rejected_pages": 0,
   "source_urls": [
     "https://react.dev/reference/react"
   ],

@@ -1,7 +1,42 @@
 # Next.js Docs Documentation Index
 
 - [README](README.md) - normalized documentation fetched from https://nextjs.org/docs.
-- [Next.js Docs](guides/next-js-docs.md) - crawled guide page.
-- [https://nextjs.org/docs/llms.txt](guides/https-nextjs-org-docs-llms-txt.md) - crawled guide page.
-- [Hello, Next.js!](guides/hello-next-js.md) - crawled guide page.
+- [Next.js Docs](guides/index.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/functions/cookies](api-reference/app/api-reference/functions/cookies.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/functions/next-request](api-reference/app/api-reference/functions/next-request.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/functions/next-response](api-reference/app/api-reference/functions/next-response.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/functions/generate-sitemaps](api-reference/app/api-reference/functions/generate-sitemaps.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/file-conventions/metadata/sitemap](api-reference/app/api-reference/file-conventions/metadata/sitemap.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference](api-reference/app/api-reference.md) - crawled guide page.
+- [https://nextjs.org/docs/pages/api-reference](api-reference/pages/api-reference.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/cli](api-reference/app/api-reference/cli.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/edge](api-reference/app/api-reference/edge.md) - crawled guide page.
+- [https://nextjs.org/docs/pages/api-reference/cli](api-reference/pages/api-reference/cli.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/config](api-reference/app/api-reference/config.md) - crawled guide page.
+- [https://nextjs.org/docs/pages/api-reference/edge](api-reference/pages/api-reference/edge.md) - crawled guide page.
+- [https://nextjs.org/docs/app/api-reference/adapters](api-reference/app/api-reference/adapters.md) - crawled guide page.
+- [Getting Started](guides/app/getting-started.md) - crawled guide page.
+- [Installation](guides/app/getting-started/installation.md) - crawled guide page.
+- [Project Structure](guides/app/getting-started/project-structure.md) - crawled guide page.
+- [Layouts and Pages](guides/app/getting-started/layouts-and-pages.md) - crawled guide page.
+- [Linking and Navigating](guides/app/getting-started/linking-and-navigating.md) - crawled guide page.
+- [Server and Client Components](guides/app/getting-started/server-and-client-components.md) - crawled guide page.
+- [Fetching Data](guides/app/getting-started/fetching-data.md) - crawled guide page.
+- [Mutating Data](guides/app/getting-started/mutating-data.md) - crawled guide page.
+- [Caching](guides/app/getting-started/caching.md) - crawled guide page.
+- [Revalidating](guides/app/getting-started/revalidating.md) - crawled guide page.
+- [Error Handling](guides/app/getting-started/error-handling.md) - crawled guide page.
+- [CSS](guides/app/getting-started/css.md) - crawled guide page.
+- [Image Optimization](guides/app/getting-started/images.md) - crawled guide page.
+- [Font Optimization](guides/app/getting-started/fonts.md) - crawled guide page.
+- [Metadata and OG images](guides/app/getting-started/metadata-and-og-images.md) - crawled guide page.
+- [Route Handlers](guides/app/getting-started/route-handlers.md) - crawled guide page.
+- [Proxy](guides/app/getting-started/proxy.md) - crawled guide page.
+- [Deploying](guides/app/getting-started/deploying.md) - crawled guide page.
+- [Upgrading](guides/app/getting-started/upgrading.md) - crawled guide page.
+- [Guides](guides/app/guides.md) - crawled guide page.
+- [AI Coding Agents](guides/app/guides/ai-agents.md) - crawled guide page.
+- [Analytics](guides/app/guides/analytics.md) - crawled guide page.
+- [Authentication](guides/app/guides/authentication.md) - crawled guide page.
+- [Backend for Frontend](guides/app/guides/backend-for-frontend.md) - crawled guide page.
 - [Symbols](_symbols/) - extracted public API entries from code examples.

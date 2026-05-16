@@ -8,6 +8,8 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
+from oz_crawler.splitting import document_path, split_llms_full
 from oz_crawler.text import decode_text_response
 
 
@@ -19,18 +21,28 @@ class SourceArtifact:
     markdown: str
 
 
-def collect_source_artifacts(seed_url: str, pages: list[NormalizedPage], *, max_documents: int = 24) -> list[SourceArtifact]:
+def collect_source_artifacts(
+    seed_url: str,
+    pages: list[NormalizedPage],
+    *,
+    profile: LibraryProfile | None = None,
+    max_documents: int = 24,
+) -> list[SourceArtifact]:
     urls = sorted(
         {
             seed_url,
+            *(profile.preferred_urls if profile else []),
             *common_source_urls(seed_url),
             *(url for page in pages for url in extract_urls(page.markdown, base_url=page.source_url)),
         }
     )
+    urls = [url for url in urls if url_allowed_by_profile(url, profile)]
     artifacts: list[SourceArtifact] = []
-    artifacts.extend(openapi_artifacts(urls, limit=max_documents))
-    artifacts.extend(type_definition_artifacts(urls, limit=max_documents))
-    artifacts.extend(github_docs_artifacts(urls, limit=max_documents))
+    artifacts.extend(llms_artifacts(seed_url, profile=profile, limit=max_documents))
+    artifacts.extend(markdown_url_artifacts(urls, profile=profile, limit=max_documents))
+    artifacts.extend(openapi_artifacts(urls, profile=profile, limit=max_documents))
+    artifacts.extend(type_definition_artifacts(urls, profile=profile, limit=max_documents))
+    artifacts.extend(github_docs_artifacts(urls, profile=profile, limit=max_documents))
     return dedupe_artifacts(artifacts)[:max_documents]
 
 
@@ -47,9 +59,71 @@ def common_source_urls(seed_url: str) -> list[str]:
     ]
 
 
-def openapi_artifacts(urls: list[str], *, limit: int) -> list[SourceArtifact]:
+def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+    parsed = urlparse(seed_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return []
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    output: list[SourceArtifact] = []
+    for name in ("/llms-full.txt", "/docs/llms-full.txt", "/llms.txt", "/docs/llms.txt"):
+        url = base + name
+        if not url_allowed_by_profile(url, profile):
+            continue
+        text = fetch_text(url)
+        if not text or looks_like_html(text):
+            continue
+        if "llms-full" not in name:
+            continue
+        pages = split_llms_full(text, source_url=url)
+        for page in pages:
+            output.append(
+                SourceArtifact(
+                    path=document_path(page.source_url, page.title, "guide"),
+                    title=page.title,
+                    source_url=page.source_url,
+                    markdown=f"# {page.title}\n\n**Source:** {page.source_url}\n\n{page.markdown.strip()}\n",
+                )
+            )
+            if len(output) >= limit:
+                return output
+    return output
+
+
+def markdown_url_artifacts(
+    urls: list[str],
+    *,
+    profile: LibraryProfile | None,
+    limit: int,
+) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
     for url in urls:
+        if not url_allowed_by_profile(url, profile):
+            continue
+        path = urlparse(url).path.lower()
+        if not re.search(r"\.(md|mdx)$", path):
+            continue
+        text = fetch_text(url)
+        if not text or looks_like_html(text):
+            continue
+        title = markdown_title(text) or url
+        output.append(
+            SourceArtifact(
+                path=document_path(url, title, "guide"),
+                title=title,
+                source_url=url,
+                markdown=f"# {title}\n\n**Source:** {url}\n\n{text.strip()}\n",
+            )
+        )
+        if len(output) >= limit:
+            break
+    return output
+
+
+def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+    output: list[SourceArtifact] = []
+    for url in urls:
+        if not url_allowed_by_profile(url, profile):
+            continue
         path = urlparse(url).path.lower()
         if not re.search(r"(openapi|swagger).*\.(json|ya?ml)$", path):
             continue
@@ -69,9 +143,11 @@ def openapi_artifacts(urls: list[str], *, limit: int) -> list[SourceArtifact]:
     return output
 
 
-def type_definition_artifacts(urls: list[str], *, limit: int) -> list[SourceArtifact]:
+def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
     for url in urls:
+        if not url_allowed_by_profile(url, profile):
+            continue
         path = urlparse(url).path.lower()
         if not (path.endswith(".d.ts") or path.endswith(".pyi")):
             continue
@@ -92,19 +168,48 @@ def type_definition_artifacts(urls: list[str], *, limit: int) -> list[SourceArti
     return output
 
 
-def github_docs_artifacts(urls: list[str], *, limit: int) -> list[SourceArtifact]:
+def github_docs_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
     repos = sorted({repo for url in urls for repo in github_repo(url)})
     output: list[SourceArtifact] = []
     for owner, repo in repos:
+        output.extend(github_root_artifacts(owner, repo, profile=profile, limit=limit - len(output)))
         for folder in ("docs", "documentation"):
             remaining = limit - len(output)
             if remaining <= 0:
                 return output
-            output.extend(github_folder_artifacts(owner, repo, folder, limit=remaining))
+            output.extend(github_folder_artifacts(owner, repo, folder, profile=profile, limit=remaining))
     return output
 
 
-def github_folder_artifacts(owner: str, repo: str, folder: str, *, limit: int, depth: int = 0) -> list[SourceArtifact]:
+def github_root_artifacts(
+    owner: str,
+    repo: str,
+    *,
+    profile: LibraryProfile | None,
+    limit: int,
+) -> list[SourceArtifact]:
+    output: list[SourceArtifact] = []
+    for name in ("README.md", "api.md", "helpers.md"):
+        if len(output) >= limit:
+            break
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/{name}"
+        if not url_allowed_by_profile(url, profile):
+            continue
+        artifact = github_file_artifact(owner, repo, name, url)
+        if artifact:
+            output.append(artifact)
+    return output
+
+
+def github_folder_artifacts(
+    owner: str,
+    repo: str,
+    folder: str,
+    *,
+    profile: LibraryProfile | None,
+    limit: int,
+    depth: int = 0,
+) -> list[SourceArtifact]:
     if limit <= 0 or depth > 3:
         return []
     listing = fetch_json(f"https://api.github.com/repos/{owner}/{repo}/contents/{folder}")
@@ -117,7 +222,16 @@ def github_folder_artifacts(owner: str, repo: str, folder: str, *, limit: int, d
         name = str(item.get("name") or "")
         item_path = str(item.get("path") or name)
         if item.get("type") == "dir":
-            output.extend(github_folder_artifacts(owner, repo, item_path, limit=limit - len(output), depth=depth + 1))
+            output.extend(
+                github_folder_artifacts(
+                    owner,
+                    repo,
+                    item_path,
+                    profile=profile,
+                    limit=limit - len(output),
+                    depth=depth + 1,
+                )
+            )
         else:
             artifact = github_file_artifact(owner, repo, name, item.get("download_url"))
             if artifact:
@@ -211,6 +325,14 @@ def markdown_for_github_file(name: str, text: str, source_url: str) -> str:
     return f"**Source:** {source_url}\n\n{text.strip()}\n"
 
 
+def markdown_title(text: str) -> str:
+    for line in text.splitlines():
+        match = re.match(r"^#\s+(.+)$", line.strip())
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
 def extract_urls(text: str, *, base_url: str) -> list[str]:
     urls = re.findall(r"https?://[^\s)>\"]+", text)
     urls.extend(urljoin(base_url, link) for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text))
@@ -250,8 +372,10 @@ def dedupe_artifacts(artifacts: list[SourceArtifact]) -> list[SourceArtifact]:
     seen: set[str] = set()
     output: list[SourceArtifact] = []
     for artifact in artifacts:
-        if artifact.path in seen:
+        key = artifact.source_url or artifact.path
+        if key in seen or artifact.path in seen:
             continue
+        seen.add(key)
         seen.add(artifact.path)
         output.append(artifact)
     return output

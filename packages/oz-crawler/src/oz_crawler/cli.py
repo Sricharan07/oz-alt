@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     crawl.add_argument("--no-robots", action="store_true", help="Disable Scrapling robots.txt compliance.")
     crawl.add_argument("--crawldir", type=Path, default=None, help="Scrapling checkpoint directory.")
     crawl.add_argument("--headed", action="store_true", help="Run browser fetchers headed instead of headless.")
+    crawl.add_argument("--require-profile", action="store_true", help="Fail if registry/library_profiles.json has no profile.")
+    crawl.add_argument("--fail-on-validation", action="store_true", help="Fail when profile quality gates do not pass.")
 
     worker = subcommands.add_parser("worker", help="Process local crawler queue jobs.")
     worker.add_argument(
@@ -93,6 +95,8 @@ def main() -> None:
                 robots_txt=not args.no_robots,
                 crawldir=args.crawldir,
                 headless=not args.headed,
+                require_profile=args.require_profile,
+                fail_on_validation=args.fail_on_validation,
             ),
         )
         print(target)

@@ -1,0 +1,14 @@
+{
+  "library": "prisma/prisma",
+  "version": "latest",
+  "checks": [
+    {
+      "name": "schema migrate relation client",
+      "query": "schema migrate relation client",
+      "patterns": ["schema", "migrate|migration", "relation", "PrismaClient|client"],
+      "expected_files": ["guides/orm/prisma-schema.md", "guides/orm/prisma-client.md"],
+      "must_include": ["schema", "client"],
+      "must_not_include": ["testimonial", "customer story"]
+    }
+  ]
+}

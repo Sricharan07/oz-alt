@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,7 +74,7 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
         for row in chunk_rows(storage, entry):
             chunk_sha = chunk_sha_for_row(entry, row)
             current_chunk_shas.append(chunk_sha)
-            start_line, end_line = line_span(fixture, row, line_cache)
+            start_line, end_line = row_line_span(row) or line_span(fixture, row, line_cache)
             embedding = embedding_for_chunk(row)
             writer.upsert_chunk(
                 version_id,
@@ -85,6 +84,10 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
                 source_url=str(row.get("source_url") or ""),
                 ordinal=int(row.get("ordinal") or 1),
                 chunk_sha=chunk_sha,
+                heading_path=list_of_strings(row.get("heading_path")),
+                symbols=list_of_strings(row.get("symbols")),
+                content_type=str(row.get("content_type") or "guide"),
+                quality_score=float(row.get("quality_score") or 1.0),
                 content=str(row.get("text") or ""),
                 embedding=embedding,
             )
@@ -144,6 +147,20 @@ def line_span(fixture: Path, row: dict[str, Any], cache: dict[str, str]) -> tupl
     return start, end
 
 
+def row_line_span(row: dict[str, Any]) -> tuple[int, int | None] | None:
+    start = row.get("start_line")
+    if not isinstance(start, int) or start < 1:
+        return None
+    end = row.get("end_line")
+    return start, end if isinstance(end, int) and end >= start else None
+
+
+def list_of_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
 def valid_embedding(value: Any) -> bool:
     return isinstance(value, list) and len(value) == 1536 and all(isinstance(item, (int, float)) for item in value)
 
@@ -169,8 +186,6 @@ def embedding_for_chunk(row: dict[str, Any]) -> list[float] | None:
     existing = row.get("embedding")
     if valid_embedding(existing):
         return [float(value) for value in existing]
-    if not os.environ.get("OPENAI_API_KEY"):
-        return None
     text = str(row.get("text") or "")
     if not text:
         return None
@@ -210,6 +225,10 @@ class IndexWriter:
         source_url: str,
         ordinal: int,
         chunk_sha: str,
+        heading_path: list[str],
+        symbols: list[str],
+        content_type: str,
+        quality_score: float,
         content: str,
         embedding: list[float] | None,
     ) -> None:
@@ -315,24 +334,49 @@ class PostgresWriter(IndexWriter):
         source_url: str,
         ordinal: int,
         chunk_sha: str,
+        heading_path: list[str],
+        symbols: list[str],
+        content_type: str,
+        quality_score: float,
         content: str,
         embedding: list[float] | None,
     ) -> None:
         vector = vector_literal(embedding) if embedding else None
         self.execute(
             """
-            insert into chunks(version_id, path, start_line, end_line, source_url, ordinal, chunk_sha, content, embedding)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            insert into chunks(
+              version_id, path, start_line, end_line, source_url, ordinal, chunk_sha,
+              heading_path, symbols, content_type, quality_score, content, embedding
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
               set path = excluded.path,
                   start_line = excluded.start_line,
                   end_line = excluded.end_line,
                   source_url = excluded.source_url,
                   ordinal = excluded.ordinal,
+                  heading_path = excluded.heading_path,
+                  symbols = excluded.symbols,
+                  content_type = excluded.content_type,
+                  quality_score = excluded.quality_score,
                   content = excluded.content,
                   embedding = excluded.embedding
             """,
-            (version_id, path, start_line, end_line, source_url, ordinal, chunk_sha, content, vector),
+            (
+                version_id,
+                path,
+                start_line,
+                end_line,
+                source_url,
+                ordinal,
+                chunk_sha,
+                json.dumps(heading_path),
+                json.dumps(symbols),
+                content_type,
+                quality_score,
+                content,
+                vector,
+            ),
         )
 
 
@@ -451,6 +495,10 @@ class DataApiWriter(IndexWriter):
         source_url: str,
         ordinal: int,
         chunk_sha: str,
+        heading_path: list[str],
+        symbols: list[str],
+        content_type: str,
+        quality_score: float,
         content: str,
         embedding: list[float] | None,
     ) -> None:
@@ -462,6 +510,10 @@ class DataApiWriter(IndexWriter):
             nullable_string_param("source_url", source_url or None),
             long_param("ordinal", ordinal),
             string_param("chunk_sha", chunk_sha),
+            string_param("heading_path", json.dumps(heading_path)),
+            string_param("symbols", json.dumps(symbols)),
+            string_param("content_type", content_type),
+            double_param("quality_score", quality_score),
             string_param("content", content),
         ]
         if embedding:
@@ -472,14 +524,24 @@ class DataApiWriter(IndexWriter):
 
         self.execute(
             f"""
-            insert into chunks(version_id, path, start_line, end_line, source_url, ordinal, chunk_sha, content, embedding)
-            values (:version_id, :path, :start_line, :end_line, :source_url, :ordinal, :chunk_sha, :content, {embedding_sql})
+            insert into chunks(
+              version_id, path, start_line, end_line, source_url, ordinal, chunk_sha,
+              heading_path, symbols, content_type, quality_score, content, embedding
+            )
+            values (
+              :version_id, :path, :start_line, :end_line, :source_url, :ordinal, :chunk_sha,
+              (:heading_path)::jsonb, (:symbols)::jsonb, :content_type, :quality_score, :content, {embedding_sql}
+            )
             on conflict (version_id, chunk_sha) do update
               set path = excluded.path,
                   start_line = excluded.start_line,
                   end_line = excluded.end_line,
                   source_url = excluded.source_url,
                   ordinal = excluded.ordinal,
+                  heading_path = excluded.heading_path,
+                  symbols = excluded.symbols,
+                  content_type = excluded.content_type,
+                  quality_score = excluded.quality_score,
                   content = excluded.content,
                   embedding = excluded.embedding
             """,
@@ -507,6 +569,10 @@ def nullable_string_param(name: str, value: str | None) -> dict[str, Any]:
 
 def long_param(name: str, value: int) -> dict[str, Any]:
     return {"name": name, "value": {"longValue": int(value)}}
+
+
+def double_param(name: str, value: float) -> dict[str, Any]:
+    return {"name": name, "value": {"doubleValue": float(value)}}
 
 
 def nullable_long_param(name: str, value: int | None) -> dict[str, Any]:

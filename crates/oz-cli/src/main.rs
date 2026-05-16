@@ -7,7 +7,7 @@ use oz_objects::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -81,7 +81,7 @@ enum Command {
         json: bool,
     },
 
-    /// Search already-pulled docs with a simple local keyword scorer.
+    /// Search already-pulled docs with local metadata-aware ranking.
     Search {
         /// Query text.
         query: String,

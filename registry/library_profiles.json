@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "libraries": [
+    {
+      "library": "openai/openai-node",
+      "allowed_hosts": ["github.com", "raw.githubusercontent.com", "platform.openai.com"],
+      "allowed_paths": ["/openai/openai-node", "/docs"],
+      "denied_paths": [
+        "/",
+        "/features",
+        "/enterprise",
+        "/customer-stories",
+        "/pricing",
+        "/search",
+        "/openai/openai-node/issues",
+        "/openai/openai-node/pulls",
+        "/openai/openai-node/blob",
+        "/openai/openai-node/actions",
+        "/openai/openai-node/activity",
+        "/openai/openai-node/branches",
+        "/openai/openai-node/releases",
+        "/openai/openai-node/security",
+        "/openai/openai-node/watchers",
+        "/openai/openai-node/tags",
+        "/openai/openai-node/forks",
+        "/openai/openai-node/pulse",
+        "/openai/openai-node/tree"
+      ],
+      "preferred_urls": [
+        "https://raw.githubusercontent.com/openai/openai-node/master/README.md",
+        "https://raw.githubusercontent.com/openai/openai-node/master/api.md",
+        "https://raw.githubusercontent.com/openai/openai-node/master/helpers.md"
+      ],
+      "required_topics": ["responses", "streaming", "chat completions", "embeddings", "files", "errors"],
+      "expected_symbols": ["OpenAI", "responses", "chat", "embeddings", "files"],
+      "min_quality_score": 0.3,
+      "min_documents": 1,
+      "max_junk_ratio": 0.35
+    },
+    {
+      "library": "facebook/react",
+      "allowed_hosts": ["react.dev"],
+      "allowed_paths": ["/reference/react", "/learn"],
+      "denied_paths": ["/learn/tutorial"],
+      "preferred_urls": [
+        "https://react.dev/reference/react/useEffect",
+        "https://react.dev/reference/react/useState",
+        "https://react.dev/reference/react/useMemo",
+        "https://react.dev/reference/react/useCallback",
+        "https://react.dev/reference/react/useRef",
+        "https://react.dev/reference/react/createContext",
+        "https://react.dev/reference/react/Suspense"
+      ],
+      "required_topics": ["useEffect", "cleanup", "dependencies", "useState", "useMemo", "useCallback", "useRef"],
+      "expected_symbols": ["useEffect", "useState", "useMemo", "useCallback", "useRef", "Suspense"],
+      "min_quality_score": 0.3,
+      "min_documents": 4,
+      "max_junk_ratio": 0.25
+    },
+    {
+      "library": "prisma/prisma",
+      "allowed_hosts": ["www.prisma.io", "prisma.io"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/customers", "/case-studies", "/pricing", "/enterprise"],
+      "preferred_urls": [
+        "https://www.prisma.io/docs/orm/prisma-schema",
+        "https://www.prisma.io/docs/orm/prisma-client",
+        "https://www.prisma.io/docs/orm/prisma-migrate",
+        "https://www.prisma.io/docs/orm/prisma-schema/data-model/relations"
+      ],
+      "required_topics": ["schema", "client", "migrate", "relation"],
+      "expected_symbols": ["PrismaClient"],
+      "min_quality_score": 0.28,
+      "min_documents": 3,
+      "max_junk_ratio": 0.3
+    },
+    {
+      "library": "stripe/stripe",
+      "allowed_hosts": ["docs.stripe.com"],
+      "allowed_paths": ["/api", "/webhooks", "/checkout", "/payments"],
+      "denied_paths": ["/pricing", "/customers"],
+      "preferred_urls": [
+        "https://docs.stripe.com/api",
+        "https://docs.stripe.com/webhooks",
+        "https://docs.stripe.com/webhooks/signature",
+        "https://docs.stripe.com/api/checkout/sessions"
+      ],
+      "required_topics": ["webhook", "signature", "checkout", "session"],
+      "expected_symbols": ["constructEvent"],
+      "min_quality_score": 0.28,
+      "min_documents": 3,
+      "max_junk_ratio": 0.3
+    },
+    {
+      "library": "vercel/next.js",
+      "allowed_hosts": ["nextjs.org"],
+      "allowed_paths": ["/docs", "/learn"],
+      "denied_paths": ["/showcase", "/blog", "/conf", "/pricing"],
+      "preferred_urls": [
+        "https://nextjs.org/docs/llms-full.txt",
+        "https://nextjs.org/docs/llms.txt",
+        "https://nextjs.org/docs/app/api-reference/functions/next-request",
+        "https://nextjs.org/docs/app/api-reference/functions/next-response",
+        "https://nextjs.org/docs/app/api-reference/functions/cookies",
+        "https://nextjs.org/docs/app/building-your-application/routing/middleware"
+      ],
+      "required_topics": ["NextRequest", "NextResponse", "cookies", "redirect", "middleware"],
+      "expected_symbols": ["NextRequest", "NextResponse", "cookies", "redirect"],
+      "min_quality_score": 0.28,
+      "min_documents": 5,
+      "max_junk_ratio": 0.25
+    },
+    {
+      "library": "tiangolo/fastapi",
+      "allowed_hosts": ["fastapi.tiangolo.com"],
+      "allowed_paths": ["/"],
+      "denied_paths": ["/sponsors", "/newsletter"],
+      "required_topics": ["dependency", "response model", "router", "request"],
+      "expected_symbols": ["FastAPI", "APIRouter", "Depends"],
+      "min_documents": 2
+    },
+    {
+      "library": "expressjs/express",
+      "allowed_hosts": ["expressjs.com"],
+      "allowed_paths": ["/en"],
+      "denied_paths": ["/blog"],
+      "required_topics": ["router", "middleware", "request", "response"],
+      "expected_symbols": ["Router", "Request", "Response"],
+      "min_documents": 1
+    },
+    {
+      "library": "tailwindlabs/tailwindcss",
+      "allowed_hosts": ["tailwindcss.com"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/blog", "/showcase"],
+      "required_topics": ["responsive", "theme", "utility", "class"],
+      "expected_symbols": [],
+      "min_documents": 2
+    },
+    {
+      "library": "honojs/hono",
+      "allowed_hosts": ["hono.dev"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/blog"],
+      "required_topics": ["route", "middleware", "context", "request"],
+      "expected_symbols": ["Hono"],
+      "min_documents": 2
+    },
+    {
+      "library": "django/django",
+      "allowed_hosts": ["docs.djangoproject.com"],
+      "allowed_paths": ["/"],
+      "denied_paths": ["/weblog"],
+      "required_topics": ["model", "view", "middleware", "migration"],
+      "expected_symbols": [],
+      "min_documents": 2
+    },
+    {
+      "library": "vuejs/vue",
+      "allowed_hosts": ["vuejs.org"],
+      "allowed_paths": ["/guide", "/api"],
+      "denied_paths": ["/blog"],
+      "required_topics": ["component", "reactivity", "template"],
+      "expected_symbols": ["ref", "computed", "watch"]
+    },
+    {
+      "library": "sveltejs/svelte",
+      "allowed_hosts": ["svelte.dev"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/blog"],
+      "required_topics": ["state", "component", "runes"],
+      "expected_symbols": ["$state"]
+    },
+    {
+      "library": "supabase/supabase",
+      "allowed_hosts": ["supabase.com"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/customers", "/pricing"],
+      "required_topics": ["auth", "database", "storage"],
+      "expected_symbols": ["createClient"]
+    },
+    {
+      "library": "vercel/sdk",
+      "allowed_hosts": ["vercel.com"],
+      "allowed_paths": ["/docs"],
+      "denied_paths": ["/customers", "/pricing", "/blog"],
+      "required_topics": ["api", "sdk", "deployment"],
+      "expected_symbols": []
+    },
+    {
+      "library": "anthropics/anthropic-sdk-typescript",
+      "allowed_hosts": ["github.com", "raw.githubusercontent.com", "docs.anthropic.com"],
+      "allowed_paths": ["/anthropics/anthropic-sdk-typescript", "/en"],
+      "denied_paths": [
+        "/",
+        "/features",
+        "/pricing",
+        "/search",
+        "/anthropics/anthropic-sdk-typescript/issues",
+        "/anthropics/anthropic-sdk-typescript/pulls",
+        "/anthropics/anthropic-sdk-typescript/blob",
+        "/anthropics/anthropic-sdk-typescript/actions",
+        "/anthropics/anthropic-sdk-typescript/activity",
+        "/anthropics/anthropic-sdk-typescript/branches",
+        "/anthropics/anthropic-sdk-typescript/releases",
+        "/anthropics/anthropic-sdk-typescript/security",
+        "/anthropics/anthropic-sdk-typescript/watchers",
+        "/anthropics/anthropic-sdk-typescript/tags",
+        "/anthropics/anthropic-sdk-typescript/forks",
+        "/anthropics/anthropic-sdk-typescript/pulse",
+        "/anthropics/anthropic-sdk-typescript/tree"
+      ],
+      "preferred_urls": [
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/README.md"
+      ],
+      "required_topics": ["messages", "streaming", "client"],
+      "expected_symbols": ["Anthropic"]
+    }
+  ]
+}

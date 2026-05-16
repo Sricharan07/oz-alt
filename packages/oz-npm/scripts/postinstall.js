@@ -10,13 +10,14 @@ const arch = process.arch;
 const binaryName = platform === "win32" ? "oz.exe" : "oz";
 const vendorDir = join(__dirname, "..", "vendor", `${platform}-${arch}`);
 const destination = join(vendorDir, binaryName);
+const repo = process.env.OZ_REPO || "Sricharan07/oz";
 
 if (existsSync(destination) || process.env.OZ_NPM_SKIP_DOWNLOAD === "1") {
   process.exit(0);
 }
 
 const asset = `oz-${platform}-${arch}${platform === "win32" ? ".exe" : ""}`;
-const url = `https://github.com/oz-docs/oz/releases/download/v${version}/${asset}`;
+const url = `https://github.com/${repo}/releases/download/v${version}/${asset}`;
 
 mkdirSync(vendorDir, { recursive: true });
 const file = createWriteStream(destination, { mode: 0o755 });

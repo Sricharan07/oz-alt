@@ -1,0 +1,11 @@
+{
+  "errors": [],
+  "metrics": {
+    "chunks": 13,
+    "documents": 11,
+    "rejected_documents": 3,
+    "symbols": 1
+  },
+  "passed": true,
+  "warnings": []
+}

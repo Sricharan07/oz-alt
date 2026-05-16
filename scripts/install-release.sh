@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${OZ_REPO:-oz-docs/oz}"
+repo="${OZ_REPO:-Sricharan07/oz}"
 version="${OZ_VERSION:-latest}"
 install_dir="${OZ_INSTALL_DIR:-$HOME/.local/bin}"
 

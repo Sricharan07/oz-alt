@@ -1,0 +1,14 @@
+{
+  "library": "vercel/next.js",
+  "version": "15",
+  "checks": [
+    {
+      "name": "middleware cookies redirect",
+      "query": "NextRequest middleware cookies redirect matcher",
+      "patterns": ["NextRequest", "middleware|proxy", "cookies|cookie", "redirect"],
+      "expected_files": ["api-reference/app/api-reference/functions/next-request.md", "_symbols/NextRequest.md"],
+      "must_include": ["NextRequest", "cookies"],
+      "must_not_include": ["customer story", "contact sales", "try for free"]
+    }
+  ]
+}

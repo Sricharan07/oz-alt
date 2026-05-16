@@ -44,10 +44,10 @@ jobs:
           cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
           (cd dist && shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
           if [[ "${{ matrix.asset }}" == *.exe ]]; then
-            zip -j "dist/${{ matrix.asset }}.zip" "dist/${{ matrix.asset }}" README.md PRD.md
+            zip -j "dist/${{ matrix.asset }}.zip" "dist/${{ matrix.asset }}"
           else
-            cp README.md PRD.md dist/
-            tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist "${{ matrix.asset }}" README.md PRD.md
+            cp "target/release/${{ matrix.binary }}" "dist/oz"
+            tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist oz
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -71,5 +71,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          repository: Sricharan07/oz
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
           files: dist/*
