@@ -1,0 +1,10 @@
+[Unit]
+Description=Oz Postgres backup to S3
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+Environment=OZ_VERIFY_BACKUP_RESTORE=1
+ExecStart=/usr/bin/bash /opt/oz/current/scripts/backup-postgres-to-s3.sh

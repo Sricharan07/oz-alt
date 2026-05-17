@@ -82,10 +82,13 @@ Run a verified backup from the Docker host:
 OZ_VERIFY_BACKUP_RESTORE=1 bash scripts/backup-postgres-to-s3.sh
 ```
 
-Recommended EC2 cron:
+Install the EC2 systemd timer:
 
-```cron
-17 3 * * * cd /opt/oz/current && OZ_VERIFY_BACKUP_RESTORE=1 bash scripts/backup-postgres-to-s3.sh >> /var/log/oz-backup.log 2>&1
+```bash
+sudo cp infra/systemd/oz-backup.service /etc/systemd/system/oz-backup.service
+sudo cp infra/systemd/oz-backup.timer /etc/systemd/system/oz-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now oz-backup.timer
 ```
 
 ## AWS EC2 Production

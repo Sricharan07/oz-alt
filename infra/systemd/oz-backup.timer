@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Oz Postgres backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+Persistent=true
+Unit=oz-backup.service
+
+[Install]
+WantedBy=timers.target
