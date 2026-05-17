@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 from urllib import request
@@ -9,6 +10,8 @@ from oz_api.ranking import local_chunk_score
 from oz_api.retrieval_common import parse_scope
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
+
+LOGGER = logging.getLogger(__name__)
 
 def suggest_from_postgres(
     ctx: RetrievalContext,
@@ -124,7 +127,8 @@ def suggest_from_postgres(
             }
             for row in rows
         ]
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("postgres retrieval failed: %s", exc)
         return None
 
 def search_from_postgres(
@@ -267,7 +271,8 @@ def search_from_postgres(
                 cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
         return score_postgres_rows(rows, query)
-    except Exception:
+    except Exception as exc:
+        LOGGER.info("query embedding failed: %s", exc)
         return None
 
 def embedding_for_query(ctx: RetrievalContext, query: str) -> list[float] | None:
@@ -292,7 +297,8 @@ def embedding_for_query(ctx: RetrievalContext, query: str) -> list[float] | None
         embedding = body["data"][0]["embedding"]
         if isinstance(embedding, list):
             return [float(value) for value in embedding]
-    except Exception:
+    except Exception as exc:
+        LOGGER.info("query embedding failed: %s", exc)
         return None
     return None
 
@@ -339,9 +345,11 @@ def postgres_connection(database_url: str | None) -> Any | None:
         return None
     try:
         import psycopg  # type: ignore
-    except ImportError:
+    except ImportError as exc:
+        LOGGER.warning("psycopg package is unavailable: %s", exc)
         return None
     try:
         return psycopg.connect(database_url)
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("postgres connection failed: %s", exc)
         return None

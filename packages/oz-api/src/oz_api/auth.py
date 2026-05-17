@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -21,8 +22,14 @@ WEB_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 PASSWORD_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
 PASSWORD_MIN_LENGTH = 12
 SESSION_COOKIE = "oz_session"
+PLACEHOLDER_JWT_SECRETS = {
+    "",
+    "local-dev-secret",
+    "local-compose-jwt-secret-change-me",
+}
 
 _JWT_SECRET_CACHE: str | None = None
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,7 @@ def jwt_secret() -> str:
         return _JWT_SECRET_CACHE
     direct_secret = os.environ.get("OZ_JWT_SECRET")
     if direct_secret:
+        validate_jwt_secret(direct_secret)
         _JWT_SECRET_CACHE = direct_secret
         return direct_secret
     secret_arn = os.environ.get("OZ_JWT_SECRET_ARN")
@@ -52,13 +60,21 @@ def jwt_secret() -> str:
             response = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
             _JWT_SECRET_CACHE = str(response.get("SecretString") or "")
             if _JWT_SECRET_CACHE:
+                validate_jwt_secret(_JWT_SECRET_CACHE)
                 return _JWT_SECRET_CACHE
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("failed to load OZ_JWT_SECRET_ARN: %s", exc)
     if production_env():
         raise RuntimeError("OZ_JWT_SECRET or OZ_JWT_SECRET_ARN is required in production")
     _JWT_SECRET_CACHE = os.environ.get("OZ_JWT_SECRET", "local-dev-secret")
     return _JWT_SECRET_CACHE
+
+
+def validate_jwt_secret(secret: str) -> None:
+    if not production_env():
+        return
+    if secret in PLACEHOLDER_JWT_SECRETS or len(secret) < 32:
+        raise RuntimeError("OZ_JWT_SECRET must be a non-placeholder secret with at least 32 characters in production")
 
 
 def authenticate_password(email: str, password: str, *, ip: str = "", user_agent: str = "") -> tuple[str, AuthPrincipal]:
@@ -576,7 +592,7 @@ def token_claims(token: str, *, secret: str | None = None) -> dict[str, Any] | N
         return None
     try:
         payload = json.loads(b64_decode(parts[1]))
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         return None
     if int(payload.get("exp", 0)) <= int(time.time()) or payload.get("iss") != "oz-api":
         return None
@@ -654,7 +670,8 @@ def audit(
                 "metadata": json.dumps(metadata or {}, sort_keys=True),
             },
         )
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning("failed to write auth audit action=%s: %s", action, exc)
         return
 
 

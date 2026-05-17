@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -206,8 +209,8 @@ def s3_client() -> Any | None:
             from botocore.config import Config  # type: ignore
 
             kwargs["config"] = Config(s3={"addressing_style": "path"})
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("failed to configure S3 path-style addressing: %s", exc)
     return boto3.client("s3", **kwargs)
 
 

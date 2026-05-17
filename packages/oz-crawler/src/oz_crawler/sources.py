@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
 
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
-from oz_crawler.security import assert_public_http_url
+from oz_crawler.security import assert_public_http_url, fetch_public_url
 from oz_crawler.splitting import document_path, split_llms_full
 from oz_crawler.text import decode_text_response
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -363,10 +365,10 @@ def fetch_json(url: str):
 def fetch_text(url: str) -> str | None:
     try:
         assert_public_http_url(url)
-        req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
-        with urlopen(req, timeout=20) as response:
-            return decode_text_response(response.read(), response.headers.get("content-type"))
-    except Exception:
+        response = fetch_public_url(url, timeout=20)
+        return decode_text_response(response.body, response.headers.get("content-type"))
+    except Exception as exc:
+        LOGGER.info("optional source fetch failed for %s: %s", url, exc)
         return None
 
 

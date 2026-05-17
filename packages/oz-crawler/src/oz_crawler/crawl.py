@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -9,7 +10,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
@@ -17,12 +17,14 @@ from oz_crawler.chunks import write_chunks
 from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
 from oz_crawler.profiles import LibraryProfile, load_profile, url_allowed_by_profile
 from oz_crawler.quality import QualityResult, score_page
-from oz_crawler.security import assert_public_http_url
+from oz_crawler.security import assert_public_http_url, fetch_public_url, pinned_fetch_required
 from oz_crawler.splitting import assign_page_paths
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
 from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
 from oz_crawler.validation import validate_fixture, write_validation
+
+LOGGER = logging.getLogger(__name__)
 
 try:
     from bs4 import BeautifulSoup
@@ -198,7 +200,7 @@ def crawl_pages_with_scrapling(
     profile: LibraryProfile | None = None,
 ) -> list[CrawledPage] | None:
     assert_public_http_url(url)
-    if options.fetcher.lower() == "stdlib":
+    if options.fetcher.lower() == "stdlib" or pinned_fetch_required():
         return None
     ensure_vendored_scrapling_path()
     try:
@@ -326,7 +328,8 @@ def crawl_pages_with_stdlib(
         seen.add(linked_url)
         try:
             html = fetch_html_stdlib(linked_url)
-        except Exception:
+        except Exception as exc:
+            LOGGER.info("skipping linked crawler URL %s: %s", linked_url, exc)
             continue
         pages.append(CrawledPage(source_url=linked_url, html=html))
     return pages
@@ -338,12 +341,9 @@ def fetch_html(url: str) -> str:
     try:
         from scrapling.fetchers import Fetcher
     except ImportError:
-        req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
-        with urlopen(req, timeout=20) as response:
-            text = decode_text_response(response.read(), response.headers.get("content-type"))
-            if text is None:
-                raise RuntimeError(f"{url} did not return textual documentation")
-            return text
+        return fetch_html_stdlib(url)
+    if pinned_fetch_required():
+        return fetch_html_stdlib(url)
 
     page = Fetcher.get(url, stealthy_headers=True)
     html = extract_html(page)
@@ -364,12 +364,11 @@ def ensure_vendored_scrapling_path() -> None:
 
 def fetch_html_stdlib(url: str) -> str:
     assert_public_http_url(url)
-    req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
-    with urlopen(req, timeout=20) as response:
-        text = decode_text_response(response.read(), response.headers.get("content-type"))
-        if text is None:
-            raise RuntimeError(f"{url} did not return textual documentation")
-        return text
+    response = fetch_public_url(url, timeout=20)
+    text = decode_text_response(response.body, response.headers.get("content-type"))
+    if text is None:
+        raise RuntimeError(f"{url} did not return textual documentation")
+    return text
 
 
 def fetch_text_optional(url: str, *, fetcher: str = "auto") -> str | None:
@@ -377,7 +376,8 @@ def fetch_text_optional(url: str, *, fetcher: str = "auto") -> str | None:
         if fetcher == "stdlib":
             return fetch_html_stdlib(url)
         return fetch_html(url)
-    except Exception:
+    except Exception as exc:
+        LOGGER.info("optional crawler fetch failed for %s: %s", url, exc)
         return None
 
 
@@ -410,7 +410,7 @@ def response_title(response: Any) -> str | None:
     try:
         title = response.css("title::text").get("")
         return str(title) if title else None
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
