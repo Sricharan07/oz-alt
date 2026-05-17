@@ -21,6 +21,7 @@ from oz_api.storage import RegistryStorage
 
 
 PUBLIC_PATHS = {
+    "/",
     "/health",
     "/catalog",
     "/privacy",
