@@ -3,14 +3,26 @@
   "version": "latest",
   "checks": [
     {
-      "name": "schema migrate relation client",
-      "query": "schema migrate relation client",
-      "patterns": ["schema", "migrate|migration", "relation", "PrismaClient|client"],
+      "name": "client relations nested writes",
+      "query": "Prisma Client relations include related records nested writes",
+      "patterns": ["relation", "include", "nested", "PrismaClient|client"],
       "expected_files": [
         "guides/orm/prisma-client.md",
         "guides/orm/prisma-schema/data-model/relations.md"
       ],
       "must_include": ["schema", "client"],
+      "must_not_include": ["testimonial", "customer story"]
+    },
+    {
+      "name": "migrate shadow database",
+      "query": "Prisma Migrate migration history shadow database",
+      "patterns": ["migrate|migration", "shadow database", "migration history"],
+      "expected_files": [
+        "guides/orm/prisma-migrate.md",
+        "guides/orm/prisma-migrate/understanding-prisma-migrate/mental-model.md",
+        "guides/orm/prisma-migrate/understanding-prisma-migrate/migration-histories.md"
+      ],
+      "must_include": ["migration", "shadow"],
       "must_not_include": ["testimonial", "customer story"]
     }
   ]
