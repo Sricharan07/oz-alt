@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::OnceLock;
 
 pub(crate) fn search_docs(
     project_root: &Path,
@@ -286,7 +287,11 @@ fn snippet_at_line(path: &Path, line: usize, max_tokens: usize) -> Result<String
 }
 
 fn approximate_tokens(text: &str) -> usize {
-    text.split_whitespace().count().max(1)
+    static ENCODING: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
+    let encoding = ENCODING.get_or_init(|| {
+        tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available")
+    });
+    encoding.encode_with_special_tokens(text).len().max(1)
 }
 
 fn search_vendor_tree(
@@ -388,7 +393,11 @@ fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) 
     Ok(())
 }
 
-fn collect_symbol_hits(library_root: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -> Result<()> {
+fn collect_symbol_hits(
+    library_root: &Path,
+    terms: &[String],
+    hits: &mut Vec<SearchHit>,
+) -> Result<()> {
     let symbols_dir = library_root.join("_symbols");
     if !symbols_dir.exists() {
         return Ok(());
@@ -428,7 +437,14 @@ fn collect_symbol_hits(library_root: &Path, terms: &[String], hits: &mut Vec<Sea
             path: entry.path().to_path_buf(),
             line: 1,
             score,
-            preview: content.lines().next().unwrap_or_default().trim().chars().take(160).collect(),
+            preview: content
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(160)
+                .collect(),
         });
     }
     Ok(())

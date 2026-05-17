@@ -522,8 +522,12 @@ pub(crate) fn build_packs(project_root: &Path) -> Result<()> {
         else {
             continue;
         };
-        ensure_fixture_quality_passed(entry.path())
-            .with_context(|| format!("fixture {} did not pass quality gates", entry.path().display()))?;
+        ensure_fixture_quality_passed(entry.path()).with_context(|| {
+            format!(
+                "fixture {} did not pass quality gates",
+                entry.path().display()
+            )
+        })?;
         let destination = packs
             .join(&vendor)
             .join(&library)

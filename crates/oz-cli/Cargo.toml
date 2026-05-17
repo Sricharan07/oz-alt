@@ -15,5 +15,6 @@ oz-objects.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tiktoken-rs.workspace = true
 ureq.workspace = true
 walkdir.workspace = true

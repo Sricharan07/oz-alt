@@ -16,6 +16,7 @@ from oz_api.retrieval import RetrievalContext, postgres_connection, vector_liter
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
 from oz_crawler.content_types import block_content_type, classify_content_type
+from oz_crawler.token_counting import token_count
 
 
 @dataclass(frozen=True)
@@ -367,10 +368,6 @@ def valid_embedding(value: Any) -> bool:
 def nullable_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
-
-
-def token_count(text: str) -> int:
-    return max(1, len(text.split()))
 
 
 def slugify(value: str) -> str:

@@ -15,6 +15,62 @@ ERROR_RE = re.compile(r"\b(?:ERR_[A-Z0-9_]+|[A-Z][A-Za-z0-9]*Error|[45]\d{2})\b"
 SYMBOL_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z_$][\w$]*)?\b|\b[a-z_$][\w$]*\([^)]*\)")
 CLI_RE = re.compile(r"(?:^|\s)(?:\$|npx|npm|pnpm|yarn|cargo|pip|uv|docker|kubectl|aws|oz)\s+", re.I)
 CONFIG_RE = re.compile(r"\b(config|configure|yaml|toml|json|env|environment variable|option|setting)\b", re.I)
+API_TERMS = ("api of", "method", "function", "class", "parameter", "signature", "return")
+EXAMPLE_TERMS = ("how do i", "example", "show me", "sample", "snippet", "code")
+SYMBOL_STOPWORDS = {
+    "a",
+    "i",
+    "the",
+    "in",
+    "on",
+    "at",
+    "to",
+    "of",
+    "for",
+    "with",
+    "from",
+    "by",
+    "and",
+    "or",
+    "if",
+    "then",
+    "else",
+    "how",
+    "what",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "is",
+    "are",
+    "was",
+    "were",
+    "do",
+    "does",
+    "did",
+    "can",
+    "should",
+    "could",
+    "would",
+    "will",
+    "use",
+    "using",
+    "read",
+    "write",
+    "set",
+    "get",
+    "create",
+    "make",
+    "add",
+    "remove",
+    "update",
+    "api",
+    "json",
+    "yaml",
+    "http",
+    "https",
+}
 
 
 def classify_query(query: str) -> QueryIntent:
@@ -26,10 +82,14 @@ def classify_query(query: str) -> QueryIntent:
         return QueryIntent("cli", "cli", symbols)
     if CONFIG_RE.search(query):
         return QueryIntent("config", "config", symbols)
-    if symbols or any(token in lowered for token in ("api of", "method", "function", "class", "parameter", "signature", "return")):
+    api_query = any(token in lowered for token in API_TERMS)
+    example_query = any(token in lowered for token in EXAMPLE_TERMS)
+    if symbols and api_query:
         return QueryIntent("api", "api_reference", symbols)
-    if any(token in lowered for token in ("how do i", "example", "show me", "sample", "snippet", "code")):
+    if example_query:
         return QueryIntent("example", "code_example", symbols)
+    if symbols or api_query:
+        return QueryIntent("api", "api_reference", symbols)
     if any(token in lowered for token in ("what is", "explain", "why", "concept", "overview", "guide")):
         return QueryIntent("prose", "prose", symbols)
     return QueryIntent("neutral", "prose", symbols)
@@ -43,10 +103,10 @@ def query_symbols(query: str) -> list[str]:
     symbols: list[str] = []
     for match in SYMBOL_RE.finditer(query):
         value = match.group(0).strip()
-        if value.lower() in {"api", "json", "yaml", "http", "https"}:
-            continue
         if value.endswith("()"):
             value = value[:-2]
+        if len(value) < 2 or value.lower() in SYMBOL_STOPWORDS:
+            continue
         if value and value not in symbols:
             symbols.append(value)
     return symbols[:8]

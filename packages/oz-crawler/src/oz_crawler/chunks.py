@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag
@@ -11,6 +11,7 @@ from urllib.parse import urldefrag
 from oz_crawler.content_types import block_content_type
 from oz_crawler.embeddings import row_with_embedding
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.token_counting import token_count
 
 
 @dataclass(frozen=True)
@@ -79,20 +80,24 @@ def chunk_markdown(
         section_text = "\n\n".join(block[0] for block in section).strip()
         heading_path = next((block[3] for block in reversed(section) if block[3]), [])
         section_type = block_content_type(source_url, section_text, page_type)
-        parent_key = None
         if section_type == "api_reference" and len(section) > 1:
-            parent_key = f"section-{section_idx}-{slugify(' '.join(heading_path) or 'api')}"
-            chunks.append(
-                MarkdownChunk(
-                    text=limit_section_text(section_text, 1800),
-                    heading_path=heading_path,
-                    start_line=section[0][1],
-                    end_line=section[-1][2],
-                    content_type="api_reference",
-                    chunk_key=parent_key,
+            children = chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None)
+            if len(children) > 1:
+                parent_key = f"section-{section_idx}-{slugify(' '.join(heading_path) or 'api')}"
+                chunks.append(
+                    MarkdownChunk(
+                        text=limit_section_text(section_text, 1800),
+                        heading_path=heading_path,
+                        start_line=section[0][1],
+                        end_line=section[-1][2],
+                        content_type="api_reference",
+                        chunk_key=parent_key,
+                    )
                 )
-            )
-        chunks.extend(chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=parent_key))
+                children = [replace(child, parent_key=parent_key) for child in children]
+            chunks.extend(children)
+        else:
+            chunks.extend(chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None))
     return [chunk for chunk in chunks if chunk.text.strip()]
 
 
@@ -264,10 +269,6 @@ def source_anchor(source_url: str, heading_path: list[str], ordinal: int) -> str
     base, _ = urldefrag(source_url)
     heading_slug = slugify(heading_path[-1]) if heading_path else "page"
     return f"{base}#{heading_slug}-_snippet_{ordinal}"
-
-
-def token_count(text: str) -> int:
-    return max(1, len(re.findall(r"\w+|[^\w\s]", text)))
 
 
 def limit_section_text(text: str, max_tokens: int) -> str:

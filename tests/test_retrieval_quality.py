@@ -15,6 +15,7 @@ from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_
 from oz_crawler.chunks import chunk_markdown
 from oz_crawler.content_types import classify_content_type
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
+from oz_crawler.token_counting import token_count
 
 
 class RetrievalQualityTests(unittest.TestCase):
@@ -22,6 +23,11 @@ class RetrievalQualityTests(unittest.TestCase):
         intent = classify_query("NextRequest cookies API parameters")
         self.assertEqual(intent.content_type, "api_reference")
         self.assertIn("NextRequest", intent.symbols)
+
+    def test_intent_classifier_ignores_pronoun_symbols_for_examples(self) -> None:
+        intent = classify_query("how do I read a cookie value")
+        self.assertEqual(intent.content_type, "code_example")
+        self.assertNotIn("I", intent.symbols)
 
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(
@@ -37,6 +43,19 @@ class RetrievalQualityTests(unittest.TestCase):
         chunks = chunk_markdown("# API\n\nUse it:\n\n```ts\nclient.responses.create({})\n```\n", source_url="https://docs.example/api", page_type="api_reference")
         self.assertTrue(any("```ts" in chunk.text and chunk.content_type == "api_reference" for chunk in chunks))
         self.assertTrue(any(chunk.chunk_key or chunk.parent_key for chunk in chunks))
+
+    def test_chunker_skips_duplicate_parent_for_single_api_child(self) -> None:
+        chunks = chunk_markdown(
+            "# NextRequest\n\nReads cookies from the incoming request.",
+            source_url="https://docs.example/api/next-request",
+            page_type="api_reference",
+        )
+
+        self.assertEqual(len([chunk for chunk in chunks if chunk.chunk_key]), 0)
+        self.assertEqual(len([chunk for chunk in chunks if chunk.parent_key]), 0)
+
+    def test_token_counter_uses_tiktoken_encoding(self) -> None:
+        self.assertEqual(token_count("hello world"), 2)
 
     def test_baseline_profile_excludes_legacy_noise(self) -> None:
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])

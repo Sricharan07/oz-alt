@@ -240,13 +240,7 @@ fn read_keychain_refresh_token() -> Result<Option<String>> {
 #[cfg(target_os = "linux")]
 fn read_linux_keychain_secret(service: &str) -> Result<Option<String>> {
     let output = ProcessCommand::new("secret-tool")
-        .args([
-            "lookup",
-            "service",
-            service,
-            "account",
-            KEYCHAIN_ACCOUNT,
-        ])
+        .args(["lookup", "service", service, "account", KEYCHAIN_ACCOUNT])
         .output()
         .context("failed to invoke secret-tool")?;
     if !output.status.success() {
@@ -269,13 +263,7 @@ fn delete_keychain_refresh_token() -> Result<()> {
 #[cfg(target_os = "linux")]
 fn delete_linux_keychain_secret(service: &str) -> Result<()> {
     let _ = ProcessCommand::new("secret-tool")
-        .args([
-            "clear",
-            "service",
-            service,
-            "account",
-            KEYCHAIN_ACCOUNT,
-        ])
+        .args(["clear", "service", service, "account", KEYCHAIN_ACCOUNT])
         .status();
     Ok(())
 }

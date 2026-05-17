@@ -326,7 +326,11 @@ fn verify_pack_manifest_signature(manifest: &PackManifest, label: &str) -> Resul
     let verify_key = env::var("OZ_PACK_VERIFY_KEY")
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| option_env!("OZ_PACK_VERIFY_KEY").map(str::to_string).filter(|value| !value.is_empty()));
+        .or_else(|| {
+            option_env!("OZ_PACK_VERIFY_KEY")
+                .map(str::to_string)
+                .filter(|value| !value.is_empty())
+        });
 
     let Some(signature) = &manifest.signature else {
         if require_signature || verify_key.is_some() {
