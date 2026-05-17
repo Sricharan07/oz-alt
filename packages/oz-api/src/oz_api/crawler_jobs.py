@@ -11,6 +11,7 @@ from oz_api.admin_ops import (
     mark_crawler_job_completed,
     mark_crawler_job_failed,
     mark_crawler_job_started,
+    record_crawler_job_log,
     record_eval_run,
     record_quality_run,
     record_catalog_promotion,
@@ -37,7 +38,14 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
 
     registry_root = Path("/tmp/oz-fixtures")
     write_job_profile(registry_root, vendor, library, job)
+    record_crawler_job_log(
+        job,
+        "info",
+        "profile written",
+        {"vendor": vendor, "library": library, "version": version, "source_url": source_url},
+    )
     mark_crawler_job_started(job)
+    record_crawler_job_log(job, "info", "crawl started", {"max_pages": int(job.get("max_pages") or 0)})
     target = crawl_single_page(
         url=source_url,
         registry_root=registry_root,
@@ -59,6 +67,7 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             fail_on_validation=os.environ.get("OZ_CRAWLER_FAIL_ON_VALIDATION", "1").lower() not in {"0", "false", "no"},
         ),
     )
+    record_crawler_job_log(job, "info", "crawl finished", {"fixture_path": str(target)})
     quality = load_quality_report(target)
     if not quality_gate_passed(quality):
         failed_entry = catalog_entry_for_job(
@@ -71,7 +80,9 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             ref_sha="",
         )
         record_quality_run(failed_entry, job, quality)
+        record_crawler_job_log(job, "error", "quality gate failed", quality_summary(quality))
         raise RuntimeError("quality gate failed; pack was not promoted")
+    record_crawler_job_log(job, "info", "quality gate passed", quality_summary(quality))
     pack_body, manifest = build_pack_bytes(target, vendor, library, version)
     pack_eval = pack_eval_report(manifest)
     if not pack_eval["passed"]:
@@ -84,8 +95,11 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             pack_key="",
             ref_sha=str(manifest["tree_sha256"]),
         ), eval_type="pack_materialization", passed=False, metrics=pack_eval)
+        record_crawler_job_log(job, "error", "pack materialization eval failed", pack_eval)
         raise RuntimeError("pack materialization eval failed; pack was not promoted")
+    record_crawler_job_log(job, "info", "pack built", pack_eval.get("metrics") or {})
     pack_key = storage.put_pack_bytes(vendor, library, version, pack_body)
+    record_crawler_job_log(job, "info", "pack uploaded", {"pack_key": pack_key, "bytes": len(pack_body)})
     catalog_entry = catalog_entry_for_job(
         vendor=vendor,
         library=library,
@@ -96,9 +110,11 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         ref_sha=str(manifest["tree_sha256"]),
     )
     index_catalog_entry(storage, catalog_entry)
+    record_crawler_job_log(job, "info", "catalog indexed", {"ref_sha": catalog_entry["ref_sha"]})
     upsert_catalog_entry(storage, catalog_entry)
     record_eval_run(catalog_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
     record_catalog_promotion(catalog_entry, job, quality)
+    record_crawler_job_log(job, "info", "catalog promoted", {"pack_key": pack_key})
     mark_crawler_job_completed(job, pack_key=pack_key, ref_sha=str(manifest["tree_sha256"]))
 
 
@@ -195,6 +211,15 @@ def load_quality_report(target: Path) -> dict[str, Any]:
 
 def quality_gate_passed(quality: dict[str, Any]) -> bool:
     return bool(quality.get("passed"))
+
+
+def quality_summary(quality: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "passed": bool(quality.get("passed")),
+        "metrics": quality.get("metrics") or {},
+        "errors": quality.get("errors") or [],
+        "warnings": quality.get("warnings") or [],
+    }
 
 
 def pack_eval_report(manifest: dict[str, Any]) -> dict[str, Any]:

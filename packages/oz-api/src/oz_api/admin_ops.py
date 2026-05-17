@@ -266,6 +266,12 @@ def update_crawler_job(
             f"update crawler_jobs set {', '.join(fields)} where id = cast(:job_id as bigint)",
             params,
         )
+        record_crawler_job_log(
+            job,
+            "error" if status == "failed" else "info",
+            f"job marked {status}",
+            {"status": status, "pack_key": pack_key, "ref_sha": ref_sha, "error": error},
+        )
         if status == "completed":
             store.execute(
                 """
@@ -290,6 +296,37 @@ def update_crawler_job(
                 """,
                 {"job_id": job_id},
             )
+    except Exception:
+        return
+
+
+def record_crawler_job_log(
+    job: dict[str, Any],
+    level: str,
+    message: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    job_id = clean(job.get("db_job_id"))
+    if not job_id:
+        return
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    try:
+        store.execute(
+            """
+            insert into crawl_job_logs (job_id, level, message, metadata_json)
+            values (
+              cast(:job_id as bigint), :level, :message, cast(:metadata as jsonb)
+            )
+            """,
+            {
+                "job_id": job_id,
+                "level": level or "info",
+                "message": message[:1000],
+                "metadata": json.dumps(metadata or {}, sort_keys=True),
+            },
+        )
     except Exception:
         return
 
