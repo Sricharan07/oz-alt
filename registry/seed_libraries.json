@@ -8,11 +8,10 @@
   {"vendor": "prisma", "library": "prisma", "version": "latest", "source_url": "https://www.prisma.io/docs"},
   {"vendor": "tailwindlabs", "library": "tailwindcss", "version": "4", "source_url": "https://tailwindcss.com/docs"},
   {"vendor": "tiangolo", "library": "fastapi", "version": "latest", "source_url": "https://fastapi.tiangolo.com/"},
-  {"vendor": "django", "library": "django", "version": "latest", "source_url": "https://docs.djangoproject.com/"},
+  {"vendor": "django", "library": "django", "version": "latest", "source_url": "https://docs.djangoproject.com/en/stable/"},
   {"vendor": "expressjs", "library": "express", "version": "5", "source_url": "https://expressjs.com/en/5x/api.html"},
   {"vendor": "honojs", "library": "hono", "version": "latest", "source_url": "https://hono.dev/docs/"},
   {"vendor": "vercel", "library": "sdk", "version": "latest", "source_url": "https://vercel.com/docs"},
   {"vendor": "openai", "library": "openai-node", "version": "latest", "source_url": "https://github.com/openai/openai-node"},
   {"vendor": "anthropics", "library": "anthropic-sdk-typescript", "version": "latest", "source_url": "https://github.com/anthropics/anthropic-sdk-typescript"}
 ]
-

@@ -115,6 +115,13 @@
       "allowed_hosts": ["fastapi.tiangolo.com"],
       "allowed_paths": ["/"],
       "denied_paths": ["/sponsors", "/newsletter"],
+      "preferred_urls": [
+        "https://fastapi.tiangolo.com/tutorial/dependencies/",
+        "https://fastapi.tiangolo.com/tutorial/response-model/",
+        "https://fastapi.tiangolo.com/tutorial/bigger-applications/",
+        "https://fastapi.tiangolo.com/reference/fastapi/",
+        "https://fastapi.tiangolo.com/reference/apirouter/"
+      ],
       "required_topics": ["dependency", "response model", "router", "request"],
       "expected_symbols": ["FastAPI", "APIRouter", "Depends"],
       "min_documents": 2
@@ -142,6 +149,12 @@
       "allowed_hosts": ["hono.dev"],
       "allowed_paths": ["/docs"],
       "denied_paths": ["/blog"],
+      "preferred_urls": [
+        "https://hono.dev/docs/api/hono",
+        "https://hono.dev/docs/api/context",
+        "https://hono.dev/docs/guides/middleware",
+        "https://hono.dev/docs/guides/routing"
+      ],
       "required_topics": ["route", "middleware", "context", "request"],
       "expected_symbols": ["Hono"],
       "min_documents": 2
@@ -151,6 +164,12 @@
       "allowed_hosts": ["docs.djangoproject.com"],
       "allowed_paths": ["/"],
       "denied_paths": ["/weblog"],
+      "preferred_urls": [
+        "https://docs.djangoproject.com/en/stable/topics/db/models/",
+        "https://docs.djangoproject.com/en/stable/topics/http/views/",
+        "https://docs.djangoproject.com/en/stable/topics/http/middleware/",
+        "https://docs.djangoproject.com/en/stable/topics/migrations/"
+      ],
       "required_topics": ["model", "view", "middleware", "migration"],
       "expected_symbols": [],
       "min_documents": 2
@@ -160,6 +179,13 @@
       "allowed_hosts": ["vuejs.org"],
       "allowed_paths": ["/guide", "/api"],
       "denied_paths": ["/blog"],
+      "preferred_urls": [
+        "https://vuejs.org/guide/essentials/component-basics.html",
+        "https://vuejs.org/guide/essentials/reactivity-fundamentals.html",
+        "https://vuejs.org/guide/essentials/computed.html",
+        "https://vuejs.org/guide/essentials/watchers.html",
+        "https://vuejs.org/api/reactivity-core.html"
+      ],
       "required_topics": ["component", "reactivity", "template"],
       "expected_symbols": ["ref", "computed", "watch"]
     },
@@ -168,6 +194,12 @@
       "allowed_hosts": ["svelte.dev"],
       "allowed_paths": ["/docs"],
       "denied_paths": ["/blog"],
+      "preferred_urls": [
+        "https://svelte.dev/docs/svelte/overview",
+        "https://svelte.dev/docs/svelte/$state",
+        "https://svelte.dev/docs/svelte/basic-markup",
+        "https://svelte.dev/docs/svelte/svelte"
+      ],
       "required_topics": ["state", "component", "runes"],
       "expected_symbols": ["$state"]
     },
