@@ -17,6 +17,7 @@ from oz_crawler.chunks import write_chunks
 from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
 from oz_crawler.profiles import LibraryProfile, load_profile, url_allowed_by_profile
 from oz_crawler.quality import QualityResult, score_page
+from oz_crawler.security import assert_public_http_url
 from oz_crawler.splitting import assign_page_paths
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
@@ -83,6 +84,7 @@ def crawl_single_page(
     options: CrawlOptions | None = None,
 ) -> Path:
     crawl_options = options or CrawlOptions.from_env(max_pages=max_pages)
+    assert_public_http_url(url)
     profile = load_profile(registry_root, vendor, library)
     if crawl_options.require_profile and profile is None:
         raise RuntimeError(f"no library profile found for {vendor}/{library}")
@@ -195,6 +197,7 @@ def crawl_pages_with_scrapling(
     options: CrawlOptions,
     profile: LibraryProfile | None = None,
 ) -> list[CrawledPage] | None:
+    assert_public_http_url(url)
     if options.fetcher.lower() == "stdlib":
         return None
     ensure_vendored_scrapling_path()
@@ -303,6 +306,7 @@ def crawl_pages_with_stdlib(
     options: CrawlOptions,
     profile: LibraryProfile | None = None,
 ) -> list[CrawledPage]:
+    assert_public_http_url(url)
     first_html = fetch_html_stdlib(url)
     pages = [CrawledPage(source_url=url, html=first_html)]
     if options.max_pages <= 1:
@@ -318,6 +322,7 @@ def crawl_pages_with_stdlib(
             break
         if linked_url in seen:
             continue
+        assert_public_http_url(linked_url)
         seen.add(linked_url)
         try:
             html = fetch_html_stdlib(linked_url)
@@ -328,6 +333,7 @@ def crawl_pages_with_stdlib(
 
 
 def fetch_html(url: str) -> str:
+    assert_public_http_url(url)
     ensure_vendored_scrapling_path()
     try:
         from scrapling.fetchers import Fetcher
@@ -357,6 +363,7 @@ def ensure_vendored_scrapling_path() -> None:
 
 
 def fetch_html_stdlib(url: str) -> str:
+    assert_public_http_url(url)
     req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
     with urlopen(req, timeout=20) as response:
         text = decode_text_response(response.read(), response.headers.get("content-type"))
@@ -447,6 +454,7 @@ def candidate_doc_links(
         link
         for link in dedupe(links)
         if is_crawlable_doc_url(link, parsed_seed.netloc)
+        and public_crawl_target(link)
         and url_allowed_by_profile(link, profile)
         and same_site_or_subdomain(link, parsed_seed.netloc)
         and link != current_url
@@ -527,6 +535,14 @@ def same_site_or_subdomain(url: str, netloc: str) -> bool:
     except ValueError:
         return False
     return host == netloc or host.endswith(f".{netloc}")
+
+
+def public_crawl_target(url: str) -> bool:
+    try:
+        assert_public_http_url(url)
+    except ValueError:
+        return False
+    return True
 
 
 def doc_url_score(url: str) -> int:

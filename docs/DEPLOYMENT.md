@@ -91,6 +91,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now oz-backup.timer
 ```
 
+## Enterprise Readiness Checks
+
+Run these before inviting a larger beta group:
+
+```bash
+python3 scripts/security-smoke.py
+python3 scripts/eval-search-quality.py --repo-root . --record-db
+python3 scripts/enterprise-checks.py --api-url https://api.tryoz.dev --require-search-quality
+```
+
+The same commands can run inside the production API container with `/app` as
+the repo root. Results are recorded in Postgres and visible in the admin panel
+under system checks, search quality runs, crawl logs, quality runs, eval runs,
+pack builds, and backup runs. See `docs/ENTERPRISE_READINESS.md` for the full
+operator checklist.
+
 ## AWS EC2 Production
 
 The current production AWS shape is one Docker host plus S3:

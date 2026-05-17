@@ -58,10 +58,11 @@ pages. It does not expose private indexing, team spaces, API keys, MCP, or chat.
 The admin panel is the catalog control plane. Admins create library profiles,
 approve index requests, queue crawls/recrawls, maintain freshness policies, and
 inspect users, usage, telemetry, auth audit logs, admin action logs, crawler
-jobs, catalog health, quality runs, and promotion history. Admin mutations use
-the same first-party session and CSRF checks as the dashboard. Crawler jobs
-write start/completion/failure state back to Postgres, and successful jobs
-create catalog promotion, quality, and pack build records.
+jobs, crawl step logs, catalog health, search quality runs, quality runs,
+system checks, backup runs, and promotion history. Admin mutations use the same
+first-party session and CSRF checks as the dashboard. Crawler jobs write
+start/completion/failure state and step logs back to Postgres, and successful
+jobs create catalog promotion, quality, eval, and pack build records.
 
 ## Crawler
 
@@ -82,7 +83,7 @@ Embeddings are SHA-cached and generated only when `OPENAI_API_KEY` is present.
 
 Each chunk has a deterministic `chunk_sha` derived from vendor, library, version, path, ordinal, and text. The indexer also computes the same value for older chunk files that do not contain it, so Postgres chunk upserts cannot collapse unrelated chunks into one empty hash.
 
-In the worker, each successful crawl is packed, uploaded to S3-compatible object storage, upserted into `catalog.json`, recorded as a promotion, and indexed into Postgres. Scheduled recrawls use freshness policies first and fall back to seed libraries only when explicitly enabled. Production crawls require a library profile and fail before promotion when quality gates fail. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against `OZ_DATABASE_URL` or `DATABASE_URL`.
+In the worker, each successful crawl is packed, uploaded to S3-compatible object storage, upserted into `catalog.json`, recorded as a promotion, and indexed into Postgres. Scheduled recrawls use freshness policies first and fall back to seed libraries only when explicitly enabled. Production crawls require a library profile and fail before promotion when quality gates fail. Crawler fetches pass a network safety gate before any HTTP request; unless `OZ_CRAWLER_ALLOW_PRIVATE_NETWORKS=1` is set for a local test, URLs resolving to loopback, private, link-local, multicast, reserved, or unspecified addresses are rejected to prevent SSRF against instance metadata or internal services. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against `OZ_DATABASE_URL` or `DATABASE_URL`.
 
 ## Agent Contract
 

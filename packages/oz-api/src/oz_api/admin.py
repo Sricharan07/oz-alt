@@ -32,8 +32,11 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
     profile_rows = "\n".join(render_profile_row(row) for row in snapshot["library_profiles"][:100])
     quality_rows = "\n".join(render_quality_row(row) for row in snapshot["quality_runs"][:50])
     eval_rows = "\n".join(render_eval_row(row) for row in snapshot["eval_runs"][:50])
+    search_quality_rows = "\n".join(render_search_quality_row(row) for row in snapshot["search_quality_runs"][:50])
     pack_rows = "\n".join(render_pack_row(row) for row in snapshot["pack_builds"][:50])
     backup_rows = "\n".join(render_backup_row(row) for row in snapshot["backup_runs"][:50])
+    crawl_log_rows = "\n".join(render_crawl_log_row(row) for row in snapshot["crawl_job_logs"][:80])
+    system_check_rows = "\n".join(render_system_check_row(row) for row in snapshot["system_checks"][:50])
     return f"""<!doctype html>
 <html>
 <head>
@@ -67,7 +70,10 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <div class="metric">Crawler jobs: {len(crawler_jobs)}</div>
   <div class="metric">Quality runs: {len(snapshot["quality_runs"])}</div>
   <div class="metric">Eval runs: {len(snapshot["eval_runs"])}</div>
+  <div class="metric">Search quality: {len(snapshot["search_quality_runs"])}</div>
   <div class="metric">Backups: {len(snapshot["backup_runs"])}</div>
+  <h2>System Checks</h2>
+  <table><thead><tr><th>Check</th><th>Status</th><th>Message</th><th>Metadata</th><th>Created</th></tr></thead><tbody>{system_check_rows}</tbody></table>
   <h2>Operations</h2>
   <div class="grid">
     <form class="panel" method="post" action="/admin/enqueue-crawl">
@@ -143,6 +149,8 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <table><thead><tr><th>Library</th><th>Version</th><th>Passed</th><th>Metrics</th><th>Created</th></tr></thead><tbody>{quality_rows}</tbody></table>
   <h2>Eval Runs</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Type</th><th>Passed</th><th>Metrics</th><th>Created</th></tr></thead><tbody>{eval_rows}</tbody></table>
+  <h2>Search Quality Runs</h2>
+  <table><thead><tr><th>Library</th><th>Version</th><th>Passed</th><th>P@1</th><th>P@5</th><th>MRR</th><th>Materialized</th><th>Zero</th><th>Junk</th><th>Created</th></tr></thead><tbody>{search_quality_rows}</tbody></table>
   <h2>Pack Builds</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Pack SHA</th><th>Key</th><th>Bytes</th><th>Created</th></tr></thead><tbody>{pack_rows}</tbody></table>
   <h2>Backup Runs</h2>
@@ -151,6 +159,8 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <table><thead><tr><th>Query length</th><th>Count</th></tr></thead><tbody>{zero_result_rows}</tbody></table>
   <h2>Crawler Jobs</h2>
   <table><thead><tr><th>Library</th><th>Status</th><th>Version</th><th>Source</th><th>Queued</th><th>Finished</th><th>Error</th></tr></thead><tbody>{job_rows}</tbody></table>
+  <h2>Crawl Logs</h2>
+  <table><thead><tr><th>Job</th><th>Level</th><th>Message</th><th>Metadata</th><th>Created</th></tr></thead><tbody>{crawl_log_rows}</tbody></table>
   <h2>Admin Actions</h2>
   <table><thead><tr><th>User</th><th>Action</th><th>Target</th><th>Created</th></tr></thead><tbody>{admin_action_rows}</tbody></table>
   <h2>Queues</h2>
@@ -273,6 +283,18 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             limit 200
             """
         ),
+        "search_quality_runs": db_rows(
+            """
+            select v.name as vendor, l.name as library, s.version, s.passed,
+                   s.precision_at_1, s.precision_at_5, s.mrr, s.materialization_rate,
+                   s.zero_result_rate, s.junk_top5_rate, s.created_at::text as created_at
+            from search_quality_runs s
+            join libraries l on l.id = s.library_id
+            join vendors v on v.id = l.vendor_id
+            order by s.created_at desc
+            limit 200
+            """
+        ),
         "pack_builds": db_rows(
             """
             select v.name as vendor, l.name as library, p.version, p.pack_sha, p.pack_key,
@@ -290,6 +312,22 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
                    restore_verified_at::text as restore_verified_at, last_error
             from backup_runs
             order by started_at desc
+            limit 200
+            """
+        ),
+        "crawl_job_logs": db_rows(
+            """
+            select c.job_id, c.level, c.message, c.metadata_json, c.created_at::text as created_at
+            from crawl_job_logs c
+            order by c.created_at desc
+            limit 300
+            """
+        ),
+        "system_checks": db_rows(
+            """
+            select check_name, status, message, metadata_json, created_at::text as created_at
+            from system_checks
+            order by created_at desc
             limit 200
             """
         ),
@@ -568,6 +606,17 @@ def render_eval_row(row: dict[str, Any]) -> str:
     )
 
 
+def render_search_quality_row(row: dict[str, Any]) -> str:
+    library = f"{row.get('vendor')}/{row.get('library')}"
+    return (
+        f"<tr><td>{esc(library)}</td><td>{esc(row.get('version'))}</td>"
+        f"<td>{esc(row.get('passed'))}</td><td>{esc(row.get('precision_at_1'))}</td>"
+        f"<td>{esc(row.get('precision_at_5'))}</td><td>{esc(row.get('mrr'))}</td>"
+        f"<td>{esc(row.get('materialization_rate'))}</td><td>{esc(row.get('zero_result_rate'))}</td>"
+        f"<td>{esc(row.get('junk_top5_rate'))}</td><td>{esc(row.get('created_at'))}</td></tr>"
+    )
+
+
 def render_pack_row(row: dict[str, Any]) -> str:
     library = f"{row.get('vendor')}/{row.get('library')}"
     sha = str(row.get("pack_sha") or "")
@@ -585,6 +634,22 @@ def render_backup_row(row: dict[str, Any]) -> str:
         f"<td>{esc(row.get('byte_size'))}</td><td>{esc(sha[:12])}</td>"
         f"<td>{esc(row.get('started_at'))}</td><td>{esc(row.get('restore_verified_at'))}</td>"
         f"<td>{esc(row.get('last_error'))}</td></tr>"
+    )
+
+
+def render_crawl_log_row(row: dict[str, Any]) -> str:
+    return (
+        f"<tr><td>{esc(row.get('job_id'))}</td><td>{esc(row.get('level'))}</td>"
+        f"<td>{esc(row.get('message'))}</td><td>{esc(compact_json(row.get('metadata_json')))}</td>"
+        f"<td>{esc(row.get('created_at'))}</td></tr>"
+    )
+
+
+def render_system_check_row(row: dict[str, Any]) -> str:
+    return (
+        f"<tr><td>{esc(row.get('check_name'))}</td><td>{esc(row.get('status'))}</td>"
+        f"<td>{esc(row.get('message'))}</td><td>{esc(compact_json(row.get('metadata_json')))}</td>"
+        f"<td>{esc(row.get('created_at'))}</td></tr>"
     )
 
 

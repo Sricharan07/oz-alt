@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
+from oz_crawler.security import assert_public_http_url
 from oz_crawler.splitting import document_path, split_llms_full
 from oz_crawler.text import decode_text_response
 
@@ -361,6 +362,7 @@ def fetch_json(url: str):
 
 def fetch_text(url: str) -> str | None:
     try:
+        assert_public_http_url(url)
         req = Request(url, headers={"User-Agent": "oz-crawler/0.1"})
         with urlopen(req, timeout=20) as response:
             return decode_text_response(response.read(), response.headers.get("content-type"))

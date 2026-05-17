@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate oz search expected-file quality.")
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--api-url", default="")
+    parser.add_argument("--record-db", action="store_true", help="Record results in search_quality_runs when DB env is set.")
     parser.add_argument("evals", nargs="*", default=["registry/evals/*.yaml"])
     args = parser.parse_args()
 
@@ -33,6 +35,8 @@ def main() -> int:
             run([str(oz), "login", "--api-url", args.api_url], cwd=tmp_project, env=env)
         run([str(oz), "init"], cwd=tmp_project, env=env)
         result = evaluate_search(tmp_project, oz, env, eval_files)
+        if args.record_db:
+            record_db_results(result)
     finally:
         shutil.rmtree(tmp_home, ignore_errors=True)
         shutil.rmtree(tmp_project, ignore_errors=True)
@@ -45,6 +49,9 @@ def evaluate_search(project: Path, oz: Path, env: dict[str, str], eval_files: li
     precision_hits = 0
     precision_total = 0
     materialized = 0
+    reciprocal_sum = 0.0
+    top1_hits = 0
+    zero_results = 0
     for eval_file in eval_files:
         spec = json.loads(eval_file.read_text(encoding="utf-8"))
         library = spec["library"]
@@ -61,16 +68,23 @@ def evaluate_search(project: Path, oz: Path, env: dict[str, str], eval_files: li
             results = data.get("results", [])
             top = results[:5]
             expected = [str(item) for item in check.get("expected_files", [])]
-            expected_hit = any(
-                any(str(row.get("path", "")).endswith(item) for item in expected)
-                for row in top
-            )
+            paths = [str(row.get("path", "")) for row in top]
+            hit_ranks = [idx + 1 for idx, path in enumerate(paths) if any(path.endswith(item) for item in expected)]
+            expected_hit = bool(hit_ranks)
+            if hit_ranks:
+                reciprocal_sum += 1.0 / hit_ranks[0]
+                top1_hits += int(hit_ranks[0] == 1)
+            else:
+                zero_results += int(not results)
             existing_count = sum(1 for row in top if (project / str(row.get("path", ""))).exists())
             rows.append(
                 {
                     "library": library,
+                    "version": str(version or "latest"),
                     "name": check.get("name", check["query"]),
                     "results": len(results),
+                    "paths": paths,
+                    "expected_files": expected,
                     "expected_file_hit": expected_hit,
                     "materialized_top5": f"{existing_count}/{len(top)}",
                     "first_path": str(top[0].get("path", "")) if top else "",
@@ -83,12 +97,39 @@ def evaluate_search(project: Path, oz: Path, env: dict[str, str], eval_files: li
             vendor_root(project, library, version)
     precision = precision_hits / precision_total if precision_total else 0.0
     materialization = materialized / precision_total if precision_total else 0.0
+    top1 = top1_hits / precision_total if precision_total else 0.0
+    mrr = reciprocal_sum / precision_total if precision_total else 0.0
+    zero_rate = zero_results / precision_total if precision_total else 0.0
     return {
-        "passed": precision >= 0.7 and materialization == 1.0,
+        "passed": precision >= 0.75 and materialization == 1.0,
+        "precision_at_1": round(top1, 3),
         "expected_file_precision_at_5": round(precision, 3),
+        "mrr": round(mrr, 3),
         "materialization_rate": round(materialization, 3),
+        "zero_result_rate": round(zero_rate, 3),
         "checks": rows,
     }
+
+
+def record_db_results(result: dict[str, Any]) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    sys_path = str(repo / "packages" / "oz-api" / "src")
+    if sys_path not in sys.path:
+        sys.path.insert(0, sys_path)
+    from oz_api.ops import record_search_quality_run  # noqa: PLC0415
+
+    by_library: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for check in result.get("checks", []):
+        if isinstance(check, dict):
+            by_library.setdefault(
+                (str(check.get("library") or ""), str(check.get("version") or "latest")),
+                [],
+            ).append(check)
+    for (library, version), checks in by_library.items():
+        if not library:
+            continue
+        subset = {**result, "checks": checks}
+        record_search_quality_run(library, version, subset)
 
 
 def expand_eval_files(repo: Path, patterns: list[str]) -> list[Path]:

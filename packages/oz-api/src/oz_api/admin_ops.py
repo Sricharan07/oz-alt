@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -365,6 +366,7 @@ def record_pack_build(entry: dict[str, Any], job: dict[str, Any]) -> None:
         raise RuntimeError("DATABASE_URL or OZ_DATABASE_URL is required")
     pack_key = clean(entry.get("pack_path"))
     pack_sha = clean(entry.get("ref_sha"))
+    signature_key_id = clean(job.get("signing_key_id")) or os.environ.get("OZ_PACK_SIGNING_KEY_ID", "")
     if not pack_key or not pack_sha:
         raise RuntimeError("pack_key and ref_sha are required before recording pack build")
     store.execute(
@@ -384,7 +386,7 @@ def record_pack_build(entry: dict[str, Any], job: dict[str, Any]) -> None:
             "version": clean(entry.get("version")) or "latest",
             "pack_sha": pack_sha,
             "pack_key": pack_key,
-            "signature_key_id": clean(job.get("signing_key_id")) or None,
+            "signature_key_id": clean(signature_key_id) or None,
         },
     )
 
