@@ -17,6 +17,8 @@ def main() -> int:
     parser.add_argument("--min-precision-at-5", type=float, default=0.75)
     parser.add_argument("--max-junk-top5-rate", type=float, default=0.0)
     parser.add_argument("--max-duplicate-top5-rate", type=float, default=0.0)
+    parser.add_argument("--jury", action="store_true", help="Use the configured LLM judge for c7score-style scoring.")
+    parser.add_argument("--min-jury-score", type=float, default=0.75)
     parser.add_argument("evals", nargs="*", default=["registry/evals/*.yaml"])
     args = parser.parse_args()
 
@@ -38,6 +40,8 @@ def main() -> int:
         min_precision_at_5=args.min_precision_at_5,
         max_junk_top5_rate=args.max_junk_top5_rate,
         max_duplicate_top5_rate=args.max_duplicate_top5_rate,
+        jury=args.jury,
+        min_jury_score=args.min_jury_score,
     )
     if args.record_db:
         record_db_results(repo, result)
@@ -56,7 +60,11 @@ def evaluate(
     min_precision_at_5: float,
     max_junk_top5_rate: float,
     max_duplicate_top5_rate: float,
+    jury: bool,
+    min_jury_score: float,
 ) -> dict[str, Any]:
+    from oz_api.jury import judge_search_check  # noqa: PLC0415
+
     checks: list[dict[str, Any]] = []
     expected_hits = 0
     materialized_hits = 0
@@ -67,6 +75,7 @@ def evaluate(
     top1_hits = 0
     zero_results = 0
     content_failures = 0
+    jury_scores: list[float] = []
     total = 0
     for eval_file in eval_files:
         spec = json.loads(eval_file.read_text(encoding="utf-8"))
@@ -88,6 +97,9 @@ def evaluate(
             duplicate = len(paths) != len(set(paths))
             duplicate_failures += int(duplicate)
             contents = [read_result_content(fixture, path) for path in paths]
+            jury_result = judge_search_check(check, paths, [content or "" for content in contents]) if jury else {}
+            if jury_result:
+                jury_scores.append(float(jury_result.get("score") or 0))
             existing_count = sum(1 for content in contents if content is not None)
             materialized_hits += int(existing_count == len(top))
             required = [str(item).lower() for item in check.get("must_include", [])]
@@ -112,6 +124,7 @@ def evaluate(
                     "required_content_hit": content_ok,
                     "materialized_top5": f"{existing_count}/{len(top)}",
                     "top_rerank_scores": [row.get("rerank_score") for row in top[:5]],
+                    "jury": jury_result,
                 }
             )
     precision_at_5 = expected_hits / total if total else 0.0
@@ -119,6 +132,7 @@ def evaluate(
     duplicate_rate = duplicate_failures / total if total else 0.0
     junk_rate = junk_failures / max(junk_checks, 1)
     content_rate = 1 - (content_failures / total if total else 0.0)
+    jury_score = sum(jury_scores) / len(jury_scores) if jury_scores else 0.0
     passed = (
         precision_at_5 >= min_recall_at_5
         and precision_at_5 >= min_precision_at_5
@@ -126,6 +140,7 @@ def evaluate(
         and duplicate_rate <= max_duplicate_top5_rate
         and junk_rate <= max_junk_top5_rate
         and content_rate == 1.0
+        and (not jury or jury_score >= min_jury_score)
     )
     return {
         "passed": passed,
@@ -138,6 +153,7 @@ def evaluate(
         "junk_top5_rate": round(junk_rate, 3),
         "duplicate_top5_rate": round(duplicate_rate, 3),
         "content_requirement_rate": round(content_rate, 3),
+        "jury_score": round(jury_score, 3) if jury else None,
         "checks": checks,
     }
 

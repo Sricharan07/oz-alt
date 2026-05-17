@@ -4,15 +4,18 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urldefrag
 
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embeddings import embedding_model as configured_embedding_model
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
+from oz_crawler.content_types import block_content_type, classify_content_type
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,7 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
         writer.delete_stale_chunks(version_id, current_chunk_shas)
         writer.resolve_parent_chunks(version_id)
         writer.rebuild_dedupe_clusters(version_id)
+        writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
 
 
 def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -122,7 +126,7 @@ def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str
                 append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
     for row in symbol_chunk_rows(fixture):
         append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
-    return rows
+    return add_parent_chunks(entry, fixture, [enrich_chunk_row(entry, row) for row in rows])
 
 
 def append_unique_chunk_row(
@@ -138,6 +142,124 @@ def append_unique_chunk_row(
         return
     seen_chunk_shas.add(chunk_sha)
     rows.append(row)
+
+
+def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    path = str(enriched.get("path") or "README.md")
+    text = str(enriched.get("text") or "")
+    source_url = str(enriched.get("source_url") or "")
+    enriched["path"] = path
+    enriched["source_url"] = source_url
+    enriched["chunk_key"] = str(enriched.get("chunk_key") or enriched.get("id") or f"{path}#{enriched.get('ordinal') or 1}")
+    enriched["content_type"] = canonical_content_type(path, source_url, text, str(enriched.get("content_type") or ""))
+    enriched["token_count"] = int(enriched.get("token_count") or token_count(text))
+    enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
+    return enriched
+
+
+def canonical_content_type(path: str, source_url: str, text: str, existing: str) -> str:
+    normalized = existing.strip().lower()
+    if path.startswith("_symbols/") or "/api-reference/" in f"/{path}":
+        return "api_reference"
+    inferred_page = classify_content_type(source_url or path, text)
+    inferred_block = block_content_type(source_url or path, text, inferred_page)
+    if normalized in {"api_reference", "code_example", "config", "cli", "error_ref"}:
+        return normalized
+    if inferred_block in {"api_reference", "code_example", "config", "cli", "error_ref"}:
+        return inferred_block
+    if normalized in {"prose", "guide"}:
+        return "prose" if inferred_page == "prose" else inferred_page
+    return inferred_page if inferred_page != "index" else "prose"
+
+
+def source_anchor_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
+    path = str(row.get("path") or "README.md")
+    source_url = str(row.get("source_url") or "").strip()
+    if source_url:
+        base, _ = urldefrag(source_url)
+    else:
+        base = f"oz://{entry.get('vendor')}/{entry.get('library')}/{entry.get('version')}/{path}"
+    headings = list_of_strings(row.get("heading_path"))
+    label = headings[-1] if headings else Path(path).stem
+    ordinal = int(row.get("ordinal") or 1)
+    return f"{base}#{slugify(label)}-_snippet_{ordinal}"
+
+
+def add_parent_chunks(entry: dict[str, Any], fixture: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = list(rows)
+    existing_keys = {str(row.get("chunk_key") or "") for row in output}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in output:
+        if row.get("content_type") == "api_reference" and not str(row.get("path") or "").startswith("_symbols/"):
+            groups.setdefault(str(row.get("path") or "README.md"), []).append(row)
+    for path, children in sorted(groups.items()):
+        parent_key = f"{path}#parent-api-reference"
+        for child in children:
+            if str(child.get("chunk_key") or "") != parent_key:
+                child["parent_chunk_key"] = child.get("parent_chunk_key") or parent_key
+        if parent_key in existing_keys:
+            continue
+        parent = parent_chunk_row(entry, fixture, path, parent_key, children)
+        existing_keys.add(parent_key)
+        output.append(parent)
+    return output
+
+
+def parent_chunk_row(
+    entry: dict[str, Any],
+    fixture: Path,
+    path: str,
+    parent_key: str,
+    children: list[dict[str, Any]],
+) -> dict[str, Any]:
+    content = parent_content(fixture, path, children)
+    source_url = first_non_empty(str(row.get("source_url") or "") for row in children)
+    headings = list_of_strings(children[0].get("heading_path")) if children else [Path(path).stem]
+    symbols = sorted({symbol for row in children for symbol in list_of_strings(row.get("symbols"))})
+    end_lines = [int(row.get("end_line") or 0) for row in children if int(row.get("end_line") or 0) > 0]
+    row = {
+        "id": parent_key,
+        "path": path,
+        "source_url": source_url,
+        "ordinal": 0,
+        "chunk_key": parent_key,
+        "start_line": min(int(row.get("start_line") or 1) for row in children) if children else 1,
+        "end_line": max(end_lines) if end_lines else None,
+        "heading_path": headings,
+        "symbols": symbols,
+        "content_type": "api_reference",
+        "quality_score": max(float(row.get("quality_score") or 1.0) for row in children) if children else 1.0,
+        "token_count": token_count(content),
+        "text": content,
+    }
+    row["source_anchor"] = source_anchor_for_row(entry, row)
+    return row
+
+
+def parent_content(fixture: Path, path: str, children: list[dict[str, Any]]) -> str:
+    source_path = fixture / path
+    if source_path.exists() and source_path.is_file():
+        text = source_path.read_text(encoding="utf-8", errors="replace").strip()
+        if text:
+            return limit_tokens(text, 1800)
+    joined = "\n\n".join(str(row.get("text") or "").strip() for row in children if str(row.get("text") or "").strip())
+    return limit_tokens(joined, 1800)
+
+
+def limit_tokens(text: str, max_tokens: int) -> str:
+    words = re.findall(r"\S+", text)
+    if len(words) <= max_tokens:
+        return text
+    return " ".join(words[:max_tokens]).strip()
+
+
+def first_non_empty(values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def symbol_chunk_rows(fixture: Path) -> list[dict[str, Any]]:
@@ -251,6 +373,50 @@ def token_count(text: str) -> int:
     return max(1, len(text.split()))
 
 
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:120] or "snippet"
+
+
+def benchmark_score_for_fixture(fixture: Path, rows: list[dict[str, Any]]) -> float:
+    quality = quality_report(fixture)
+    if quality:
+        return benchmark_from_quality(quality, rows)
+    content_types = {str(row.get("content_type") or "") for row in rows}
+    score = 0.45
+    score += min(len(rows), 80) / 80 * 0.25
+    score += min(len([row for row in rows if row.get("content_type") == "api_reference"]), 20) / 20 * 0.12
+    score += min(len(content_types), 6) / 6 * 0.12
+    score += 0.06 if any(str(row.get("path") or "").startswith("_symbols/") for row in rows) else 0
+    return clamp_score(score)
+
+
+def quality_report(fixture: Path) -> dict[str, Any]:
+    path = fixture / "_quality.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def benchmark_from_quality(quality: dict[str, Any], rows: list[dict[str, Any]]) -> float:
+    metrics = quality.get("metrics") if isinstance(quality.get("metrics"), dict) else {}
+    score = 0.35
+    score += 0.25 if quality.get("passed") else 0
+    score += min(float(metrics.get("required_topic_coverage") or metrics.get("topic_coverage") or 0), 1) * 0.15
+    score += min(float(metrics.get("required_symbol_coverage") or metrics.get("symbol_coverage") or 0), 1) * 0.15
+    score += min(float(metrics.get("accepted_pages") or len(rows)), 80) / 80 * 0.06
+    score += min(len({str(row.get("content_type") or "") for row in rows}), 6) / 6 * 0.04
+    return clamp_score(score)
+
+
+def clamp_score(value: float) -> float:
+    return round(max(0.0, min(float(value), 1.0)), 4)
+
+
 def require_embeddings() -> bool:
     return os.environ.get("OZ_REQUIRE_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes"}
 
@@ -328,6 +494,9 @@ class IndexWriter:
         raise NotImplementedError
 
     def rebuild_dedupe_clusters(self, version_id: int) -> None:
+        raise NotImplementedError
+
+    def set_benchmark_score(self, version_id: int, score: float) -> None:
         raise NotImplementedError
 
     def upsert_chunk(
@@ -578,6 +747,12 @@ class PostgresWriter(IndexWriter):
               )
             """,
             (version_id, version_id, version_id),
+        )
+
+    def set_benchmark_score(self, version_id: int, score: float) -> None:
+        self.execute(
+            "update library_versions set benchmark_score = %s where id = %s",
+            (clamp_score(score), version_id),
         )
 
     def upsert_chunk(

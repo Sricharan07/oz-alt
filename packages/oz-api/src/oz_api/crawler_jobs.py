@@ -18,6 +18,7 @@ from oz_api.admin_ops import (
 )
 from oz_api.auth_store import AuthStore
 from oz_api.indexer import PostgresWriter, write_catalog_and_chunks
+from oz_api.jury import judge_search_check, jury_required, jury_requested
 from oz_api.queue import enqueue_crawler_job
 from oz_api.retrieval import RetrievalContext, postgres_connection
 from oz_api.retrieval_local import search_from_fixtures
@@ -273,6 +274,8 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
     junk_failures = 0
     duplicate_failures = 0
     content_failures = 0
+    jury_scores: list[float] = []
+    use_jury = jury_requested() or jury_required()
     for check in spec.get("checks", []):
         query = str(check.get("query") or "")
         expected = [str(item) for item in check.get("expected_files", [])]
@@ -282,6 +285,15 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
         paths = [str(row.get("path") or "") for row in rows]
         ranks = [idx + 1 for idx, path in enumerate(paths) if any(path.endswith(item) for item in expected)]
         contents = fixture_result_contents(storage, paths)
+        jury_result: dict[str, Any] = {}
+        if use_jury:
+            try:
+                jury_result = judge_search_check(check, paths, contents)
+                jury_scores.append(float(jury_result.get("score") or 0))
+            except Exception as exc:
+                if jury_required():
+                    raise RuntimeError(f"jury search eval failed: {exc}") from exc
+                jury_result = {"error": str(exc)[:500]}
         joined = "\n".join(contents).lower()
         junk_hit = any(term in content.lower() for term in banned for content in contents)
         content_hit = all(term in joined for term in required)
@@ -303,6 +315,7 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
                 "junk_top5": junk_hit,
                 "duplicate_top5": duplicate_hit,
                 "required_content_hit": content_hit,
+                "jury": jury_result,
             }
         )
     total = len(checks)
@@ -311,7 +324,15 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
     junk_rate = junk_failures / total if total else 0.0
     duplicate_rate = duplicate_failures / total if total else 0.0
     content_rate = 1 - (content_failures / total if total else 0.0)
-    passed = recall >= 0.85 and materialized == 1.0 and junk_rate == 0 and duplicate_rate == 0 and content_rate == 1.0
+    jury_score = sum(jury_scores) / len(jury_scores) if jury_scores else 0.0
+    passed = (
+        recall >= 0.85
+        and materialized == 1.0
+        and junk_rate == 0
+        and duplicate_rate == 0
+        and content_rate == 1.0
+        and (not jury_required() or jury_score >= float(os.environ.get("OZ_EVAL_MIN_JURY_SCORE", "0.75")))
+    )
     return {
         "passed": passed,
         "precision_at_1": round(top1 / total if total else 0.0, 3),
@@ -322,6 +343,7 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
         "junk_top5_rate": round(junk_rate, 3),
         "duplicate_top5_rate": round(duplicate_rate, 3),
         "content_requirement_rate": round(content_rate, 3),
+        "jury_score": round(jury_score, 3) if use_jury else None,
         "checks": checks,
     }
 
