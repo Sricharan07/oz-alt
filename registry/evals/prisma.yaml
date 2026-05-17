@@ -7,6 +7,8 @@
       "query": "Prisma Client relations include related records nested writes",
       "patterns": ["relation", "include", "nested", "PrismaClient|client"],
       "expected_files": [
+        "guides/orm/prisma-client/queries/relation-queries.md",
+        "api-reference/orm/prisma-client-reference.md",
         "guides/orm/prisma-client.md",
         "guides/orm/prisma-schema/data-model/relations.md"
       ],
