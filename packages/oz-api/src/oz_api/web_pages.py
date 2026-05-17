@@ -7,6 +7,48 @@ from oz_api.admin import esc
 from oz_api.auth import AuthPrincipal, PASSWORD_MIN_LENGTH, public_base_url
 
 
+def render_home_page() -> str:
+    api_url = public_base_url()
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Oz</title>
+  <style>
+    body {{ margin: 0; background: #f7f7f4; color: #202124; font-family: ui-sans-serif, system-ui, sans-serif; }}
+    main {{ width: min(760px, calc(100vw - 32px)); margin: 56px auto; }}
+    h1 {{ margin: 0 0 12px; font-size: 28px; line-height: 1.15; }}
+    p {{ color: #51565c; font-size: 15px; line-height: 1.55; }}
+    nav {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 28px; }}
+    a.button {{ border: 1px solid #202124; border-radius: 6px; color: #202124; padding: 9px 12px; text-decoration: none; }}
+    a.primary {{ background: #202124; color: #fff; }}
+    section {{ border-top: 1px solid #d8dee4; padding: 20px 0; }}
+    code {{ background: #fff; border: 1px solid #d8dee4; border-radius: 6px; padding: 2px 5px; }}
+    pre {{ overflow-x: auto; background: #fff; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Oz</h1>
+    <p>Version-pinned documentation packs for coding agents. Pull docs into <code>.codo/vendors</code>, then use normal local search and read tools.</p>
+    <nav>
+      <a class="button primary" href="/signup">Create account</a>
+      <a class="button" href="/login">Sign in</a>
+      <a class="button" href="/status">Status</a>
+    </nav>
+    <section>
+      <p>Install with npm or the shell installer.</p>
+      <pre>npm install -g @hiringbae/oz
+oz login --api-url {esc(api_url)}</pre>
+    </section>
+    <section>
+      <p>CLI/API backend: <code>{esc(api_url)}</code></p>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
 def render_login_page(error: str = "") -> str:
     error_html = f'<p class="error">{esc(error)}</p>' if error else ""
     return f"""<!doctype html>

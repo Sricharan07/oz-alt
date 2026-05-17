@@ -5,9 +5,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from oz_api.http_context import state_from_request
 from oz_api.metrics import metrics_authorized, render_prometheus_metrics
-from oz_api.web_pages import public_markdown_html, render_login_page, render_signup_page, status_page
+from oz_api.web_pages import public_markdown_html, render_home_page, render_login_page, render_signup_page, status_page
 
 router = APIRouter()
+
+
+@router.get("/", response_class=HTMLResponse)
+async def home() -> HTMLResponse:
+    return HTMLResponse(render_home_page())
 
 
 @router.get("/health")
