@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from oz_api.retrieval import RetrievalContext, execute_data_api, postgres_connection, vector_literal
+from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 
 
@@ -35,16 +35,9 @@ def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
         return stats
 
     ctx = RetrievalContext.from_env(storage)
-    data_api = DataApiWriter(ctx)
-    if data_api.available:
-        write_catalog_and_chunks(data_api, storage, catalog)
-        return stats
-
     connection = postgres_connection(ctx.database_url)
     if connection is None:
-        raise RuntimeError(
-            "No database connection configured. Set OZ_DATABASE_URL, or OZ_DB_RESOURCE_ARN and OZ_DB_SECRET_ARN."
-        )
+        raise RuntimeError("No database connection configured. Set OZ_DATABASE_URL or DATABASE_URL.")
     with connection:
         write_catalog_and_chunks(PostgresWriter(connection), storage, catalog)
     return stats
@@ -380,175 +373,6 @@ class PostgresWriter(IndexWriter):
         )
 
 
-class DataApiWriter(IndexWriter):
-    def __init__(self, ctx: RetrievalContext) -> None:
-        self.ctx = ctx
-        self.available = bool(ctx.db_resource_arn and ctx.db_secret_arn)
-
-    def scalar(self, sql: str, params: list[dict[str, Any]]) -> int:
-        rows = execute_data_api(self.ctx, sql, params)
-        if not rows:
-            raise RuntimeError("Aurora Data API statement returned no rows")
-        return int(numeric_data_api_field(rows[0][0]))
-
-    def execute(self, sql: str, params: list[dict[str, Any]]) -> None:
-        rows = execute_data_api(self.ctx, sql, params)
-        if rows is None:
-            raise RuntimeError("Aurora Data API statement failed")
-
-    def upsert_vendor(self, vendor: str) -> int:
-        return self.scalar(
-            """
-            insert into vendors(name)
-            values (:vendor)
-            on conflict (name) do update set name = excluded.name
-            returning id
-            """,
-            [string_param("vendor", vendor)],
-        )
-
-    def upsert_library(self, vendor_id: int, entry: dict[str, Any]) -> int:
-        return self.scalar(
-            """
-            insert into libraries(vendor_id, name, description, source_url)
-            values (:vendor_id, :library, :description, :source_url)
-            on conflict (vendor_id, name) do update
-              set description = excluded.description,
-                  source_url = excluded.source_url,
-                  updated_at = now()
-            returning id
-            """,
-            [
-                long_param("vendor_id", vendor_id),
-                string_param("library", str(entry["library"])),
-                string_param("description", str(entry.get("description") or "")),
-                nullable_string_param("source_url", first_source_url(entry)),
-            ],
-        )
-
-    def upsert_version(self, library_id: int, entry: dict[str, Any]) -> int:
-        return self.scalar(
-            """
-            insert into library_versions(library_id, version, ref_sha, pack_key, indexed_at, last_crawled_at)
-            values (:library_id, :version, :ref_sha, :pack_key, nullif(:indexed_at, '')::timestamptz, now())
-            on conflict (library_id, version) do update
-              set ref_sha = excluded.ref_sha,
-                  pack_key = excluded.pack_key,
-                  indexed_at = excluded.indexed_at,
-                  last_crawled_at = now()
-            returning id
-            """,
-            [
-                long_param("library_id", library_id),
-                string_param("version", str(entry["version"])),
-                string_param("ref_sha", str(entry.get("ref_sha") or "unknown")),
-                string_param("pack_key", str(entry.get("pack_path") or "")),
-                string_param("indexed_at", str(entry.get("indexed_at") or "")),
-            ],
-        )
-
-    def upsert_ref(self, library_id: int, version_id: int, ref_sha: str) -> None:
-        self.execute(
-            """
-            insert into refs(library_id, channel, version_id, ref_sha)
-            values (:library_id, 'latest', :version_id, :ref_sha)
-            on conflict (library_id, channel) do update
-              set version_id = excluded.version_id,
-                  ref_sha = excluded.ref_sha,
-                  updated_at = now()
-            """,
-            [
-                long_param("library_id", library_id),
-                long_param("version_id", version_id),
-                string_param("ref_sha", ref_sha),
-            ],
-        )
-
-    def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
-        chunk_shas = sorted(set(current_chunk_shas))
-        params = [long_param("version_id", version_id)]
-        if not chunk_shas:
-            self.execute("delete from chunks where version_id = :version_id", params)
-            return
-
-        placeholders = []
-        for index, chunk_sha in enumerate(chunk_shas):
-            name = f"chunk_sha_{index}"
-            placeholders.append(f":{name}")
-            params.append(string_param(name, chunk_sha))
-        self.execute(
-            f"""
-            delete from chunks
-            where version_id = :version_id
-              and chunk_sha not in ({", ".join(placeholders)})
-            """,
-            params,
-        )
-
-    def upsert_chunk(
-        self,
-        version_id: int,
-        *,
-        path: str,
-        start_line: int,
-        end_line: int | None,
-        source_url: str,
-        ordinal: int,
-        chunk_sha: str,
-        heading_path: list[str],
-        symbols: list[str],
-        content_type: str,
-        quality_score: float,
-        content: str,
-        embedding: list[float] | None,
-    ) -> None:
-        params = [
-            long_param("version_id", version_id),
-            string_param("path", path),
-            long_param("start_line", start_line),
-            nullable_long_param("end_line", end_line),
-            nullable_string_param("source_url", source_url or None),
-            long_param("ordinal", ordinal),
-            string_param("chunk_sha", chunk_sha),
-            string_param("heading_path", json.dumps(heading_path)),
-            string_param("symbols", json.dumps(symbols)),
-            string_param("content_type", content_type),
-            double_param("quality_score", quality_score),
-            string_param("content", content),
-        ]
-        if embedding:
-            params.append(string_param("embedding", vector_literal(embedding)))
-            embedding_sql = "(:embedding)::vector"
-        else:
-            embedding_sql = "null"
-
-        self.execute(
-            f"""
-            insert into chunks(
-              version_id, path, start_line, end_line, source_url, ordinal, chunk_sha,
-              heading_path, symbols, content_type, quality_score, content, embedding
-            )
-            values (
-              :version_id, :path, :start_line, :end_line, :source_url, :ordinal, :chunk_sha,
-              (:heading_path)::jsonb, (:symbols)::jsonb, :content_type, :quality_score, :content, {embedding_sql}
-            )
-            on conflict (version_id, chunk_sha) do update
-              set path = excluded.path,
-                  start_line = excluded.start_line,
-                  end_line = excluded.end_line,
-                  source_url = excluded.source_url,
-                  ordinal = excluded.ordinal,
-                  heading_path = excluded.heading_path,
-                  symbols = excluded.symbols,
-                  content_type = excluded.content_type,
-                  quality_score = excluded.quality_score,
-                  content = excluded.content,
-                  embedding = excluded.embedding
-            """,
-            params,
-        )
-
-
 def first_source_url(entry: dict[str, Any]) -> str | None:
     urls = entry.get("source_urls")
     if isinstance(urls, list) and urls:
@@ -557,42 +381,8 @@ def first_source_url(entry: dict[str, Any]) -> str | None:
     return str(source) if source else None
 
 
-def string_param(name: str, value: str) -> dict[str, Any]:
-    return {"name": name, "value": {"stringValue": value}}
-
-
-def nullable_string_param(name: str, value: str | None) -> dict[str, Any]:
-    if value is None:
-        return {"name": name, "value": {"isNull": True}}
-    return string_param(name, value)
-
-
-def long_param(name: str, value: int) -> dict[str, Any]:
-    return {"name": name, "value": {"longValue": int(value)}}
-
-
-def double_param(name: str, value: float) -> dict[str, Any]:
-    return {"name": name, "value": {"doubleValue": float(value)}}
-
-
-def nullable_long_param(name: str, value: int | None) -> dict[str, Any]:
-    if value is None:
-        return {"name": name, "value": {"isNull": True}}
-    return long_param(name, value)
-
-
-def numeric_data_api_field(field: dict[str, Any]) -> float:
-    if "longValue" in field:
-        return float(field["longValue"])
-    if "doubleValue" in field:
-        return float(field["doubleValue"])
-    if "stringValue" in field:
-        return float(field["stringValue"])
-    return 0.0
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Index Oz registry fixtures into Postgres/Aurora.")
+    parser = argparse.ArgumentParser(description="Index Oz registry fixtures into Postgres.")
     parser.add_argument("--repo-root", default=".", help="Repository root containing registry/catalog.json.")
     parser.add_argument("--dry-run", action="store_true", help="Only count catalog libraries and chunks.")
     args = parser.parse_args(argv)

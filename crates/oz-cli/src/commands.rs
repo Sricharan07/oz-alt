@@ -15,9 +15,13 @@ pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
         "/auth/device",
         serde_json::json!({"client": "oz-cli"}),
     )?;
+    let verification_uri = start
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&start.verification_uri);
     println!(
         "Open {} and enter code {}",
-        start.verification_uri, start.user_code
+        verification_uri, start.user_code
     );
 
     let token = poll_device_token(
@@ -25,6 +29,9 @@ pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
         &start,
     )?;
     store_auth_token(&mut config, &token.access_token);
+    if let Some(refresh_token) = token.refresh_token.as_deref() {
+        store_refresh_token(&mut config, refresh_token);
+    }
     if config.telemetry.is_none() {
         config.telemetry = Some(telemetry_preference()?);
     }

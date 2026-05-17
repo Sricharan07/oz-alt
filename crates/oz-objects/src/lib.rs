@@ -316,12 +316,17 @@ fn sign_pack_manifest(manifest: &mut PackManifest) -> Result<()> {
 }
 
 fn verify_pack_manifest_signature(manifest: &PackManifest, label: &str) -> Result<()> {
-    let require_signature = env::var("OZ_PACK_REQUIRE_SIGNATURE")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+    let require_signature_text = env::var("OZ_PACK_REQUIRE_SIGNATURE")
+        .ok()
+        .or_else(|| option_env!("OZ_PACK_REQUIRE_SIGNATURE").map(str::to_string));
+    let require_signature = require_signature_text
+        .as_deref()
+        .map(|value| matches!(value, "1" | "true" | "yes" | "on"))
         .unwrap_or(false);
     let verify_key = env::var("OZ_PACK_VERIFY_KEY")
         .ok()
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .or_else(|| option_env!("OZ_PACK_VERIFY_KEY").map(str::to_string).filter(|value| !value.is_empty()));
 
     let Some(signature) = &manifest.signature else {
         if require_signature || verify_key.is_some() {

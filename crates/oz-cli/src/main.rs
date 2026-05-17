@@ -43,6 +43,7 @@ const CATALOG_FILE: &str = "registry/catalog.json";
 const SKILL_START: &str = "<!-- oz-skill:start -->";
 const SKILL_END: &str = "<!-- oz-skill:end -->";
 const KEYCHAIN_SERVICE: &str = "dev.oz.auth-token";
+const KEYCHAIN_REFRESH_SERVICE: &str = "dev.oz.refresh-token";
 const KEYCHAIN_ACCOUNT: &str = "oz-cli";
 
 #[derive(Debug, Parser)]
@@ -184,6 +185,7 @@ struct OzConfig {
     telemetry: Option<bool>,
     api_url: Option<String>,
     auth_token: Option<String>,
+    refresh_token: Option<String>,
     auto_update_skill: Option<bool>,
 }
 
@@ -245,6 +247,7 @@ struct DeviceStartResponse {
     device_code: String,
     user_code: String,
     verification_uri: String,
+    verification_uri_complete: Option<String>,
     interval: Option<u64>,
     expires_in: Option<u64>,
 }
@@ -252,7 +255,9 @@ struct DeviceStartResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TokenResponse {
     access_token: String,
+    refresh_token: Option<String>,
     token_type: String,
+    expires_in: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

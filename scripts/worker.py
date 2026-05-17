@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
+
+from oz_api.admin_ops import mark_crawler_job_failed  # noqa: E402
+from oz_api.crawler_jobs import process_job  # noqa: E402
+from oz_api.redis_store import redis_client, redis_key  # noqa: E402
+from oz_api.storage import RegistryStorage  # noqa: E402
+
+RUNNING = True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run the portable Oz crawl worker.")
+    parser.add_argument("--repo-root", type=Path, default=Path(os.environ.get("OZ_REPO_ROOT", ROOT)))
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
+
+    client = redis_client()
+    if client is None:
+        print("OZ_REDIS_URL or REDIS_URL is required for oz-worker", file=sys.stderr)
+        return 2
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    storage = RegistryStorage.from_env(args.repo_root.resolve())
+    queue_name = redis_key("OZ_CRAWLER_REDIS_QUEUE", "oz:crawler:jobs")
+    while RUNNING:
+        item = client.blpop(queue_name, timeout=5)
+        if item is None:
+            if args.once:
+                break
+            continue
+        _queue, body = item
+        job = parse_job(body)
+        try:
+            process_job(storage, job)
+        except Exception as exc:
+            mark_crawler_job_failed(job, str(exc))
+            print(f"crawler job failed: {exc}", file=sys.stderr)
+        if args.once:
+            break
+    return 0
+
+
+def parse_job(body: Any) -> dict[str, Any]:
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    payload = json.loads(str(body))
+    if not isinstance(payload, dict):
+        raise RuntimeError("crawler job payload must be a JSON object")
+    return payload
+
+
+def stop(_signum: int, _frame: Any) -> None:
+    global RUNNING
+    RUNNING = False
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,8 @@
+.git
+.codo
+target
+dist
+__pycache__
+*.pyc
+.DS_Store
+registry/admin

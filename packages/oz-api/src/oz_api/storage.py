@@ -12,11 +12,9 @@ class RegistryStorage:
     repo_root: Path
     packs_bucket: str | None = None
     catalog_bucket: str | None = None
-    admin_bucket: str | None = None
     pack_prefix: str = "packs"
     pack_public_base_url: str | None = None
     catalog_key: str = "catalog.json"
-    admin_prefix: str = "admin"
 
     @classmethod
     def from_env(cls, repo_root: Path) -> "RegistryStorage":
@@ -25,11 +23,9 @@ class RegistryStorage:
             repo_root=repo_root,
             packs_bucket=packs_bucket,
             catalog_bucket=os.environ.get("OZ_CATALOG_BUCKET") or packs_bucket,
-            admin_bucket=os.environ.get("OZ_ADMIN_BUCKET") or packs_bucket,
             pack_prefix=os.environ.get("OZ_PACK_PREFIX", "packs").strip("/"),
             pack_public_base_url=(os.environ.get("OZ_PACK_PUBLIC_BASE_URL") or "").rstrip("/") or None,
             catalog_key=os.environ.get("OZ_CATALOG_KEY", "catalog.json").strip("/"),
-            admin_prefix=os.environ.get("OZ_ADMIN_PREFIX", "admin").strip("/"),
         )
 
     @property
@@ -47,10 +43,6 @@ class RegistryStorage:
     @property
     def catalog_path(self) -> Path:
         return self.registry_root / "catalog.json"
-
-    @property
-    def admin_root(self) -> Path:
-        return self.registry_root / "admin"
 
     def load_catalog_document(self) -> dict[str, Any]:
         if self.catalog_bucket:
@@ -117,33 +109,6 @@ class RegistryStorage:
         self.catalog_path.parent.mkdir(parents=True, exist_ok=True)
         self.catalog_path.write_bytes(body)
 
-    def append_admin_event(self, stream: str, event: dict[str, Any]) -> None:
-        if self.admin_bucket:
-            key = f"{self.admin_prefix}/{stream}.jsonl"
-            existing = self._get_s3_bytes(self.admin_bucket, key) or b""
-            body = existing.decode("utf-8")
-            body += json.dumps(event, sort_keys=True) + "\n"
-            self._put_s3_bytes(self.admin_bucket, key, body.encode("utf-8"))
-            return
-
-        path = self.admin_root / f"{stream}.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(event, sort_keys=True) + "\n")
-
-    def read_admin_events(self, stream: str) -> list[dict[str, Any]]:
-        if self.admin_bucket:
-            key = f"{self.admin_prefix}/{stream}.jsonl"
-            body = self._get_s3_bytes(self.admin_bucket, key)
-            if body is None:
-                return []
-            return read_jsonl_text(body.decode("utf-8"))
-
-        path = self.admin_root / f"{stream}.jsonl"
-        if not path.exists():
-            return []
-        return read_jsonl_text(path.read_text(encoding="utf-8"))
-
     def discover_catalog(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for fixture in self.fixtures_root.glob("*/*/*"):
@@ -196,12 +161,15 @@ class RegistryStorage:
     def _get_s3_bytes(self, bucket: str, key: str) -> bytes | None:
         client = s3_client()
         if client is None:
-            return None
+            raise RuntimeError("boto3 is required when S3 buckets are configured")
         try:
             response = client.get_object(Bucket=bucket, Key=key)
             return response["Body"].read()
-        except Exception:
-            return None
+        except Exception as exc:
+            code = getattr(getattr(exc, "response", {}), "get", lambda *_: {})("Error", {}).get("Code")
+            if code in {"NoSuchKey", "404", "NotFound"}:
+                return None
+            raise
 
     def _put_s3_bytes(
         self,
@@ -211,10 +179,10 @@ class RegistryStorage:
         *,
         content_type: str | None = None,
         cache_control: str | None = None,
-    ) -> None:
+        ) -> None:
         client = s3_client()
         if client is None:
-            return
+            raise RuntimeError("boto3 is required when S3 buckets are configured")
         kwargs: dict[str, Any] = {"Bucket": bucket, "Key": key, "Body": body}
         if content_type:
             kwargs["ContentType"] = content_type
@@ -228,15 +196,22 @@ def s3_client() -> Any | None:
         import boto3  # type: ignore
     except ImportError:
         return None
-    return boto3.client("s3")
+    kwargs: dict[str, Any] = {}
+    endpoint_url = os.environ.get("OZ_S3_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL_S3")
+    if endpoint_url:
+        kwargs["endpoint_url"] = endpoint_url
+    if os.environ.get("OZ_S3_FORCE_PATH_STYLE", "").lower() in {"1", "true", "yes", "on"}:
+        try:
+            from botocore.config import Config  # type: ignore
+
+            kwargs["config"] = Config(s3={"addressing_style": "path"})
+        except Exception:
+            pass
+    return boto3.client("s3", **kwargs)
 
 
-def read_jsonl_text(text: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    return rows
+def database_configured() -> bool:
+    return bool(os.environ.get("OZ_DATABASE_URL") or os.environ.get("DATABASE_URL"))
 
 
 def read_description(fixture: Path, library: str) -> str:

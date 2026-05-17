@@ -1,0 +1,143 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: oz
+      POSTGRES_USER: oz
+      POSTGRES_PASSWORD: oz
+    ports:
+      - "5432:5432"
+    volumes:
+      - oz-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oz -d oz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - oz-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ozminio
+      MINIO_ROOT_PASSWORD: ozminiosecret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - oz-minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ozminio ozminiosecret;
+      mc mb -p local/oz-packs || true;
+      mc anonymous set download local/oz-packs/packs || true
+      "
+
+  migrate:
+    build: .
+    profiles: ["ops"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://oz:oz@postgres:5432/oz
+    command: bash scripts/apply-db-migrations.sh
+
+  oz-api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment: &oz-env
+      DATABASE_URL: postgresql://oz:oz@postgres:5432/oz
+      OZ_REDIS_URL: redis://redis:6379/0
+      AWS_ACCESS_KEY_ID: ozminio
+      AWS_SECRET_ACCESS_KEY: ozminiosecret
+      AWS_DEFAULT_REGION: us-east-1
+      OZ_S3_ENDPOINT_URL: http://minio:9000
+      OZ_S3_FORCE_PATH_STYLE: "1"
+      OZ_PACKS_BUCKET: oz-packs
+      OZ_CATALOG_BUCKET: oz-packs
+      OZ_CATALOG_KEY: catalog.json
+      OZ_PACK_PREFIX: packs
+      OZ_PACK_PUBLIC_BASE_URL: http://localhost:9000/oz-packs/packs
+      OZ_PUBLIC_BASE_URL: http://localhost:8080
+      OZ_APP_URL: http://localhost:8080
+      OZ_COOKIE_SECURE: "0"
+      OZ_ENV: production
+      OZ_JWT_SECRET: local-compose-jwt-secret-change-me
+      OZ_CRAWLER_REDIS_QUEUE: oz:crawler:jobs
+    ports:
+      - "8765:8765"
+
+  oz-web:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *oz-env
+
+  oz-worker:
+    build: .
+    depends_on:
+      oz-api:
+        condition: service_started
+    environment:
+      <<: *oz-env
+    command: python scripts/worker.py --repo-root /app
+
+  oz-scheduler:
+    build: .
+    depends_on:
+      oz-api:
+        condition: service_started
+    environment:
+      <<: *oz-env
+      OZ_SCHEDULER_INTERVAL_SECONDS: "3600"
+    command: python scripts/scheduler.py --repo-root /app
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - oz-api
+      - oz-web
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./infra/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - oz-caddy-data:/data
+      - oz-caddy-config:/config
+
+volumes:
+  oz-postgres:
+  oz-redis:
+  oz-minio:
+  oz-caddy-data:
+  oz-caddy-config:

@@ -1,32 +1,36 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-from oz_api.storage import RegistryStorage
+from oz_api.redis_store import redis_client
 
 
-def index_request_allowed(storage: RegistryStorage, requesting_user: str, *, limit: int = 20) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-    count = 0
-    for event in storage.read_admin_events("index_requests"):
-        if str(event.get("requesting_user") or "anonymous") != requesting_user:
-            continue
-        created_at = parse_datetime(str(event.get("created_at") or ""))
-        if created_at is None or created_at < cutoff:
-            continue
-        count += 1
-        if count >= limit:
-            return False
-    return True
+def index_request_allowed(requesting_user: str, *, limit: int = 20) -> bool:
+    return redis_index_request_allowed(requesting_user, limit=limit)
 
 
-def parse_datetime(value: str) -> datetime | None:
-    if not value:
-        return None
+def rate_limit_allowed(scope: str, identity: str, *, limit: int, window_seconds: int = 60) -> bool:
+    client = redis_client()
+    if client is None:
+        return False
+    safe_scope = "".join(char if char.isalnum() or char in {":", "-", "_"} else "_" for char in scope)
+    key = f"oz:rate:{safe_scope}:{identity or 'anonymous'}"
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
+        count = int(client.incr(key))
+        if count == 1:
+            client.expire(key, window_seconds)
+        return count <= limit
+    except Exception:
+        return False
+
+
+def redis_index_request_allowed(requesting_user: str, *, limit: int) -> bool:
+    client = redis_client()
+    if client is None:
+        return False
+    key = f"oz:rate:index-request:{requesting_user or 'anonymous'}"
+    try:
+        count = int(client.incr(key))
+        if count == 1:
+            client.expire(key, 60 * 60)
+        return count <= limit
+    except Exception:
+        return False

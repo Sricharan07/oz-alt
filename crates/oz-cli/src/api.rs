@@ -38,11 +38,13 @@ pub(crate) fn configured_api_url(config: &OzConfig) -> Option<String> {
 pub(crate) fn api_get_json<T: DeserializeOwned>(config: &OzConfig, route: &str) -> Result<T> {
     let base_url = configured_api_url(config).context("api_url is not configured")?;
     let url = route_url(&base_url, route);
-    let mut request = ureq::get(&url);
-    if let Some(token) = auth_token(config) {
-        request = request.set("Authorization", &format!("Bearer {token}"));
-    }
-    let response = request.call().map_err(format_ureq_error)?;
+    let response = response_with_refresh(config, |runtime_config| {
+        let mut request = ureq::get(&url);
+        if let Some(token) = auth_token(runtime_config) {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        request.call()
+    })?;
     response
         .into_json::<T>()
         .with_context(|| format!("failed to decode JSON response from {url}"))
@@ -51,11 +53,13 @@ pub(crate) fn api_get_json<T: DeserializeOwned>(config: &OzConfig, route: &str) 
 pub(crate) fn api_get_bytes(config: &OzConfig, route: &str) -> Result<Vec<u8>> {
     let base_url = configured_api_url(config).context("api_url is not configured")?;
     let url = route_url(&base_url, route);
-    let mut request = ureq::get(&url);
-    if let Some(token) = auth_token(config) {
-        request = request.set("Authorization", &format!("Bearer {token}"));
-    }
-    let response = request.call().map_err(format_ureq_error)?;
+    let response = response_with_refresh(config, |runtime_config| {
+        let mut request = ureq::get(&url);
+        if let Some(token) = auth_token(runtime_config) {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        request.call()
+    })?;
     let mut reader = response.into_reader();
     let mut bytes = Vec::new();
     reader
@@ -71,11 +75,13 @@ pub(crate) fn api_post_json<T: DeserializeOwned>(
 ) -> Result<T> {
     let base_url = configured_api_url(config).context("api_url is not configured")?;
     let url = route_url(&base_url, route);
-    let mut request = ureq::post(&url).set("Content-Type", "application/json");
-    if let Some(token) = auth_token(config) {
-        request = request.set("Authorization", &format!("Bearer {token}"));
-    }
-    let response = request.send_json(body).map_err(format_ureq_error)?;
+    let response = response_with_refresh(config, |runtime_config| {
+        let mut request = ureq::post(&url).set("Content-Type", "application/json");
+        if let Some(token) = auth_token(runtime_config) {
+            request = request.set("Authorization", &format!("Bearer {token}"));
+        }
+        request.send_json(body.clone())
+    })?;
     response
         .into_json::<T>()
         .with_context(|| format!("failed to decode JSON response from {url}"))
@@ -102,6 +108,42 @@ fn route_url(base_url: &str, route: &str) -> String {
         base_url.trim_end_matches('/'),
         route.trim_start_matches('/')
     )
+}
+
+fn response_with_refresh<F>(config: &OzConfig, mut request: F) -> Result<ureq::Response>
+where
+    F: FnMut(&OzConfig) -> std::result::Result<ureq::Response, ureq::Error>,
+{
+    let mut runtime_config = config.clone();
+    match request(&runtime_config) {
+        Ok(response) => Ok(response),
+        Err(ureq::Error::Status(401, _)) => {
+            if refresh_access_token(&mut runtime_config)? {
+                request(&runtime_config).map_err(format_ureq_error)
+            } else {
+                bail!("registry API returned HTTP 401: run `oz login`")
+            }
+        }
+        Err(error) => Err(format_ureq_error(error)),
+    }
+}
+
+fn refresh_access_token(config: &mut OzConfig) -> Result<bool> {
+    let Some(refresh) = refresh_token(config) else {
+        return Ok(false);
+    };
+    let base_url = configured_api_url(config).context("api_url is not configured")?;
+    let token: TokenResponse = api_post_json_without_auth(
+        &base_url,
+        "/auth/refresh",
+        serde_json::json!({ "refresh_token": refresh }),
+    )?;
+    store_auth_token(config, &token.access_token);
+    if let Some(refresh_token) = token.refresh_token.as_deref() {
+        store_refresh_token(config, refresh_token);
+    }
+    write_config(config)?;
+    Ok(true)
 }
 
 fn format_ureq_error(error: ureq::Error) -> anyhow::Error {

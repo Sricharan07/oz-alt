@@ -75,6 +75,28 @@ pub(crate) fn store_auth_token(config: &mut OzConfig, token: &str) {
     }
 }
 
+pub(crate) fn refresh_token(config: &OzConfig) -> Option<String> {
+    if keychain_disabled() {
+        return config.refresh_token.clone();
+    }
+    read_keychain_refresh_token()
+        .ok()
+        .flatten()
+        .or_else(|| config.refresh_token.clone())
+}
+
+pub(crate) fn store_refresh_token(config: &mut OzConfig, token: &str) {
+    if keychain_disabled() {
+        config.refresh_token = Some(token.to_string());
+        return;
+    }
+    if write_keychain_refresh_token(token).is_ok() {
+        config.refresh_token = None;
+    } else {
+        config.refresh_token = Some(token.to_string());
+    }
+}
+
 fn keychain_disabled() -> bool {
     std::env::var("OZ_DISABLE_KEYCHAIN")
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
@@ -83,13 +105,25 @@ fn keychain_disabled() -> bool {
 
 #[cfg(target_os = "macos")]
 fn write_keychain_token(token: &str) -> Result<()> {
+    write_macos_keychain_secret(KEYCHAIN_SERVICE, "Oz CLI token", token)
+}
+
+#[cfg(target_os = "macos")]
+fn write_keychain_refresh_token(token: &str) -> Result<()> {
+    write_macos_keychain_secret(KEYCHAIN_REFRESH_SERVICE, "Oz CLI refresh token", token)
+}
+
+#[cfg(target_os = "macos")]
+fn write_macos_keychain_secret(service: &str, label: &str, token: &str) -> Result<()> {
     let status = ProcessCommand::new("security")
         .args([
             "add-generic-password",
             "-a",
             KEYCHAIN_ACCOUNT,
             "-s",
-            KEYCHAIN_SERVICE,
+            service,
+            "-l",
+            label,
             "-w",
             token,
             "-U",
@@ -104,13 +138,23 @@ fn write_keychain_token(token: &str) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn read_keychain_token() -> Result<Option<String>> {
+    read_macos_keychain_secret(KEYCHAIN_SERVICE)
+}
+
+#[cfg(target_os = "macos")]
+fn read_keychain_refresh_token() -> Result<Option<String>> {
+    read_macos_keychain_secret(KEYCHAIN_REFRESH_SERVICE)
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_keychain_secret(service: &str) -> Result<Option<String>> {
     let output = ProcessCommand::new("security")
         .args([
             "find-generic-password",
             "-a",
             KEYCHAIN_ACCOUNT,
             "-s",
-            KEYCHAIN_SERVICE,
+            service,
             "-w",
         ])
         .output()
@@ -124,13 +168,23 @@ fn read_keychain_token() -> Result<Option<String>> {
 
 #[cfg(target_os = "macos")]
 fn delete_keychain_token() -> Result<()> {
+    delete_macos_keychain_secret(KEYCHAIN_SERVICE)
+}
+
+#[cfg(target_os = "macos")]
+fn delete_keychain_refresh_token() -> Result<()> {
+    delete_macos_keychain_secret(KEYCHAIN_REFRESH_SERVICE)
+}
+
+#[cfg(target_os = "macos")]
+fn delete_macos_keychain_secret(service: &str) -> Result<()> {
     let _ = ProcessCommand::new("security")
         .args([
             "delete-generic-password",
             "-a",
             KEYCHAIN_ACCOUNT,
             "-s",
-            KEYCHAIN_SERVICE,
+            service,
         ])
         .status();
     Ok(())
@@ -138,12 +192,22 @@ fn delete_keychain_token() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn write_keychain_token(token: &str) -> Result<()> {
+    write_linux_keychain_secret(KEYCHAIN_SERVICE, "Oz CLI token", token)
+}
+
+#[cfg(target_os = "linux")]
+fn write_keychain_refresh_token(token: &str) -> Result<()> {
+    write_linux_keychain_secret(KEYCHAIN_REFRESH_SERVICE, "Oz CLI refresh token", token)
+}
+
+#[cfg(target_os = "linux")]
+fn write_linux_keychain_secret(service: &str, label: &str, token: &str) -> Result<()> {
     let mut child = ProcessCommand::new("secret-tool")
         .args([
             "store",
-            "--label=Oz CLI token",
+            &format!("--label={label}"),
             "service",
-            KEYCHAIN_SERVICE,
+            service,
             "account",
             KEYCHAIN_ACCOUNT,
         ])
@@ -165,11 +229,21 @@ fn write_keychain_token(token: &str) -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn read_keychain_token() -> Result<Option<String>> {
+    read_linux_keychain_secret(KEYCHAIN_SERVICE)
+}
+
+#[cfg(target_os = "linux")]
+fn read_keychain_refresh_token() -> Result<Option<String>> {
+    read_linux_keychain_secret(KEYCHAIN_REFRESH_SERVICE)
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_keychain_secret(service: &str) -> Result<Option<String>> {
     let output = ProcessCommand::new("secret-tool")
         .args([
             "lookup",
             "service",
-            KEYCHAIN_SERVICE,
+            service,
             "account",
             KEYCHAIN_ACCOUNT,
         ])
@@ -184,11 +258,21 @@ fn read_keychain_token() -> Result<Option<String>> {
 
 #[cfg(target_os = "linux")]
 fn delete_keychain_token() -> Result<()> {
+    delete_linux_keychain_secret(KEYCHAIN_SERVICE)
+}
+
+#[cfg(target_os = "linux")]
+fn delete_keychain_refresh_token() -> Result<()> {
+    delete_linux_keychain_secret(KEYCHAIN_REFRESH_SERVICE)
+}
+
+#[cfg(target_os = "linux")]
+fn delete_linux_keychain_secret(service: &str) -> Result<()> {
     let _ = ProcessCommand::new("secret-tool")
         .args([
             "clear",
             "service",
-            KEYCHAIN_SERVICE,
+            service,
             "account",
             KEYCHAIN_ACCOUNT,
         ])
@@ -198,9 +282,19 @@ fn delete_keychain_token() -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn write_keychain_token(token: &str) -> Result<()> {
+    write_windows_keychain_secret(KEYCHAIN_SERVICE, token)
+}
+
+#[cfg(target_os = "windows")]
+fn write_keychain_refresh_token(token: &str) -> Result<()> {
+    write_windows_keychain_secret(KEYCHAIN_REFRESH_SERVICE, token)
+}
+
+#[cfg(target_os = "windows")]
+fn write_windows_keychain_secret(service: &str, token: &str) -> Result<()> {
     let status = ProcessCommand::new("cmdkey")
         .args([
-            &format!("/generic:{KEYCHAIN_SERVICE}"),
+            &format!("/generic:{service}"),
             &format!("/user:{KEYCHAIN_ACCOUNT}"),
             &format!("/pass:{token}"),
         ])
@@ -218,9 +312,24 @@ fn read_keychain_token() -> Result<Option<String>> {
 }
 
 #[cfg(target_os = "windows")]
+fn read_keychain_refresh_token() -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(target_os = "windows")]
 fn delete_keychain_token() -> Result<()> {
+    delete_windows_keychain_secret(KEYCHAIN_SERVICE)
+}
+
+#[cfg(target_os = "windows")]
+fn delete_keychain_refresh_token() -> Result<()> {
+    delete_windows_keychain_secret(KEYCHAIN_REFRESH_SERVICE)
+}
+
+#[cfg(target_os = "windows")]
+fn delete_windows_keychain_secret(service: &str) -> Result<()> {
     let _ = ProcessCommand::new("cmdkey")
-        .arg(&format!("/delete:{KEYCHAIN_SERVICE}"))
+        .arg(&format!("/delete:{service}"))
         .status();
     Ok(())
 }
@@ -231,7 +340,17 @@ fn write_keychain_token(_token: &str) -> Result<()> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn write_keychain_refresh_token(_token: &str) -> Result<()> {
+    bail!("no OS keychain integration for this platform")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn read_keychain_token() -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn read_keychain_refresh_token() -> Result<Option<String>> {
     Ok(None)
 }
 
@@ -240,11 +359,17 @@ fn delete_keychain_token() -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn delete_keychain_refresh_token() -> Result<()> {
+    Ok(())
+}
+
 fn get_config_value(config: &OzConfig, key: &str) -> Option<String> {
     match key {
         "telemetry" => config.telemetry.map(|value| value.to_string()),
         "api_url" => config.api_url.clone(),
         "auth_token" => auth_token(config),
+        "refresh_token" => refresh_token(config),
         "auto_update_skill" => config.auto_update_skill.map(|value| value.to_string()),
         _ => None,
     }
@@ -255,6 +380,7 @@ fn set_config_value(config: &mut OzConfig, key: &str, value: &str) -> Result<()>
         "telemetry" => config.telemetry = Some(parse_bool(value)?),
         "api_url" => config.api_url = Some(value.trim_end_matches('/').to_string()),
         "auth_token" => store_auth_token(config, value),
+        "refresh_token" => store_refresh_token(config, value),
         "auto_update_skill" => config.auto_update_skill = Some(parse_bool(value)?),
         _ => bail!("unknown config key `{key}`"),
     }
@@ -268,6 +394,10 @@ fn unset_config_value(config: &mut OzConfig, key: &str) -> Result<()> {
         "auth_token" => {
             delete_keychain_token().ok();
             config.auth_token = None;
+        }
+        "refresh_token" => {
+            delete_keychain_refresh_token().ok();
+            config.refresh_token = None;
         }
         "auto_update_skill" => config.auto_update_skill = None,
         _ => bail!("unknown config key `{key}`"),

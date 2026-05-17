@@ -1,0 +1,118 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    env_file:
+      - path: ../../.env.production
+        required: false
+    environment:
+      POSTGRES_DB: oz
+      POSTGRES_USER: oz
+    volumes:
+      - oz-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oz -d oz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - oz-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    profiles: ["ops"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ../../.env.production
+        required: false
+    command: bash scripts/apply-db-migrations.sh
+
+  oz-api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../../.env.production
+        required: false
+    ports:
+      - "127.0.0.1:8765:8765"
+
+  oz-web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - path: ../../.env.production
+        required: false
+
+  oz-worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      oz-api:
+        condition: service_started
+    env_file:
+      - path: ../../.env.production
+        required: false
+    command: python scripts/worker.py --repo-root /app
+
+  oz-scheduler:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      oz-api:
+        condition: service_started
+    env_file:
+      - path: ../../.env.production
+        required: false
+    command: python scripts/scheduler.py --repo-root /app
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - oz-api
+      - oz-web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - oz-caddy-data:/data
+      - oz-caddy-config:/config
+
+volumes:
+  oz-postgres:
+  oz-redis:
+  oz-caddy-data:
+  oz-caddy-config:

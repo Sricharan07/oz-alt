@@ -17,7 +17,7 @@ npm install -g @hiringbae/oz
 ## Connect
 
 ```bash
-oz login --api-url https://api.claw.codes
+oz login --api-url https://api.tryoz.dev
 ```
 
 ## Use

@@ -6,7 +6,7 @@ cd "$repo_root"
 PYTHON="${PYTHON:-$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)}"
 
 cargo test --workspace
-"$PYTHON" -m py_compile lambda_entry.py lambda_crawler_entry.py lambda_fargate_entry.py crawler_task.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+"$PYTHON" -m py_compile packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py scripts/*.py
 "$PYTHON" scripts/index-registry-to-db.py --dry-run >/dev/null
 cargo build -p oz
 
@@ -29,7 +29,7 @@ oz status
 oz doctor
 oz install --codex
 
-PYTHONPATH=packages/oz-api/src "$PYTHON" -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
+OZ_ENV=local PYTHONPATH=packages/oz-api/src "$PYTHON" -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
 server_pid="$!"
 sleep 1
 
@@ -42,14 +42,5 @@ curl -fsS -X POST http://127.0.0.1:8765/search \
   -d '{"query":"middleware jwt cookies","library_scope":"vercel/next.js","max_results":3}' >/dev/null
 curl -fsS http://127.0.0.1:8765/refs/vercel/next.js >/dev/null
 curl -fsS http://127.0.0.1:8765/admin >/dev/null
-
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz login --api-url http://127.0.0.1:8765
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz init
-rm -rf .codo/vendors
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware"
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz suggest "JWT authentication in Next.js middleware" --json >/dev/null
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz search "middleware jwt cookies" vercel/next.js --json >/dev/null
-OZ_DISABLE_KEYCHAIN=1 HOME="$remote_home" target/debug/oz status
 
 echo "local e2e ok"

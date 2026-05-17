@@ -25,7 +25,7 @@ from oz_crawler.validation import validate_fixture, write_validation
 
 try:
     from bs4 import BeautifulSoup
-except ImportError:  # pragma: no cover - Lambda fallback when optional crawler deps are absent
+except ImportError:  # pragma: no cover - optional parser dependency
     BeautifulSoup = None  # type: ignore
 
 

@@ -7,22 +7,21 @@ This repository contains the end-to-end beta product:
 1. 15 launch libraries crawled into `registry/fixtures`.
 2. Immutable `.ozpack` bundles in `registry/packs`.
 3. A Rust CLI with `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `gc`, `doctor`, and `config`.
-4. A Python API that runs locally or in Lambda and serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, and admin routes.
+4. A Docker-first Python API that serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, user dashboard, and admin routes.
 5. A crawler wired to D4Vinci/Scrapling's Spider/session APIs, with stdlib fallback, chunking, symbol extraction, and optional OpenAI embedding generation.
-6. CDK infrastructure for S3, Aurora Serverless v2/Postgres Data API, pgvector/FTS indexing, DynamoDB rerank cache, SQS crawler queue/DLQ, scheduled recrawls, API Gateway, Lambda, and budget guardrail.
+6. Docker Compose production services for Postgres/pgvector, Redis, S3-compatible pack storage, API, worker, scheduler, and Caddy.
 
 ## Repository Layout
 
 - `crates/oz-cli` - Rust CLI binary.
 - `crates/oz-objects` - content-addressed local object store and pack verification.
 - `packages/oz-crawler` - documentation crawler and local worker.
-- `packages/oz-api` - local/Lambda registry API.
-- `packages/oz-admin` - static admin entry point.
+- `packages/oz-api` - local/container registry API.
 - `packages/oz-npm` - npm global wrapper package.
 - `registry/fixtures` - 15 seeded documentation trees.
 - `registry/packs` - generated `.ozpack` bundles.
-- `infra/cdk` - AWS deployment stack.
-- `infra/sql` - Aurora/Postgres schema and indexes.
+- `infra/docker` - Caddy routing for the Docker runtime.
+- `infra/sql` - Postgres/pgvector schema and indexes.
 - `scripts` - e2e, seed build, S3 publish, migrations, install, release.
 
 ## Local Verification
@@ -76,7 +75,7 @@ This crawls the 15 launch libraries from `registry/seed_libraries.json`, writes 
 
 Scrapling is vendored under `third_party/Scrapling` with Git metadata removed, and the crawler imports that local source before looking at site packages. Use `--fetcher auto`, `--fetcher http`, `--fetcher dynamic`, or `--fetcher stealth` to select the Scrapling session path. Browser-backed modes require Scrapling's browser setup in the runtime image.
 
-Index the generated chunks into Postgres/Aurora for semantic API retrieval:
+Index the generated chunks into Postgres for semantic API retrieval:
 
 ```bash
 OPENAI_API_KEY='sk-...' OZ_DATABASE_URL='postgres://...' python3 scripts/index-registry-to-db.py

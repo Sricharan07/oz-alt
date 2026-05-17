@@ -14,36 +14,58 @@ registry/packs/<vendor>/<library>/<version>.ozpack
 
 `oz pull` verifies the pack manifest signature when verification is configured, then verifies pack blob SHA-256 values and the tree manifest SHA before ingesting into the global object store. Materialization uses hardlinks and falls back to copies.
 
-## Cloud Flow
+## Production Flow
 
 ```text
-SQS / scheduled recrawl
-    -> crawler Lambda
+admin action / scheduler
+    -> Redis crawler queue
+    -> oz-worker
     -> registry fixtures/chunks/symbols in /tmp
-    -> raw JSON .ozpack in S3
-    -> catalog in S3 + metadata/chunks in Aurora
-    -> API Gateway + Lambda
+    -> signed .ozpack in S3-compatible object storage
+    -> catalog in S3 + metadata/chunks/promotions in Postgres
+    -> oz-api behind caddy/nginx
     -> oz CLI
 ```
 
-The API uses the same handlers locally and in Lambda. `RegistryStorage` reads catalog, packs, and admin streams from local files or S3 depending on environment. Retrieval uses Aurora/Postgres Data API or `OZ_DATABASE_URL` when configured, then falls back to catalog/chunk files for local development.
+The primary runtime is Docker-first: `oz-web`, `oz-api`, `oz-worker`,
+`oz-scheduler`, Postgres/pgvector, Redis, S3-compatible object storage, and
+caddy/nginx. `RegistryStorage` reads packs/catalog from local files or S3
+depending on environment. Product state, admin state, auth, usage, crawl jobs,
+profiles, quality runs, and promotions live in Postgres. Retrieval uses direct
+Postgres/pgvector when `DATABASE_URL` or `OZ_DATABASE_URL` is configured, then
+falls back to local catalog/chunk files for development.
 
 ## Storage
 
 - Local CAS: `~/.codo/objects/blobs/<prefix>/<sha256>`.
-- Pack transport: zstd-compressed JSON bundle with Ed25519-signed manifest and base64 blobs. Lambda-generated packs use the same JSON shape without zstd so the crawler can publish packs without native dependencies.
-- Cloud objects: S3 objects bucket with Intelligent-Tiering.
-- Cloud packs/catalog/admin streams: S3 packs bucket.
-- Metadata/search: Aurora Serverless v2 Postgres with pgvector and Postgres FTS.
-- Rerank cache: DynamoDB with 7-day TTL.
+- Pack transport: zstd-compressed JSON bundle with Ed25519-signed manifest and base64 blobs. Worker-generated packs use the same JSON shape without zstd so the crawler can publish packs without native dependencies.
+- Cloud packs/catalog/artifacts: S3-compatible object storage.
+- Product state/search: Postgres with pgvector and Postgres FTS.
+- Queue/rate limits/cache: Redis.
 
 ## Auth
 
-`oz login` uses `/auth/device` and `/auth/token`. In production, those endpoints proxy a configured OAuth device provider and then issue an Oz HMAC JWT for API access. Local development keeps a fallback device code only when `OZ_REQUIRE_OAUTH` is not enabled. The CLI stores tokens in the OS keychain when available and falls back to `~/.codo/config.json` only when keychain access is unavailable or disabled for tests.
+Oz v1 owns authentication. Web users create an account or accept an admin invite, then sign in through `/login` with email and password. Passwords are hashed with Argon2 and web sessions use an HttpOnly Secure `oz_session` cookie. CLI users run `oz login`, which calls `/auth/device`, opens `/device?code=...` in the same account session, then polls `/auth/token` for a short-lived access JWT and a rotating opaque refresh token. The CLI stores both tokens in the OS keychain when available and falls back to `~/.codo/config.json` only when keychain access is unavailable or disabled for tests.
+
+Admin privileges are a `users.role = 'admin'` database flag seeded by an operator script; users cannot self-promote. Production disables local auth fallbacks by setting `OZ_ENV=production`.
+
+## Dashboard And Admin
+
+The user dashboard is intentionally small in v1: it shows the signed-in account,
+CLI login instructions, local-docs usage guidance, and links to status/privacy
+pages. It does not expose private indexing, team spaces, API keys, MCP, or chat.
+
+The admin panel is the catalog control plane. Admins create library profiles,
+approve index requests, queue crawls/recrawls, maintain freshness policies, and
+inspect users, usage, telemetry, auth audit logs, admin action logs, crawler
+jobs, catalog health, quality runs, and promotion history. Admin mutations use
+the same first-party session and CSRF checks as the dashboard. Crawler jobs
+write start/completion/failure state back to Postgres, and successful jobs
+create catalog promotion, quality, and pack build records.
 
 ## Crawler
 
-The crawler uses a vendored copy of D4Vinci/Scrapling under `third_party/Scrapling` as the primary crawler engine. Local and production jobs run through Scrapling's `Spider`, `FetcherSession`, `AsyncDynamicSession`, `AsyncStealthySession`, `response.follow()`, concurrency controls, optional robots.txt compliance, and optional checkpoint directories. A stdlib fetch fallback remains for Lambda/runtime images that do not include browser dependencies.
+The crawler uses a vendored copy of D4Vinci/Scrapling under `third_party/Scrapling` as the primary crawler engine. Local and production jobs run through Scrapling's `Spider`, `FetcherSession`, `AsyncDynamicSession`, `AsyncStealthySession`, `response.follow()`, concurrency controls, optional robots.txt compliance, and optional checkpoint directories. A stdlib fetch fallback remains for runtimes that do not include browser dependencies.
 
 It discovers `/llms-full.txt`, `/llms.txt`, `/sitemap.xml`, and same-site links, then writes:
 
@@ -60,7 +82,7 @@ Embeddings are SHA-cached and generated only when `OPENAI_API_KEY` is present.
 
 Each chunk has a deterministic `chunk_sha` derived from vendor, library, version, path, ordinal, and text. The indexer also computes the same value for older chunk files that do not contain it, so Postgres chunk upserts cannot collapse unrelated chunks into one empty hash.
 
-In Lambda, each successful crawl is packed, uploaded to S3, upserted into `catalog.json`, and indexed into Aurora through the Data API. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against either `OZ_DATABASE_URL` or the Aurora Data API env vars.
+In the worker, each successful crawl is packed, uploaded to S3-compatible object storage, upserted into `catalog.json`, recorded as a promotion, and indexed into Postgres. Scheduled recrawls use freshness policies first and fall back to seed libraries only when explicitly enabled. Production crawls require a library profile and fail before promotion when quality gates fail. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against `OZ_DATABASE_URL` or `DATABASE_URL`.
 
 ## Agent Contract
 

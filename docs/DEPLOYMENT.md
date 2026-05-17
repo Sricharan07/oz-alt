@@ -30,50 +30,75 @@ The crawler package requires Python 3.11 or newer. The vendored Scrapling source
 
 For browser-backed Scrapling modes, run Scrapling's browser install step in the runtime image before using `--fetcher dynamic` or `--fetcher stealth`.
 
-## Deploy AWS Stack
+## Docker Production
 
 ```bash
-cd infra/cdk
-npm install
-npm run build
-npm run synth
-npm run deploy -- \
-  --parameters BudgetAlertEmail=ops@example.com \
-  --parameters RequireOAuth=true \
-  --parameters OAuthDeviceAuthUrl=https://idp.example.com/oauth/device/code \
-  --parameters OAuthTokenUrl=https://idp.example.com/oauth/token \
-  --parameters OAuthClientId=oz-cli \
-  --parameters PackSigningKey=<ed25519-signing-seed> \
-  --parameters PackVerifyKey=<ed25519-public-key>
+docker compose build
+docker compose --profile ops run --rm migrate
+docker compose up -d postgres redis minio oz-web oz-api oz-worker oz-scheduler caddy
 ```
 
-To deploy Oz behind your own API hostname, set these before `npm run synth` or
-`npm run deploy`:
+The Docker-first runtime is the primary production shape:
+
+```text
+caddy/nginx -> oz-web + oz-api
+oz-web      -> user dashboard, admin dashboard, auth pages
+oz-api      -> CLI/API endpoints
+oz-worker   -> Redis crawl queue + Scrapling + Postgres + S3
+oz-scheduler-> freshness policies + Redis crawl queue
+```
+
+Use real production values instead of the local compose defaults:
 
 ```bash
-export OZ_CUSTOM_DOMAIN_NAME=api.yourdomain.com
-export OZ_CUSTOM_DOMAIN_CERT_ARN=arn:aws:acm:us-east-1:123456789012:certificate/...
+DATABASE_URL='postgresql://...'
+OZ_REDIS_URL='redis://...'
+OZ_PACKS_BUCKET='oz-packs-prod'
+OZ_CATALOG_BUCKET='oz-packs-prod'
+OZ_S3_ENDPOINT_URL='https://s3.amazonaws.com'
+AWS_ACCESS_KEY_ID='...'
+AWS_SECRET_ACCESS_KEY='...'
+OZ_PUBLIC_BASE_URL='https://api.tryoz.dev'
+OZ_APP_URL='https://app.tryoz.dev'
+OZ_COOKIE_SECURE=1
+OZ_COOKIE_DOMAIN='.tryoz.dev'
+OZ_JWT_SECRET='use-a-long-random-secret'
+OPENAI_API_KEY='...'
 ```
 
-When that is set, the stack creates an API Gateway custom domain and outputs:
+S3 is used only for immutable packs, catalog JSON, crawl artifacts, and backups.
+Postgres is the product database. Redis owns queues, rate limits, short-lived
+cache, and job locks. Do not store admin state in S3 JSONL in production.
 
-- `ApiUrl` for the URL the CLI should use
-- `CloudflareCnameTarget` for the Cloudflare DNS record value
-- `CloudflareHostedZoneId` for the API Gateway regional hosted zone ID
+## AWS EC2 Production
 
-The stack creates:
+The current production AWS shape is one Docker host plus S3:
 
-- API Gateway HTTP API
-- API Lambda
-- crawler Lambda
-- S3 objects bucket with Intelligent-Tiering
-- S3 packs/catalog bucket
-- Aurora Serverless v2 Postgres with Data API enabled
-- DynamoDB rerank cache table
-- SQS crawler queue and DLQ
-- EventBridge daily recrawl schedule
-- Secrets Manager JWT secret
-- AWS Budgets monthly $200 cost guardrail
+```text
+EC2 t4g.medium     oz-docker-prod
+Elastic IP         52.73.3.54
+S3 bucket          oz-prod-561303652534-us-east-1
+Instance services  postgres, redis, oz-web, oz-api, oz-worker, oz-scheduler, caddy
+```
+
+The EC2 compose file is:
+
+```bash
+infra/docker/docker-compose.aws-ec2.yml
+```
+
+It uses host-local Postgres and Redis volumes, AWS S3 for packs/catalog/artifacts,
+Caddy for `app.tryoz.dev`, `admin.tryoz.dev`, and `api.tryoz.dev`.
+
+Cloudflare records required:
+
+```text
+Type  Name   Value       Proxy
+A     @      52.73.3.54  DNS only until Caddy certs issue
+A     api    52.73.3.54  DNS only until Caddy certs issue
+A     app    52.73.3.54  DNS only until Caddy certs issue
+A     admin  52.73.3.54  DNS only until Caddy certs issue
+```
 
 ## Database Schema
 
@@ -85,54 +110,77 @@ DATABASE_URL='postgres://...' bash scripts/apply-db-migrations.sh
 
 The SQL schema is in `infra/sql`.
 
-Load the generated catalog and chunk index into Postgres/Aurora after migrations:
+Load the generated catalog and chunk index into Postgres after migrations:
 
 ```bash
 OZ_DATABASE_URL='postgres://...' OPENAI_API_KEY='sk-...' python3 scripts/index-registry-to-db.py
-```
-
-For the deployed Aurora Data API path, use the stack outputs instead of `OZ_DATABASE_URL`:
-
-```bash
-OZ_DB_RESOURCE_ARN='arn:aws:rds:...' \
-OZ_DB_SECRET_ARN='arn:aws:secretsmanager:...' \
-OZ_DB_NAME='oz' \
-OPENAI_API_KEY='sk-...' \
-python3 scripts/index-registry-to-db.py
 ```
 
 The importer writes vendors, libraries, latest refs, and chunk rows. If `_chunks.jsonl` rows contain 1536-dimensional embeddings, they are stored in `pgvector`; if they do not, the importer generates them when `OPENAI_API_KEY` is set. Without embeddings, the same rows remain searchable through Postgres full-text search.
 
 ## Auth
 
-Local development uses the built-in device-code fallback. Production should require a real OAuth device provider:
+Production auth is owned by Oz. There is no Auth0, Cognito, or external OAuth provider in v1.
 
-```bash
-OZ_REQUIRE_OAUTH=1
-OZ_OAUTH_DEVICE_AUTH_URL='https://idp.example.com/oauth/device/code'
-OZ_OAUTH_TOKEN_URL='https://idp.example.com/oauth/token'
-OZ_OAUTH_CLIENT_ID='oz-cli'
-OZ_OAUTH_SCOPE='openid profile email'
+Web login:
+
+```text
+admin creates invite -> user sets password -> /login -> HttpOnly Secure oz_session cookie
 ```
 
-`/auth/device` proxies the provider's device authorization response. `/auth/token` exchanges the device code with the provider and issues the Oz JWT used by the CLI.
+CLI login:
+
+```bash
+oz login --api-url https://api.tryoz.dev
+```
+
+The CLI calls `/auth/device`, prints a `/device?code=...` URL, polls `/auth/token`, stores the short-lived access token and rotating refresh token in the OS keychain, and refreshes automatically after 401 responses.
+
+Before beta, seed at least one admin and create a one-time password setup link:
+
+```bash
+DATABASE_URL='postgresql://...' \
+OZ_JWT_SECRET='...' \
+OZ_PUBLIC_BASE_URL='https://api.tryoz.dev' \
+OZ_APP_URL='https://app.tryoz.dev' \
+python3 scripts/seed-admin-user.py admin@tryoz.dev --invite
+```
+
+Users can also create normal accounts at `https://app.tryoz.dev/signup` unless
+`OZ_SIGNUP_DISABLED=true` is configured.
 
 ## Admin
 
-The deployed admin panel is served by the API Lambda at:
+The deployed admin panel is served by the app/API container at:
 
 ```bash
-https://api.claw.codes/admin
+https://admin.tryoz.dev/admin
 ```
 
-Open the page in a browser and paste an Oz access token from:
+Open the login page in a browser:
 
 ```bash
-oz config get auth_token
+https://app.tryoz.dev/login
 ```
 
-The admin login stores the token in a secure, HttpOnly cookie scoped to `/admin`.
-Use `/admin/logout` to clear the browser session.
+Log in at `https://app.tryoz.dev/login`, then open `https://admin.tryoz.dev/admin`.
+Admin access requires the signed-in user's `role` to be `admin`. Use
+`/admin/logout` to clear the browser session.
+
+The admin panel is the only v1 catalog operation surface. It can:
+
+- approve user index requests into crawler jobs
+- queue direct crawls and recrawls
+- create/update library freshness policies
+- create/update production library profiles
+- create beta user invites
+- create password reset links
+- disable or enable users
+- show users, usage, auth audit logs, admin action logs, crawler jobs, catalog health, and promotion history
+- expose JSON audit views under `/admin/index-requests`, `/admin/crawler-jobs`, `/admin/telemetry`, `/admin/usage`, `/admin/actions`, `/admin/promotions`, and `/admin/freshness`
+
+The worker writes job start/failure/completion state, promotion records,
+pack keys, refs, quality reports, and `last_crawled_at` back to Postgres.
 
 ## Pack Signing
 
@@ -154,24 +202,23 @@ Unsigned local packs still work unless verification is configured or signatures 
 
 ## Publish Registry Packs
 
-After CDK deploy, publish the generated catalog and packs to the packs bucket output:
+Publish the generated catalog and packs to the configured S3-compatible packs bucket:
 
 ```bash
 bash scripts/publish-registry-to-s3.sh s3://<packs-bucket-name>
 ```
 
-The API Lambda reads:
+The API/worker containers read:
 
 - `OZ_CATALOG_BUCKET`
 - `OZ_CATALOG_KEY`
 - `OZ_PACKS_BUCKET`
 - `OZ_PACK_PREFIX`
-- `OZ_DB_RESOURCE_ARN`
-- `OZ_DB_SECRET_ARN`
-- `OZ_RERANK_TABLE`
-- `OZ_OAUTH_DEVICE_AUTH_URL`
-- `OZ_OAUTH_TOKEN_URL`
-- `OZ_OAUTH_CLIENT_ID`
+- `DATABASE_URL`
+- `OZ_REDIS_URL`
+- `OZ_PUBLIC_BASE_URL`
+- `OZ_APP_URL`
+- `OZ_COOKIE_DOMAIN`
 - `OZ_PACK_SIGNING_KEY`
 - `OZ_PACK_SIGNING_KEY_ID`
 - `OZ_PACK_VERIFY_KEY`
@@ -201,7 +248,7 @@ bash scripts/sync-public-release-repo.sh
 ```
 
 ```bash
-bash scripts/release-local.sh 0.1.0
+bash scripts/release-local.sh 0.1.2
 ```
 
 This creates a raw binary asset, SHA256 files, a release tarball, and a Homebrew formula for the current platform. The npm wrapper downloads the raw binary asset for the user's platform.

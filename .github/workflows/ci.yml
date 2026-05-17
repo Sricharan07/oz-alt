@@ -18,9 +18,5 @@ jobs:
           node-version: "22"
       - run: cargo test --workspace
       - run: bash scripts/check-line-counts.sh
-      - run: python -m py_compile lambda_entry.py packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py
+      - run: python -m py_compile packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py scripts/*.py
       - run: bash scripts/e2e-local.sh
-      - run: npm install
-        working-directory: infra/cdk
-      - run: npm run build
-        working-directory: infra/cdk

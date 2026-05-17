@@ -14,12 +14,12 @@
 
 ## Runbook
 
-1. Check API Gateway 5xx rate and Lambda errors.
-2. Check Lambda logs for auth, pack, and retrieval failures.
+1. Check caddy/nginx and `oz-api` 5xx rate.
+2. Check `oz-api`, `oz-worker`, and `oz-scheduler` logs for auth, pack, crawl, and retrieval failures.
 3. Check S3 pack and catalog object availability.
-4. Check Aurora Data API errors and database capacity.
-5. Check DynamoDB throttling on rerank cache.
-6. Check SQS crawler queue depth and DLQ messages.
+4. Check Postgres connectivity, pgvector indexes, and database capacity.
+5. Check Redis queue/cache connectivity and queue depth.
+6. Check worker health and failed crawl job records.
 7. Disable rerank with missing `OPENAI_API_KEY` or model errors; lexical/FTS fallback remains available.
 8. If pack integrity fails, remove the affected catalog entry and rebuild the pack from fixture source.
 

@@ -1,0 +1,7 @@
+tryoz.dev, app.tryoz.dev, admin.tryoz.dev {
+	reverse_proxy oz-web:8765
+}
+
+api.tryoz.dev {
+	reverse_proxy oz-api:8765
+}

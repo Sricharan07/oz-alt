@@ -17,8 +17,6 @@ done < <(
     -path './target' -prune -o \
     -path './dist' -prune -o \
     -path './third_party' -prune -o \
-    -path './infra/cdk/node_modules' -prune -o \
-    -path './infra/cdk/cdk.out' -prune -o \
     -type f \( \
       -name '*.rs' -o \
       -name '*.py' -o \
