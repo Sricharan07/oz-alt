@@ -80,7 +80,7 @@ def collect_metrics(start: datetime, end: datetime) -> dict[str, Any]:
     params = {"start": start.isoformat(), "end": end.isoformat()}
     api = store.one(
         """
-        select count(*) as total,
+        select count(*) filter (where status in ('ok', 'fail')) as total,
                count(*) filter (where status = 'ok') as ok
         from system_checks
         where check_name = 'api_health'
