@@ -5,6 +5,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import re
 import secrets
 import shutil
 import string
@@ -44,7 +45,7 @@ def main() -> int:
         search = run([str(oz), "search", args.query, args.library], cwd=tmp_project, env=env)
         if ".codo/vendors/" not in search:
             raise SystemExit("search did not return materialized .codo paths")
-        grep = run(["rg", "-n", args.grep, ".codo/vendors"], cwd=tmp_project, env=env)
+        grep = run(["rg", "-n", "-m", "20", "--glob", "!_chunks.jsonl", args.grep, ".codo/vendors"], cwd=tmp_project, env=env)
         if not grep.strip():
             raise SystemExit("rg did not find expected documentation content")
         print(json.dumps({"ok": True, "email": auth["email"], "project": str(tmp_project)}, indent=2))
@@ -66,7 +67,12 @@ def create_cli_auth(app_url: str, api_url: str) -> dict[str, str]:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     form(opener, f"{app_url}/signup", {"email": email, "password": password, "confirm_password": password})
     device = json_request(opener, f"{api_url}/auth/device", {"client_name": "beta-smoke"})
-    form(opener, f"{app_url}/device", {"user_code": device["user_code"], "action": "approve"})
+    device_page = get(opener, f"{app_url}/device?code={urllib.parse.quote(str(device['user_code']))}")
+    form(
+        opener,
+        f"{app_url}/device",
+        {"csrf": hidden_value(device_page, "csrf"), "user_code": device["user_code"], "action": "approve"},
+    )
     token = json_request(opener, f"{api_url}/auth/token", {"device_code": device["device_code"]})
     refreshed = json_request(opener, f"{api_url}/auth/refresh", {"refresh_token": token["refresh_token"]})
     return {
@@ -96,6 +102,18 @@ def form(opener: urllib.request.OpenerDirector, url: str, payload: dict[str, str
     )
     with opener.open(req, timeout=30) as response:
         return response.read().decode("utf-8", "replace")
+
+
+def get(opener: urllib.request.OpenerDirector, url: str) -> str:
+    with opener.open(url, timeout=30) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def hidden_value(html: str, name: str) -> str:
+    match = re.search(rf'name="{re.escape(name)}"\s+value="([^"]*)"', html)
+    if not match:
+        raise SystemExit(f"missing hidden input: {name}")
+    return match.group(1)
 
 
 def run(
