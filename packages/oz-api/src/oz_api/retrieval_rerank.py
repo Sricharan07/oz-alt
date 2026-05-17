@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
 from typing import Any
 from urllib import request
 
@@ -22,12 +21,12 @@ def maybe_rerank(
         return rows
 
     cache_key = rerank_cache_key(route, query, fingerprint)
-    cached = get_rerank_cache(ctx, cache_key)
+    cached = get_rerank_cache(cache_key)
     if cached is not None:
         return cached
 
     reranked = openai_rerank(ctx.openai_api_key, query, rows[:20]) or rows
-    put_rerank_cache(ctx, cache_key, reranked)
+    put_rerank_cache(cache_key, reranked)
     return reranked
 
 def clear_winner(rows: list[dict[str, Any]]) -> bool:
@@ -99,42 +98,11 @@ def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
     digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
     return f"rerank:{digest}"
 
-def get_rerank_cache(ctx: RetrievalContext, cache_key: str) -> list[dict[str, Any]] | None:
-    cached = get_redis_rerank_cache(cache_key)
-    if cached is not None:
-        return cached
-    client = dynamodb_client()
-    if client is None or not ctx.rerank_table:
-        return None
-    try:
-        response = client.get_item(TableName=ctx.rerank_table, Key={"cache_key": {"S": cache_key}})
-        item = response.get("Item")
-        if not item:
-            return None
-        expires_at = int(item.get("expires_at", {}).get("N", "0"))
-        if expires_at < int(time.time()):
-            return None
-        return json.loads(item["payload"]["S"])
-    except Exception:
-        return None
+def get_rerank_cache(cache_key: str) -> list[dict[str, Any]] | None:
+    return get_redis_rerank_cache(cache_key)
 
-def put_rerank_cache(ctx: RetrievalContext, cache_key: str, rows: list[dict[str, Any]]) -> None:
-    if put_redis_rerank_cache(cache_key, rows):
-        return
-    client = dynamodb_client()
-    if client is None or not ctx.rerank_table:
-        return
-    try:
-        client.put_item(
-            TableName=ctx.rerank_table,
-            Item={
-                "cache_key": {"S": cache_key},
-                "expires_at": {"N": str(int(time.time()) + 7 * 24 * 60 * 60)},
-                "payload": {"S": json.dumps(rows, sort_keys=True)},
-            },
-        )
-    except Exception:
-        return
+def put_rerank_cache(cache_key: str, rows: list[dict[str, Any]]) -> None:
+    put_redis_rerank_cache(cache_key, rows)
 
 
 def get_redis_rerank_cache(cache_key: str) -> list[dict[str, Any]] | None:
@@ -163,14 +131,3 @@ def put_redis_rerank_cache(cache_key: str, rows: list[dict[str, Any]]) -> bool:
         return True
     except Exception:
         return False
-
-
-def dynamodb_client() -> Any | None:
-    try:
-        import boto3  # type: ignore
-    except ImportError:
-        return None
-    try:
-        return boto3.client("dynamodb")
-    except Exception:
-        return None
