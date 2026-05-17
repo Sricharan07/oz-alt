@@ -10,6 +10,8 @@ from oz_api.retrieval_context import RetrievalContext
 from oz_api.redis_store import redis_client
 from oz_api.storage import normalize_query
 
+RERANK_CACHE_VERSION = "search-rank-v2"
+
 def maybe_rerank(
     ctx: RetrievalContext,
     route: str,
@@ -95,7 +97,7 @@ def openai_rerank(api_key: str | None, query: str, rows: list[dict[str, Any]]) -
         return None
 
 def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
-    digest = hashlib.sha256(f"{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{RERANK_CACHE_VERSION}\0{route}\0{query}\0{fingerprint}".encode("utf-8")).hexdigest()
     return f"rerank:{digest}"
 
 def get_rerank_cache(cache_key: str) -> list[dict[str, Any]] | None:
