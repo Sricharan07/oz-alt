@@ -101,11 +101,15 @@ def collect_metrics(start: datetime, end: datetime) -> dict[str, Any]:
     ) or {}
     crawler = store.one(
         """
+        with latest as (
+          select library_id, status,
+                 row_number() over (partition by library_id order by queued_at desc, id desc) rn
+          from crawler_jobs
+        )
         select count(*) as total,
                count(*) filter (where status = 'completed') as passed
-        from crawler_jobs
-        where queued_at >= cast(:start as timestamptz)
-          and queued_at < cast(:end as timestamptz)
+        from latest
+        where rn = 1
         """,
         params,
     ) or {}
