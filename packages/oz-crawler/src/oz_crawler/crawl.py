@@ -23,6 +23,7 @@ from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
 from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
 from oz_crawler.validation import validate_fixture, write_validation
+from oz_crawler.versioning import filter_current_version
 
 LOGGER = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def crawl_single_page(
     )
     artifacts = collect_source_artifacts(url, pages, profile=profile)
     artifact_pages = artifact_normalized_pages(artifacts)
-    all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile)
+    all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile, version=version)
     if not all_pages:
         write_rejections(target, rejected)
         raise RuntimeError(f"all crawled pages were rejected for {vendor}/{library}")
@@ -468,13 +469,16 @@ def prepare_pages(
     pages: list[NormalizedPage],
     *,
     profile: LibraryProfile | None,
+    version: str = "latest",
 ) -> tuple[list[NormalizedPage], list[dict[str, Any]]]:
     accepted: list[NormalizedPage] = []
     rejected: list[dict[str, Any]] = []
     sanitized_pages = [
         replace(page, title=sanitize_secret_tokens(page.title), markdown=clean_markdown(page.markdown)) for page in pages
     ]
-    for page in assign_page_paths(sanitized_pages):
+    assigned_pages, version_rejections = filter_current_version(assign_page_paths(sanitized_pages), target_version=version)
+    rejected.extend(version_rejections)
+    for page in assigned_pages:
         quality = score_page(page, profile)
         if not quality.accepted:
             rejected.append(rejection_row(page, quality))

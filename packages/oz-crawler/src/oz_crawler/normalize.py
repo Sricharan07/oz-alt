@@ -41,7 +41,7 @@ class NormalizedPage:
     markdown: str
     source_url: str
     path: str | None = None
-    content_type: str = "guide"
+    content_type: str = "prose"
     quality_score: float = 1.0
     symbols: tuple[str, ...] = ()
 

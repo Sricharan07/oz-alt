@@ -95,6 +95,23 @@ enum Command {
         json: bool,
     },
 
+    /// Return compact local snippets for search results when inline context is needed.
+    Context {
+        /// Query text.
+        query: String,
+
+        /// Optional library scope, for example vercel/next.js.
+        library: Option<String>,
+
+        /// Maximum approximate tokens to print.
+        #[arg(long, default_value_t = 2000)]
+        max_tokens: usize,
+
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show pulled libraries for this project.
     Status,
 
@@ -349,6 +366,12 @@ fn main() -> Result<()> {
             library,
             json,
         } => search_docs(&project_root, &query, library.as_deref(), json)?,
+        Command::Context {
+            query,
+            library,
+            max_tokens,
+            json,
+        } => context_docs(&project_root, &query, library.as_deref(), max_tokens, json)?,
         Command::Status => print_status(&project_root)?,
         Command::Update { library } => update_libraries(&project_root, library.as_deref())?,
         Command::Gc => gc(&project_root)?,
@@ -467,7 +490,14 @@ mod tests {
         );
         assert_eq!(
             normalize_query("NextRequest PrismaClient"),
-            vec!["nextrequest", "next", "request", "prismaclient", "prisma", "client"]
+            vec![
+                "nextrequest",
+                "next",
+                "request",
+                "prismaclient",
+                "prisma",
+                "client"
+            ]
         );
     }
 }

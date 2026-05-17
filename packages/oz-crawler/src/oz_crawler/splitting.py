@@ -6,7 +6,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from oz_crawler.normalize import NormalizedPage
-from oz_crawler.quality import classify_content_type
+from oz_crawler.content_types import classify_content_type
 
 
 FRONTMATTER_BLOCK = re.compile(r"(?ms)^---\s*\n(.*?)\n---\s*\n")
@@ -84,7 +84,12 @@ def document_path(source_url: str, title: str, content_type: str) -> str:
     prefix = {
         "api_reference": "api-reference",
         "types": "api-reference",
+        "code_example": "examples",
         "example": "examples",
+        "config": "guides",
+        "cli": "guides",
+        "error_ref": "guides",
+        "prose": "guides",
         "index": "guides",
         "guide": "guides",
     }.get(content_type, "guides")

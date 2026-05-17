@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.parsers import openapi_chunks, type_definition_chunks
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
 from oz_crawler.security import assert_public_http_url, fetch_public_url
 from oz_crawler.splitting import document_path, split_llms_full
@@ -133,14 +134,17 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit:
         text = fetch_text(url)
         if not text or looks_like_html(text):
             continue
-        output.append(
-            SourceArtifact(
-                path=f"api-reference/openapi-{slugify(url)}.md",
-                title="OpenAPI Reference",
-                source_url=url,
-                markdown=render_openapi(text, url),
+        structured = openapi_chunks(text, url, limit=limit - len(output))
+        output.extend(SourceArtifact(**item) for item in structured)
+        if not structured:
+            output.append(
+                SourceArtifact(
+                    path=f"api-reference/openapi-{slugify(url)}.md",
+                    title="OpenAPI Reference",
+                    source_url=url,
+                    markdown=render_openapi(text, url),
+                )
             )
-        )
         if len(output) >= limit:
             break
     return output
@@ -158,14 +162,17 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
         if not text:
             continue
         language = "typescript" if path.endswith(".d.ts") else "python"
-        output.append(
-            SourceArtifact(
-                path=f"api-reference/types-{slugify(url)}.md",
-                title="Type Definitions",
-                source_url=url,
-                markdown=f"# Type Definitions\n\n**Source:** {url}\n\n```{language}\n{text.strip()}\n```\n",
+        structured = type_definition_chunks(text, url, language=language, limit=limit - len(output))
+        output.extend(SourceArtifact(**item) for item in structured)
+        if not structured:
+            output.append(
+                SourceArtifact(
+                    path=f"api-reference/types-{slugify(url)}.md",
+                    title="Type Definitions",
+                    source_url=url,
+                    markdown=f"# Type Definitions\n\n**Source:** {url}\n\n```{language}\n{text.strip()}\n```\n",
+                )
             )
-        )
         if len(output) >= limit:
             break
     return output

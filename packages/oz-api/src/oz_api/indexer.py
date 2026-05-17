@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
+from oz_api.embeddings import embedding_model as configured_embedding_model
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
+from oz_api.trust import first_source_url, trust_score_for_entry
 
 
 @dataclass(frozen=True)
@@ -39,8 +43,17 @@ def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
     if connection is None:
         raise RuntimeError("No database connection configured. Set OZ_DATABASE_URL or DATABASE_URL.")
     with connection:
-        write_catalog_and_chunks(PostgresWriter(connection), storage, catalog)
-    return stats
+        writer = PostgresWriter(connection)
+        write_catalog_and_chunks(writer, storage, catalog)
+        embedded_chunks = writer.count_embedded_chunks()
+        if require_embeddings() and embedded_chunks < stats.chunks:
+            raise RuntimeError(f"embedding requirement failed: {embedded_chunks}/{stats.chunks} chunks have embeddings")
+        return IndexStats(
+            libraries=stats.libraries,
+            versions=stats.versions,
+            chunks=stats.chunks,
+            embedded_chunks=embedded_chunks,
+        )
 
 
 def count_registry(storage: RegistryStorage, catalog: list[dict[str, Any]]) -> IndexStats:
@@ -60,15 +73,17 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
         library_id = writer.upsert_library(vendor_id, entry)
         version_id = writer.upsert_version(library_id, entry)
         writer.upsert_ref(library_id, version_id, str(entry.get("ref_sha") or "unknown"))
+        writer.upsert_trust_score(library_id, trust_score_for_entry(entry))
 
         fixture = fixture_path(storage, entry)
         line_cache: dict[str, str] = {}
         current_chunk_shas: list[str] = []
-        for row in chunk_rows(storage, entry):
+        rows = chunk_rows(storage, entry)
+        row_embeddings = embeddings_for_chunk_rows(rows)
+        for row, (embedding, generated_model, generated_dimensions) in zip(rows, row_embeddings, strict=True):
             chunk_sha = chunk_sha_for_row(entry, row)
             current_chunk_shas.append(chunk_sha)
             start_line, end_line = row_line_span(row) or line_span(fixture, row, line_cache)
-            embedding = embedding_for_chunk(row)
             writer.upsert_chunk(
                 version_id,
                 path=str(row.get("path") or "README.md"),
@@ -76,34 +91,99 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
                 end_line=end_line,
                 source_url=str(row.get("source_url") or ""),
                 ordinal=int(row.get("ordinal") or 1),
+                chunk_key=str(row.get("chunk_key") or row.get("id") or ""),
+                parent_chunk_key=nullable_string(row.get("parent_chunk_key")),
                 chunk_sha=chunk_sha,
                 heading_path=list_of_strings(row.get("heading_path")),
                 symbols=list_of_strings(row.get("symbols")),
-                content_type=str(row.get("content_type") or "guide"),
+                content_type=str(row.get("content_type") or "prose"),
                 quality_score=float(row.get("quality_score") or 1.0),
+                token_count=int(row.get("token_count") or token_count(str(row.get("text") or ""))),
+                source_anchor=nullable_string(row.get("source_anchor")),
+                embedding_model=nullable_string(row.get("embedding_model")) or generated_model,
+                embedding_dimensions=int(row.get("embedding_dimensions") or 0) or generated_dimensions,
                 content=str(row.get("text") or ""),
                 embedding=embedding,
             )
         writer.delete_stale_chunks(version_id, current_chunk_shas)
+        writer.resolve_parent_chunks(version_id)
+        writer.rebuild_dedupe_clusters(version_id)
 
 
 def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str, Any]]:
     chunks_path = fixture_path(storage, entry) / "_chunks.jsonl"
-    if not chunks_path.exists():
-        return []
+    fixture = fixture_path(storage, entry)
     rows: list[dict[str, Any]] = []
     seen_chunk_shas: set[str] = set()
-    for line in chunks_path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            row = json.loads(line)
-            if not is_indexable_chunk(row):
-                continue
-            chunk_sha = chunk_sha_for_row(entry, row)
-            if chunk_sha in seen_chunk_shas:
-                continue
-            seen_chunk_shas.add(chunk_sha)
-            rows.append(row)
+    if chunks_path.exists():
+        for line in chunks_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
+    for row in symbol_chunk_rows(fixture):
+        append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
     return rows
+
+
+def append_unique_chunk_row(
+    entry: dict[str, Any],
+    row: dict[str, Any],
+    rows: list[dict[str, Any]],
+    seen_chunk_shas: set[str],
+) -> None:
+    if not is_indexable_chunk(row):
+        return
+    chunk_sha = chunk_sha_for_row(entry, row)
+    if chunk_sha in seen_chunk_shas:
+        return
+    seen_chunk_shas.add(chunk_sha)
+    rows.append(row)
+
+
+def symbol_chunk_rows(fixture: Path) -> list[dict[str, Any]]:
+    symbols_dir = fixture / "_symbols"
+    if not symbols_dir.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(symbols_dir.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        if not text:
+            continue
+        symbol = path.stem
+        relative = path.relative_to(fixture).as_posix()
+        rows.append(
+            {
+                "id": f"symbol-{symbol}",
+                "path": relative,
+                "source_url": symbol_source_url(text),
+                "source_anchor": symbol_source_anchor(text, symbol),
+                "ordinal": 1,
+                "chunk_key": f"symbol-{symbol}",
+                "start_line": 1,
+                "end_line": len(text.splitlines()),
+                "heading_path": [symbol],
+                "symbols": [symbol],
+                "content_type": "api_reference",
+                "quality_score": 1.0,
+                "token_count": token_count(text),
+                "text": text,
+            }
+        )
+    return rows
+
+
+def symbol_source_url(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("**Source:**"):
+            return line.split("**Source:**", 1)[1].strip()
+    return ""
+
+
+def symbol_source_anchor(text: str, symbol: str) -> str:
+    source_url = symbol_source_url(text)
+    if not source_url:
+        return ""
+    return f"{source_url}#_symbol_{symbol}"
 
 
 def is_indexable_chunk(row: dict[str, Any]) -> bool:
@@ -155,7 +235,24 @@ def list_of_strings(value: Any) -> list[str]:
 
 
 def valid_embedding(value: Any) -> bool:
-    return isinstance(value, list) and len(value) == 1536 and all(isinstance(item, (int, float)) for item in value)
+    return (
+        isinstance(value, list)
+        and len(value) == configured_embedding_dimensions()
+        and all(isinstance(item, (int, float)) for item in value)
+    )
+
+
+def nullable_string(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def token_count(text: str) -> int:
+    return max(1, len(text.split()))
+
+
+def require_embeddings() -> bool:
+    return os.environ.get("OZ_REQUIRE_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes"}
 
 
 def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
@@ -175,21 +272,34 @@ def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def embedding_for_chunk(row: dict[str, Any]) -> list[float] | None:
-    existing = row.get("embedding")
-    if valid_embedding(existing):
-        return [float(value) for value in existing]
-    text = str(row.get("text") or "")
-    if not text:
-        return None
+def embeddings_for_chunk_rows(rows: list[dict[str, Any]]) -> list[tuple[list[float] | None, str | None, int | None]]:
+    output: list[tuple[list[float] | None, str | None, int | None]] = []
+    pending_indices: list[int] = []
+    pending_texts: list[str] = []
+    for row in rows:
+        existing = row.get("embedding")
+        if valid_embedding(existing):
+            output.append(([float(value) for value in existing], nullable_string(row.get("embedding_model")), int(row.get("embedding_dimensions") or 0) or None))
+            continue
+        text = str(row.get("text") or "")
+        output.append((None, None, None))
+        if text.strip():
+            pending_indices.append(len(output) - 1)
+            pending_texts.append(text)
+    if not pending_texts:
+        return output
     try:
-        from oz_crawler.embeddings import embedding_for_text  # type: ignore
+        from oz_crawler.embeddings import embeddings_for_texts  # type: ignore
     except ImportError:
-        return None
-    generated = embedding_for_text(text)
-    if valid_embedding(generated):
-        return generated
-    return None
+        return output
+
+    generated_embeddings = embeddings_for_texts(pending_texts)
+    model = configured_embedding_model()
+    dimensions = configured_embedding_dimensions()
+    for index, generated in zip(pending_indices, generated_embeddings, strict=False):
+        if valid_embedding(generated):
+            output[index] = (generated, model, dimensions)
+    return output
 
 
 class IndexWriter:
@@ -208,6 +318,18 @@ class IndexWriter:
     def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
         raise NotImplementedError
 
+    def count_embedded_chunks(self) -> int:
+        raise NotImplementedError
+
+    def upsert_trust_score(self, library_id: int, score: tuple[float, dict[str, Any]]) -> None:
+        raise NotImplementedError
+
+    def resolve_parent_chunks(self, version_id: int) -> None:
+        raise NotImplementedError
+
+    def rebuild_dedupe_clusters(self, version_id: int) -> None:
+        raise NotImplementedError
+
     def upsert_chunk(
         self,
         version_id: int,
@@ -217,11 +339,17 @@ class IndexWriter:
         end_line: int | None,
         source_url: str,
         ordinal: int,
+        chunk_key: str | None,
+        parent_chunk_key: str | None,
         chunk_sha: str,
         heading_path: list[str],
         symbols: list[str],
         content_type: str,
         quality_score: float,
+        token_count: int,
+        source_anchor: str | None,
+        embedding_model: str | None,
+        embedding_dimensions: int | None,
         content: str,
         embedding: list[float] | None,
     ) -> None:
@@ -317,6 +445,141 @@ class PostgresWriter(IndexWriter):
             (version_id, *chunk_shas),
         )
 
+    def count_embedded_chunks(self) -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute("select count(*) from chunks where embedding is not null")
+            return int(cursor.fetchone()[0])
+
+    def upsert_trust_score(self, library_id: int, score: tuple[float, dict[str, Any]]) -> None:
+        value, signals = score
+        self.execute(
+            """
+            insert into trust_scores(library_id, value, signals_json, calculated_at)
+            values (%s, %s, %s::jsonb, now())
+            on conflict (library_id) do update
+              set value = excluded.value,
+                  signals_json = excluded.signals_json,
+                  calculated_at = now()
+            """,
+            (library_id, value, json.dumps(signals, sort_keys=True)),
+        )
+
+    def resolve_parent_chunks(self, version_id: int) -> None:
+        self.execute(
+            """
+            update chunks child
+            set parent_chunk_id = parent.id
+            from chunks parent
+            where child.version_id = %s
+              and parent.version_id = child.version_id
+              and child.parent_chunk_key is not null
+              and parent.chunk_key = child.parent_chunk_key
+              and parent.id <> child.id
+            """,
+            (version_id,),
+        )
+
+    def rebuild_dedupe_clusters(self, version_id: int) -> None:
+        self.execute("delete from dedupe_clusters where version_id = %s", (version_id,))
+        self.execute(
+            """
+            update chunks
+            set dedupe_cluster_id = null,
+                dedupe_canonical = true
+            where version_id = %s
+            """,
+            (version_id,),
+        )
+        self.execute(
+            """
+            with grouped as (
+              select version_id,
+                     md5(regexp_replace(lower(content), '\\s+', ' ', 'g')) as cluster_key,
+                     array_agg(id order by quality_score desc, token_count desc, id asc) as ids,
+                     count(*) as member_count
+              from chunks
+              where version_id = %s
+              group by version_id, md5(regexp_replace(lower(content), '\\s+', ' ', 'g'))
+              having count(*) > 1
+            ),
+            inserted as (
+              insert into dedupe_clusters(version_id, cluster_key, canonical_chunk_id, member_count, method)
+              select version_id, cluster_key, ids[1], member_count, 'normalized_exact'
+              from grouped
+              returning id, canonical_chunk_id, cluster_key
+            )
+            update chunks c
+            set dedupe_cluster_id = inserted.id,
+                dedupe_canonical = c.id = inserted.canonical_chunk_id
+            from inserted
+            where c.version_id = %s
+              and md5(regexp_replace(lower(c.content), '\\s+', ' ', 'g')) = inserted.cluster_key
+            """,
+            (version_id, version_id),
+        )
+        self.execute(
+            """
+            with pairs as (
+              select c.id as left_id,
+                     n.id as right_id,
+                     case
+                       when c.quality_score > n.quality_score then c.id
+                       when c.quality_score < n.quality_score then n.id
+                       when c.token_count >= n.token_count then c.id
+                       else n.id
+                     end as canonical_id
+              from chunks c
+              join lateral (
+                select id, quality_score, token_count, embedding
+                from chunks candidate
+                where candidate.version_id = c.version_id
+                  and candidate.id <> c.id
+                  and candidate.embedding is not null
+                  and candidate.dedupe_cluster_id is null
+                order by candidate.embedding <=> c.embedding
+                limit 5
+              ) n on true
+              where c.version_id = %s
+                and c.embedding is not null
+                and c.dedupe_cluster_id is null
+                and c.id < n.id
+                and (c.embedding <=> n.embedding) <= 0.05
+            ),
+            clusters as (
+              select canonical_id,
+                     'vector:' || canonical_id::text as cluster_key,
+                     array_agg(left_id) || array_agg(right_id) as ids
+              from pairs
+              group by canonical_id
+            ),
+            inserted as (
+              insert into dedupe_clusters(version_id, cluster_key, canonical_chunk_id, member_count, method)
+              select %s, cluster_key, canonical_id, cardinality(ids), 'vector_cosine_0.95'
+              from clusters
+              on conflict (version_id, cluster_key) do update
+                set canonical_chunk_id = excluded.canonical_chunk_id,
+                    member_count = excluded.member_count
+              returning id, canonical_chunk_id, cluster_key
+            )
+            update chunks c
+            set dedupe_cluster_id = inserted.id,
+                dedupe_canonical = c.id = inserted.canonical_chunk_id
+            from inserted
+            where c.version_id = %s
+              and c.dedupe_cluster_id is null
+              and (
+                c.id = inserted.canonical_chunk_id
+                or exists (
+                  select 1
+                  from pairs
+                  where pairs.canonical_id = inserted.canonical_chunk_id
+                    and c.id in (pairs.left_id, pairs.right_id)
+                )
+              )
+            """,
+            (version_id, version_id, version_id),
+        )
+
     def upsert_chunk(
         self,
         version_id: int,
@@ -326,11 +589,17 @@ class PostgresWriter(IndexWriter):
         end_line: int | None,
         source_url: str,
         ordinal: int,
+        chunk_key: str | None,
+        parent_chunk_key: str | None,
         chunk_sha: str,
         heading_path: list[str],
         symbols: list[str],
         content_type: str,
         quality_score: float,
+        token_count: int,
+        source_anchor: str | None,
+        embedding_model: str | None,
+        embedding_dimensions: int | None,
         content: str,
         embedding: list[float] | None,
     ) -> None:
@@ -338,20 +607,28 @@ class PostgresWriter(IndexWriter):
         self.execute(
             """
             insert into chunks(
-              version_id, path, start_line, end_line, source_url, ordinal, chunk_sha,
-              heading_path, symbols, content_type, quality_score, content, embedding
+              version_id, path, start_line, end_line, source_url, ordinal, chunk_key,
+              parent_chunk_key, chunk_sha, heading_path, symbols, content_type,
+              quality_score, token_count, source_anchor, embedding_model,
+              embedding_dimensions, content, embedding
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::vector)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
               set path = excluded.path,
                   start_line = excluded.start_line,
                   end_line = excluded.end_line,
                   source_url = excluded.source_url,
                   ordinal = excluded.ordinal,
+                  chunk_key = excluded.chunk_key,
+                  parent_chunk_key = excluded.parent_chunk_key,
                   heading_path = excluded.heading_path,
                   symbols = excluded.symbols,
                   content_type = excluded.content_type,
                   quality_score = excluded.quality_score,
+                  token_count = excluded.token_count,
+                  source_anchor = excluded.source_anchor,
+                  embedding_model = excluded.embedding_model,
+                  embedding_dimensions = excluded.embedding_dimensions,
                   content = excluded.content,
                   embedding = excluded.embedding
             """,
@@ -362,23 +639,21 @@ class PostgresWriter(IndexWriter):
                 end_line,
                 source_url,
                 ordinal,
+                chunk_key,
+                parent_chunk_key,
                 chunk_sha,
                 json.dumps(heading_path),
                 json.dumps(symbols),
                 content_type,
                 quality_score,
+                token_count,
+                source_anchor,
+                embedding_model,
+                embedding_dimensions,
                 content,
                 vector,
             ),
         )
-
-
-def first_source_url(entry: dict[str, Any]) -> str | None:
-    urls = entry.get("source_urls")
-    if isinstance(urls, list) and urls:
-        return str(urls[0])
-    source = entry.get("source_url")
-    return str(source) if source else None
 
 
 def main(argv: list[str] | None = None) -> int:

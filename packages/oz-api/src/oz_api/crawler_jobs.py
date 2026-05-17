@@ -20,6 +20,7 @@ from oz_api.auth_store import AuthStore
 from oz_api.indexer import PostgresWriter, write_catalog_and_chunks
 from oz_api.queue import enqueue_crawler_job
 from oz_api.retrieval import RetrievalContext, postgres_connection
+from oz_api.retrieval_local import search_from_fixtures
 from oz_api.storage import RegistryStorage, normalize_query
 from oz_crawler.crawl import CrawlOptions, crawl_single_page
 from oz_crawler.pack import build_pack_bytes
@@ -98,6 +99,22 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         record_crawler_job_log(job, "error", "pack materialization eval failed", pack_eval)
         raise RuntimeError("pack materialization eval failed; pack was not promoted")
     record_crawler_job_log(job, "info", "pack built", pack_eval.get("metrics") or {})
+    eval_entry = catalog_entry_for_job(
+        vendor=vendor,
+        library=library,
+        version=version,
+        source_url=source_url,
+        fixture_path=target,
+        pack_key="",
+        ref_sha=str(manifest["tree_sha256"]),
+    )
+    search_eval = search_eval_report(storage, f"{vendor}/{library}", version)
+    if search_eval is not None:
+        record_eval_run(eval_entry, eval_type="semantic_search", passed=bool(search_eval["passed"]), metrics=search_eval)
+        if not search_eval["passed"]:
+            record_crawler_job_log(job, "error", "semantic search eval failed", search_eval)
+            raise RuntimeError("semantic search eval failed; pack was not promoted")
+        record_crawler_job_log(job, "info", "semantic search eval passed", search_eval)
     pack_key = storage.put_pack_bytes(vendor, library, version, pack_body)
     record_crawler_job_log(job, "info", "pack uploaded", {"pack_key": pack_key, "bytes": len(pack_body)})
     catalog_entry = catalog_entry_for_job(
@@ -243,6 +260,111 @@ def pack_eval_report(manifest: dict[str, Any]) -> dict[str, Any]:
         and (not require_signature or has_signature)
     )
     return {"passed": passed, "metrics": metrics}
+
+
+def search_eval_report(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:
+    spec = eval_spec_for_library(storage, library, version)
+    if spec is None:
+        return None
+    checks = []
+    hits = 0
+    top1 = 0
+    reciprocal = 0.0
+    junk_failures = 0
+    duplicate_failures = 0
+    content_failures = 0
+    for check in spec.get("checks", []):
+        query = str(check.get("query") or "")
+        expected = [str(item) for item in check.get("expected_files", [])]
+        banned = [str(item).lower() for item in check.get("must_not_include", [])]
+        required = [str(item).lower() for item in check.get("must_include", [])]
+        rows = search_from_fixtures(storage, query, library_scope=library, max_results=5)
+        paths = [str(row.get("path") or "") for row in rows]
+        ranks = [idx + 1 for idx, path in enumerate(paths) if any(path.endswith(item) for item in expected)]
+        contents = fixture_result_contents(storage, paths)
+        joined = "\n".join(contents).lower()
+        junk_hit = any(term in content.lower() for term in banned for content in contents)
+        content_hit = all(term in joined for term in required)
+        duplicate_hit = len(paths) != len(set(paths))
+        if ranks:
+            hits += 1
+            reciprocal += 1.0 / ranks[0]
+            top1 += int(ranks[0] == 1)
+        junk_failures += int(junk_hit)
+        duplicate_failures += int(duplicate_hit)
+        content_failures += int(required and not content_hit)
+        checks.append(
+            {
+                "name": check.get("name", query),
+                "query": query,
+                "paths": paths,
+                "expected_files": expected,
+                "expected_file_hit": bool(ranks),
+                "junk_top5": junk_hit,
+                "duplicate_top5": duplicate_hit,
+                "required_content_hit": content_hit,
+            }
+        )
+    total = len(checks)
+    recall = hits / total if total else 0.0
+    materialized = materialization_rate(storage, checks)
+    junk_rate = junk_failures / total if total else 0.0
+    duplicate_rate = duplicate_failures / total if total else 0.0
+    content_rate = 1 - (content_failures / total if total else 0.0)
+    passed = recall >= 0.85 and materialized == 1.0 and junk_rate == 0 and duplicate_rate == 0 and content_rate == 1.0
+    return {
+        "passed": passed,
+        "precision_at_1": round(top1 / total if total else 0.0, 3),
+        "expected_file_recall_at_5": round(recall, 3),
+        "precision_at_5": round(recall, 3),
+        "mrr": round(reciprocal / total if total else 0.0, 3),
+        "materialization_rate": round(materialized, 3),
+        "junk_top5_rate": round(junk_rate, 3),
+        "duplicate_top5_rate": round(duplicate_rate, 3),
+        "content_requirement_rate": round(content_rate, 3),
+        "checks": checks,
+    }
+
+
+def eval_spec_for_library(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:
+    eval_root = storage.registry_root / "evals"
+    for path in sorted(eval_root.glob("*.yaml")):
+        try:
+            spec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if spec.get("library") == library and str(spec.get("version") or version) == version:
+            return spec
+    return None
+
+
+def fixture_result_contents(storage: RegistryStorage, paths: list[str]) -> list[str]:
+    output: list[str] = []
+    for result_path in paths:
+        relative = result_path.removeprefix(".codo/vendors/")
+        if "/" not in relative:
+            continue
+        vendor, rest = relative.split("/", 1)
+        if "@" not in rest or "/" not in rest:
+            continue
+        library_version, doc_path = rest.split("/", 1)
+        if "@" not in library_version:
+            continue
+        library, version = library_version.rsplit("@", 1)
+        path = storage.fixtures_root / vendor / library / version / doc_path
+        if path.exists():
+            output.append(path.read_text(encoding="utf-8", errors="replace"))
+    return output
+
+
+def materialization_rate(storage: RegistryStorage, checks: list[dict[str, Any]]) -> float:
+    total = 0
+    existing = 0
+    for check in checks:
+        for result_path in check.get("paths", []):
+            total += 1
+            existing += int(bool(fixture_result_contents(storage, [str(result_path)])))
+    return existing / total if total else 1.0
 
 
 def enqueue_due_freshness_policies(storage: RegistryStorage) -> int:

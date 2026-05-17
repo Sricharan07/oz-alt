@@ -63,6 +63,7 @@ PYTHONPATH=packages/oz-api/src python3 -m oz_api.server --repo-root . --host 127
 target/debug/oz login --api-url http://127.0.0.1:8765
 target/debug/oz suggest "JWT authentication in Next.js middleware"
 target/debug/oz search "middleware jwt cookies" vercel/next.js
+target/debug/oz context "middleware jwt cookies" vercel/next.js --max-tokens 1200
 ```
 
 ## Seed Registry

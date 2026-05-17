@@ -67,6 +67,20 @@ def search_from_fixtures(
                         "version": version,
                     }
                 )
+            for row in symbol_rows(fixture):
+                score = local_chunk_score(row, terms)
+                if score <= 0:
+                    continue
+                hits.append(
+                    {
+                        "path": f".codo/vendors/{vendor}/{library}@{version}/{row.get('path')}",
+                        "line": 1,
+                        "score": score,
+                        "library": f"{vendor}/{library}",
+                        "vendor": vendor,
+                        "version": version,
+                    }
+                )
             continue
         for path in fixture.rglob("*.md"):
             relative = path.relative_to(fixture)
@@ -97,3 +111,24 @@ def search_from_fixtures(
         if len(deduped) >= max_results:
             break
     return deduped
+
+
+def symbol_rows(fixture: Any) -> list[dict[str, Any]]:
+    symbols_dir = fixture / "_symbols"
+    if not symbols_dir.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(symbols_dir.glob("*.md")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        symbol = path.stem
+        rows.append(
+            {
+                "path": path.relative_to(fixture).as_posix(),
+                "text": text,
+                "heading_path": [symbol],
+                "symbols": [symbol],
+                "content_type": "api_reference",
+                "quality_score": 1.0,
+            }
+        )
+    return rows

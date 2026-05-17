@@ -8,9 +8,29 @@ immutable
 as $$
   select case coalesce(value, '')
     when 'api_reference' then 0.18
-    when 'types' then 0.14
+    when 'code_example' then 0.14
+    when 'config' then 0.10
+    when 'cli' then 0.10
+    when 'error_ref' then 0.12
+    when 'types' then 0.10
     when 'example' then 0.08
-    when 'index' then -0.12
+    when 'index' then -0.16
+    else 0
+  end
+$$;
+
+create or replace function content_type_intent_score(value text, intent text)
+returns double precision
+language sql
+immutable
+as $$
+  select case coalesce(intent, '')
+    when 'code_example' then case coalesce(value, '') when 'code_example' then 0.32 when 'config' then 0.08 when 'cli' then 0.08 else 0 end
+    when 'api_reference' then case coalesce(value, '') when 'api_reference' then 0.34 when 'types' then 0.16 else 0 end
+    when 'error_ref' then case coalesce(value, '') when 'error_ref' then 0.36 when 'api_reference' then 0.08 else 0 end
+    when 'cli' then case coalesce(value, '') when 'cli' then 0.34 when 'code_example' then 0.10 else 0 end
+    when 'config' then case coalesce(value, '') when 'config' then 0.34 when 'code_example' then 0.08 else 0 end
+    when 'prose' then case coalesce(value, '') when 'prose' then 0.22 when 'guide' then 0.12 else 0 end
     else 0
   end
 $$;
@@ -48,6 +68,7 @@ create table if not exists library_versions (
   last_crawled_at timestamptz,
   crawl_error_count integer not null default 0,
   pull_count bigint not null default 0,
+  benchmark_score double precision not null default 0,
   created_at timestamptz not null default now(),
   unique (library_id, version)
 );
@@ -92,13 +113,22 @@ create table if not exists chunks (
   end_line integer,
   source_url text,
   ordinal integer not null default 1,
+  chunk_key text,
   chunk_sha text not null,
   heading_path jsonb not null default '[]'::jsonb,
   symbols jsonb not null default '[]'::jsonb,
-  content_type text not null default 'guide',
+  content_type text not null default 'prose',
   quality_score double precision not null default 1,
   content text not null,
-  embedding vector(1536),
+  embedding vector(1024),
+  parent_chunk_id bigint references chunks(id) on delete set null,
+  parent_chunk_key text,
+  token_count integer not null default 0,
+  source_anchor text,
+  embedding_model text,
+  embedding_dimensions integer,
+  dedupe_cluster_id bigint,
+  dedupe_canonical boolean not null default true,
   search_document tsvector generated always as (
     setweight(to_tsvector('english', coalesce(path, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(heading_path::text, '')), 'A') ||
@@ -108,6 +138,26 @@ create table if not exists chunks (
   ) stored,
   created_at timestamptz not null default now(),
   unique (version_id, chunk_sha)
+);
+
+create table if not exists dedupe_clusters (
+  id bigserial primary key,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  cluster_key text not null,
+  canonical_chunk_id bigint references chunks(id) on delete set null,
+  member_count integer not null default 1,
+  method text not null,
+  created_at timestamptz not null default now(),
+  unique (version_id, cluster_key)
+);
+
+create table if not exists trust_scores (
+  id bigserial primary key,
+  library_id bigint not null references libraries(id) on delete cascade,
+  value double precision not null default 0,
+  signals_json jsonb not null default '{}'::jsonb,
+  calculated_at timestamptz not null default now(),
+  unique (library_id)
 );
 
 create table if not exists users (

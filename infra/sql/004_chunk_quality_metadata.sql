@@ -1,7 +1,7 @@
 alter table chunks
   add column if not exists heading_path jsonb not null default '[]'::jsonb,
   add column if not exists symbols jsonb not null default '[]'::jsonb,
-  add column if not exists content_type text not null default 'guide',
+  add column if not exists content_type text not null default 'prose',
   add column if not exists quality_score double precision not null default 1;
 
 drop index if exists chunks_search_document_idx;
@@ -28,9 +28,13 @@ immutable
 as $$
   select case coalesce(value, '')
     when 'api_reference' then 0.18
-    when 'types' then 0.14
+    when 'code_example' then 0.14
+    when 'config' then 0.10
+    when 'cli' then 0.10
+    when 'error_ref' then 0.12
+    when 'types' then 0.10
     when 'example' then 0.08
-    when 'index' then -0.12
+    when 'index' then -0.16
     else 0
   end
 $$;

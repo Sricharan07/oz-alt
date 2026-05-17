@@ -77,6 +77,52 @@ pub(crate) fn search_docs(
     Ok(())
 }
 
+pub(crate) fn context_docs(
+    project_root: &Path,
+    query: &str,
+    library_scope: Option<&str>,
+    max_tokens: usize,
+    json: bool,
+) -> Result<()> {
+    ensure_project(project_root)?;
+    let terms = normalize_query(query);
+    if terms.is_empty() {
+        bail!("context query must contain at least one alphanumeric term");
+    }
+    let config = read_config()?;
+    let hits = if configured_api_url(&config).is_some() {
+        remote_context_hits(project_root, &config, query, library_scope)?
+    } else {
+        local_context_hits(project_root, &terms, library_scope)?
+    };
+    let snippets = context_snippets(project_root, &hits, max_tokens)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "results": snippets }))?
+        );
+    } else {
+        for snippet in &snippets {
+            println!(
+                "{}:{}\n{}\n",
+                snippet["path"].as_str().unwrap_or_default(),
+                snippet["line"].as_u64().unwrap_or_default(),
+                snippet["snippet"].as_str().unwrap_or_default()
+            );
+        }
+    }
+    emit_telemetry(
+        &config,
+        "context_query",
+        serde_json::json!({
+            "query_length": query.len(),
+            "result_count": snippets.len(),
+            "library_scope": library_scope,
+        }),
+    );
+    Ok(())
+}
+
 fn search_docs_remote(
     project_root: &Path,
     config: &OzConfig,
@@ -126,6 +172,123 @@ fn search_docs_remote(
     Ok(())
 }
 
+fn remote_context_hits(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    library_scope: Option<&str>,
+) -> Result<Vec<(String, usize)>> {
+    let lock = read_lock(project_root)?;
+    let response: SearchResponse = api_post_json(
+        config,
+        "/search",
+        serde_json::json!({
+            "query": query,
+            "project_fingerprint": lock.project_fingerprint,
+            "installed_libraries": installed_libraries_payload(&lock),
+            "library_scope": library_scope,
+            "max_results": 20,
+        }),
+    )?;
+    for library in &response.libraries_to_pull {
+        let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
+        pull_library_impl(project_root, &spec, true)?;
+    }
+    warn_stale_response(&response.stale_libraries);
+    Ok(response
+        .results
+        .into_iter()
+        .map(|row| (row.path, row.line.unwrap_or(1)))
+        .collect())
+}
+
+fn local_context_hits(
+    project_root: &Path,
+    terms: &[String],
+    library_scope: Option<&str>,
+) -> Result<Vec<(String, usize)>> {
+    let scope = library_scope.map(parse_scope).transpose()?;
+    let mut hits =
+        search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
+    if hits.is_empty() {
+        if let Some(spec) = best_registry_match(project_root, terms, &scope)? {
+            pull_library_impl(project_root, &spec, true)?;
+            hits =
+                search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
+        }
+    }
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then(a.line.cmp(&b.line))
+    });
+    let mut seen = HashSet::new();
+    Ok(hits
+        .into_iter()
+        .filter(|hit| seen.insert(hit.path.clone()))
+        .take(20)
+        .map(|hit| (to_project_path(project_root, &hit.path), hit.line))
+        .collect())
+}
+
+fn context_snippets(
+    project_root: &Path,
+    hits: &[(String, usize)],
+    max_tokens: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let mut remaining = max_tokens.max(1);
+    let mut output = Vec::new();
+    for (path, line) in hits {
+        if remaining == 0 {
+            break;
+        }
+        let file_path = project_root.join(path);
+        if !file_path.exists() {
+            continue;
+        }
+        let snippet = snippet_at_line(&file_path, *line, remaining)?;
+        let tokens = approximate_tokens(&snippet);
+        if tokens == 0 {
+            continue;
+        }
+        remaining = remaining.saturating_sub(tokens);
+        output.push(serde_json::json!({
+            "path": path,
+            "line": line,
+            "token_count": tokens,
+            "snippet": snippet,
+        }));
+    }
+    Ok(output)
+}
+
+fn snippet_at_line(path: &Path, line: usize, max_tokens: usize) -> Result<String> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let lines = content.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Ok(String::new());
+    }
+    let center = line.saturating_sub(1).min(lines.len() - 1);
+    let start = center.saturating_sub(8);
+    let mut selected = Vec::new();
+    let mut tokens = 0;
+    for item in lines.iter().skip(start) {
+        let line_tokens = approximate_tokens(item);
+        if tokens > 0 && tokens + line_tokens > max_tokens.min(420) {
+            break;
+        }
+        selected.push(*item);
+        tokens += line_tokens;
+    }
+    Ok(selected.join("\n").trim().to_string())
+}
+
+fn approximate_tokens(text: &str) -> usize {
+    text.split_whitespace().count().max(1)
+}
+
 fn search_vendor_tree(
     project_root: &Path,
     root: &Path,
@@ -152,6 +315,9 @@ fn search_vendor_tree(
     for chunk_index in &chunk_indexes {
         if path_matches_scope(chunk_index, scope) {
             collect_chunk_hits(chunk_index, terms, &mut hits)?;
+            if let Some(library_root) = chunk_index.parent() {
+                collect_symbol_hits(library_root, terms, &mut hits)?;
+            }
         }
     }
 
@@ -162,7 +328,10 @@ fn search_vendor_tree(
         {
             continue;
         }
-        if chunked_roots.iter().any(|root| entry.path().starts_with(root)) {
+        if chunked_roots
+            .iter()
+            .any(|root| entry.path().starts_with(root))
+        {
             continue;
         }
         if !path_matches_scope(entry.path(), scope) {
@@ -179,7 +348,9 @@ fn search_vendor_tree(
 }
 
 fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -> Result<()> {
-    let library_root = path.parent().context("_chunks.jsonl should have a parent")?;
+    let library_root = path
+        .parent()
+        .context("_chunks.jsonl should have a parent")?;
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     for line in content.lines().filter(|line| !line.trim().is_empty()) {
@@ -212,6 +383,52 @@ fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) 
                 .chars()
                 .take(160)
                 .collect(),
+        });
+    }
+    Ok(())
+}
+
+fn collect_symbol_hits(library_root: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -> Result<()> {
+    let symbols_dir = library_root.join("_symbols");
+    if !symbols_dir.exists() {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&symbols_dir).sort_by_file_name() {
+        let entry = entry.with_context(|| format!("failed walking {}", symbols_dir.display()))?;
+        if !entry.file_type().is_file()
+            || entry.path().extension().and_then(|s| s.to_str()) != Some("md")
+        {
+            continue;
+        }
+        let content = fs::read_to_string(entry.path())
+            .with_context(|| format!("failed to read {}", entry.path().display()))?;
+        let symbol = entry
+            .path()
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let relative_path = entry
+            .path()
+            .strip_prefix(library_root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .to_string();
+        let row = serde_json::json!({
+            "path": relative_path,
+            "text": content,
+            "heading_path": [symbol],
+            "symbols": [symbol],
+            "content_type": "api_reference",
+        });
+        let score = chunk_score(&row, terms);
+        if score == 0 {
+            continue;
+        }
+        hits.push(SearchHit {
+            path: entry.path().to_path_buf(),
+            line: 1,
+            score,
+            preview: content.lines().next().unwrap_or_default().trim().chars().take(160).collect(),
         });
     }
     Ok(())
@@ -256,8 +473,12 @@ fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -
 fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
     let text = json_string(row, "text").to_ascii_lowercase();
     let path = json_string(row, "path").to_ascii_lowercase();
-    let headings = json_string_array(row, "heading_path").join(" ").to_ascii_lowercase();
-    let symbols = json_string_array(row, "symbols").join(" ").to_ascii_lowercase();
+    let headings = json_string_array(row, "heading_path")
+        .join(" ")
+        .to_ascii_lowercase();
+    let symbols = json_string_array(row, "symbols")
+        .join(" ")
+        .to_ascii_lowercase();
     let compact_path = compact(&path);
     let compact_symbols = compact(&symbols);
 
@@ -265,7 +486,10 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         .iter()
         .map(|term| text.matches(term.as_str()).count())
         .sum::<usize>();
-    let distinct_text_hits = terms.iter().filter(|term| text.contains(term.as_str())).count();
+    let distinct_text_hits = terms
+        .iter()
+        .filter(|term| text.contains(term.as_str()))
+        .count();
     let path_hits = terms
         .iter()
         .filter(|term| path.contains(term.as_str()) || compact_path.contains(&compact(term)))
@@ -299,6 +523,10 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
     let content_type = json_string(row, "content_type");
     let type_bonus = match content_type.as_str() {
         "api_reference" => 5,
+        "code_example" => 3,
+        "config" => 3,
+        "cli" => 3,
+        "error_ref" => 2,
         "types" => 4,
         "example" => 2,
         "index" => 0,

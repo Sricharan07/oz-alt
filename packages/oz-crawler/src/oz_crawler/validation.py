@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,12 +52,28 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
 
     if not chunks:
         errors.append("no indexable chunks generated")
+    duplicate_ratio = duplicate_chunk_ratio(chunks)
+    if duplicate_ratio > 0.05:
+        errors.append(f"duplicate chunk ratio {duplicate_ratio:.2f} exceeds 0.05")
+    content_types = content_type_counts(chunks)
+    if chunks and not any(content_types.get(kind, 0) for kind in ("api_reference", "code_example", "prose")):
+        errors.append("chunks do not include useful api_reference, code_example, or prose content")
+    missing_anchors = sum(1 for row in chunks if not row.get("source_anchor"))
+    if chunks and missing_anchors:
+        errors.append(f"{missing_anchors} chunks are missing source anchors")
+    missing_token_counts = sum(1 for row in chunks if int(row.get("token_count") or 0) <= 0)
+    if chunks and missing_token_counts:
+        errors.append(f"{missing_token_counts} chunks are missing token counts")
 
     metrics = {
         "documents": len(pages),
         "rejected_documents": len(rejected),
         "chunks": len(chunks),
         "symbols": len(symbols),
+        "duplicate_chunk_ratio": round(duplicate_ratio, 4),
+        "content_types": content_types,
+        "missing_source_anchors": missing_anchors,
+        "missing_token_counts": missing_token_counts,
     }
     return ValidationResult(not errors, errors, warnings, metrics)
 
@@ -113,3 +131,29 @@ def missing_required_topics(target: Path, topics: list[str]) -> list[str]:
 def missing_expected_symbols(actual: set[str], expected: list[str]) -> list[str]:
     normalized_actual = {symbol.lower() for symbol in actual}
     return [symbol for symbol in expected if symbol.lower() not in normalized_actual]
+
+
+def duplicate_chunk_ratio(chunks: list[dict[str, Any]]) -> float:
+    if not chunks:
+        return 0.0
+    seen: set[str] = set()
+    duplicates = 0
+    for row in chunks:
+        key = hashlib.sha256(normalized_content(str(row.get("text") or "")).encode("utf-8")).hexdigest()
+        if key in seen:
+            duplicates += 1
+        else:
+            seen.add(key)
+    return duplicates / len(chunks)
+
+
+def normalized_content(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def content_type_counts(chunks: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in chunks:
+        key = str(row.get("content_type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts

@@ -322,26 +322,6 @@ def status_page() -> str:
 </html>"""
 
 
-def cookie_header(
-    name: str,
-    value: str,
-    *,
-    path: str,
-    max_age: int,
-    http_only: bool,
-    secure: bool,
-    domain: str | None = None,
-) -> str:
-    parts = [f"{name}={value}", f"Path={path}", f"Max-Age={max_age}", "SameSite=Lax"]
-    if domain:
-        parts.append(f"Domain={domain}")
-    if http_only:
-        parts.append("HttpOnly")
-    if secure:
-        parts.append("Secure")
-    return "; ".join(parts)
-
-
 def admin_result_page(title: str, message: str, *, link: str = "") -> str:
     link_html = ""
     if link:

@@ -16,6 +16,10 @@ class RetrievalContext:
     database_url: str | None = None
     redis_url: str | None = None
     openai_api_key: str | None = None
+    voyage_api_key: str | None = None
+    jina_api_key: str | None = None
+    cohere_api_key: str | None = None
+    zeroentropy_api_key: str | None = None
 
     @classmethod
     def from_env(cls, storage: RegistryStorage) -> "RetrievalContext":
@@ -24,6 +28,12 @@ class RetrievalContext:
             database_url=os.environ.get("OZ_DATABASE_URL") or os.environ.get("DATABASE_URL"),
             redis_url=os.environ.get("OZ_REDIS_URL") or os.environ.get("REDIS_URL"),
             openai_api_key=openai_api_key_from_env(),
+            voyage_api_key=normalized_api_key(os.environ.get("VOYAGE_API_KEY") or os.environ.get("OZ_VOYAGE_API_KEY")),
+            jina_api_key=normalized_api_key(os.environ.get("JINA_API_KEY") or os.environ.get("OZ_JINA_API_KEY")),
+            cohere_api_key=normalized_api_key(os.environ.get("COHERE_API_KEY") or os.environ.get("OZ_COHERE_API_KEY")),
+            zeroentropy_api_key=normalized_api_key(
+                os.environ.get("ZEROENTROPY_API_KEY") or os.environ.get("OZ_ZEROENTROPY_API_KEY")
+            ),
         )
 
 def openai_api_key_from_env() -> str | None:
@@ -65,6 +75,10 @@ def secret_value_text(response: dict[str, Any]) -> str:
 def normalized_openai_api_key(value: str | None) -> str | None:
     key = str(value or "").strip()
     return key if key.startswith("sk-") else None
+
+def normalized_api_key(value: str | None) -> str | None:
+    key = str(value or "").strip()
+    return key or None
 
 def normalized_openai_api_key_from_json(value: str) -> str | None:
     try:

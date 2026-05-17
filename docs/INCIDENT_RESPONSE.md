@@ -23,7 +23,7 @@
 6. Check Postgres connectivity, pgvector indexes, and database capacity.
 7. Check Redis queue/cache connectivity and queue depth.
 8. Check worker health and failed crawl job records.
-9. Disable rerank with missing `OPENAI_API_KEY` or model errors; lexical/FTS fallback remains available.
+9. Disable rerank with missing `ZEROENTROPY_API_KEY`/`JINA_API_KEY`/`COHERE_API_KEY` or model errors; lexical/FTS/vector fallback remains available.
 10. If pack integrity fails, remove the affected catalog entry and rebuild the pack from fixture source.
 11. After mitigation, run:
     `docker exec docker-oz-api-1 python /app/scripts/enterprise-alerts.py --api-url https://api.tryoz.dev --require-search-quality`.

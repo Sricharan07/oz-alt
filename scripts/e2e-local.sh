@@ -3,7 +3,30 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-PYTHON="${PYTHON:-$(command -v python3.13 || command -v python3.12 || command -v python3.11 || command -v python3)}"
+pick_python() {
+  if [[ -n "${PYTHON:-}" ]]; then
+    printf '%s\n' "$PYTHON"
+    return
+  fi
+  local candidate
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if ! command -v "$candidate" >/dev/null 2>&1; then
+      continue
+    fi
+    if "$candidate" - <<'PY' >/dev/null 2>&1
+import fastapi
+import uvicorn
+PY
+    then
+      command -v "$candidate"
+      return
+    fi
+  done
+  echo "No Python interpreter with fastapi and uvicorn is available." >&2
+  echo "Install the API package first: python3 -m pip install -e packages/oz-api -e packages/oz-crawler" >&2
+  exit 1
+}
+PYTHON="$(pick_python)"
 
 cargo test --workspace
 "$PYTHON" -m py_compile packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py scripts/*.py

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from oz_crawler.content_types import classify_content_type
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
 
@@ -98,7 +99,7 @@ def score_page(page: NormalizedPage, profile: LibraryProfile | None) -> QualityR
         reasons.append("generic homepage/search page")
 
     content_type = classify_content_type(page.source_url, text)
-    if content_type in {"api_reference", "types", "example"}:
+    if content_type in {"api_reference", "code_example", "config", "cli", "error_ref"}:
         score += 0.12
     if content_type == "index":
         score -= 0.1
@@ -139,19 +140,3 @@ def looks_like_generic_homepage(page: NormalizedPage) -> bool:
     if "enter your email" in lower[:1200] and "sign up" in lower[:1200]:
         return True
     return False
-
-
-def classify_content_type(source_url: str, markdown: str) -> str:
-    lower_url = source_url.lower()
-    lower_text = markdown[:800].lower()
-    if any(token in lower_url for token in ("/api-reference", "/reference", "/api/")):
-        return "api_reference"
-    if lower_url.endswith((".d.ts", ".pyi")) or "type definitions" in lower_text:
-        return "types"
-    if any(token in lower_url for token in ("/examples", "/example", "examples/")):
-        return "example"
-    if lower_url.endswith("/llms.txt") or "index of all docs" in lower_text:
-        return "index"
-    if any(token in lower_url for token in ("/guide", "/docs", "/learn")):
-        return "guide"
-    return "guide"

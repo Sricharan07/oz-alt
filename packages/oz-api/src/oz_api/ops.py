@@ -46,6 +46,32 @@ def record_search_quality_run(
             "metrics": json.dumps(result, sort_keys=True),
         },
     )
+    update_benchmark_score(library, version, metrics["precision_at_5"] * 0.6 + metrics["mrr"] * 0.3 + metrics["materialization_rate"] * 0.1)
+
+
+def update_benchmark_score(library: str, version: str, score: float) -> None:
+    vendor, name = split_library(library)
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    store.execute(
+        """
+        update library_versions lv
+        set benchmark_score = :score
+        from libraries l
+        join vendors v on v.id = l.vendor_id
+        where lv.library_id = l.id
+          and v.name = :vendor
+          and l.name = :library
+          and lv.version = :version
+        """,
+        {
+            "vendor": vendor,
+            "library": name,
+            "version": version or "latest",
+            "score": max(0.0, min(float(score), 1.0)),
+        },
+    )
 
 
 def record_system_check(check_name: str, status: str, message: str, metadata: dict[str, Any] | None = None) -> None:

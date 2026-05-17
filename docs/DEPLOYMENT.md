@@ -63,7 +63,12 @@ OZ_APP_URL='https://app.tryoz.dev'
 OZ_COOKIE_SECURE=1
 OZ_COOKIE_DOMAIN='.tryoz.dev'
 OZ_JWT_SECRET='use-a-long-random-secret'
-OPENAI_API_KEY='...'
+VOYAGE_API_KEY='...'        # default embeddings: voyage-code-3, 1024 dims
+JINA_API_KEY='...'          # optional cross-encoder rerank, or set OZ_JINA_RERANK_URL for self-hosted
+COHERE_API_KEY='...'        # optional when OZ_RERANK_PROVIDER=cohere
+ZEROENTROPY_API_KEY='...'   # optional when OZ_RERANK_PROVIDER=zeroentropy
+OZ_TRUST_FETCH_GITHUB=1     # optional, enrich trust scores from GitHub during indexing
+GITHUB_TOKEN='...'          # optional, raises GitHub API rate limits for trust enrichment
 ```
 
 S3 is used only for immutable packs, catalog JSON, crawl artifacts, and backups.
@@ -172,10 +177,29 @@ The SQL schema is in `infra/sql`.
 Load the generated catalog and chunk index into Postgres after migrations:
 
 ```bash
-OZ_DATABASE_URL='postgres://...' OPENAI_API_KEY='sk-...' python3 scripts/index-registry-to-db.py
+OZ_DATABASE_URL='postgres://...' VOYAGE_API_KEY='...' python3 scripts/index-registry-to-db.py
 ```
 
-The importer writes vendors, libraries, latest refs, and chunk rows. If `_chunks.jsonl` rows contain 1536-dimensional embeddings, they are stored in `pgvector`; if they do not, the importer generates them when `OPENAI_API_KEY` is set. Without embeddings, the same rows remain searchable through Postgres full-text search.
+The importer writes vendors, libraries, latest refs, trust scores, chunk rows, parent-child links, dedupe clusters, token counts, source anchors, and embeddings. The production default is `voyage-code-3` at 1024 dimensions; set `OZ_EMBEDDING_PROVIDER=openai` only as an explicit fallback. Without embeddings, the same rows remain searchable through Postgres full-text search.
+
+Recommended hosted quality setup:
+
+```bash
+OZ_EMBEDDING_PROVIDER=voyage
+OZ_EMBEDDING_MODEL=voyage-code-3
+OZ_EMBEDDING_DIMENSIONS=1024
+OZ_EMBEDDING_BATCH_SIZE=64
+OZ_REQUIRE_EMBEDDINGS=1
+VOYAGE_API_KEY='...'
+
+OZ_RERANK_PROVIDER=zeroentropy
+OZ_RERANK_MODEL=zerank-2
+OZ_ZEROENTROPY_LATENCY=fast
+ZEROENTROPY_API_KEY='...'
+
+OZ_TRUST_FETCH_GITHUB=1
+GITHUB_TOKEN='...' # optional but recommended for stable GitHub trust enrichment
+```
 
 ## Auth
 

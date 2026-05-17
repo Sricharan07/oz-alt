@@ -6,6 +6,11 @@ from typing import Any
 
 CONTENT_TYPE_BONUS = {
     "api_reference": 5.0,
+    "code_example": 3.0,
+    "config": 2.5,
+    "cli": 2.5,
+    "error_ref": 2.0,
+    "prose": 0.0,
     "types": 3.5,
     "example": 2.0,
     "guide": 0.0,

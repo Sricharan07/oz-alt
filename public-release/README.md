@@ -25,4 +25,5 @@ oz login --api-url https://api.tryoz.dev
 ```bash
 oz pull facebook/react@19
 oz search "useEffect cleanup dependencies" facebook/react
+oz context "useEffect cleanup dependencies" facebook/react --max-tokens 1200
 ```

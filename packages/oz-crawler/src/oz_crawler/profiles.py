@@ -6,6 +6,33 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+BASELINE_DENIED_PATHS = [
+    "changelog",
+    "changes",
+    "license",
+    "code-of-conduct",
+    "conduct",
+    "archive",
+    "old",
+    "deprecated",
+    "legacy",
+    "previous",
+    "outdated",
+    "superseded",
+    "/i18n/",
+    "/translations/",
+    "/locales/",
+    "/zh/",
+    "/ja/",
+    "/ko/",
+    "/ru/",
+    "/fr/",
+    "/de/",
+    "/es/",
+    "/pt/",
+    "/it/",
+]
+
 
 @dataclass(frozen=True)
 class LibraryProfile:
@@ -83,7 +110,8 @@ def url_allowed_by_profile(url: str, profile: LibraryProfile | None) -> bool:
         return False
     if profile.allowed_hosts and not host_matches(host, profile.allowed_hosts):
         return False
-    if profile.denied_paths and path_matches(path, profile.denied_paths, root_matches_all=False):
+    denied_paths = [*BASELINE_DENIED_PATHS, *profile.denied_paths]
+    if denied_paths and path_matches(path, denied_paths, root_matches_all=False):
         return False
     if profile.allowed_paths and not path_matches(path, profile.allowed_paths, root_matches_all=True):
         return False
@@ -107,6 +135,8 @@ def path_matches(path: str, patterns: list[str], *, root_matches_all: bool) -> b
             if root_matches_all or path == "/":
                 return True
             continue
-        if path.startswith(normalized):
+        if path.startswith(normalized) or normalized.strip("/") in path.strip("/").split("/"):
+            return True
+        if "/" not in normalized and normalized in path:
             return True
     return False

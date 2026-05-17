@@ -11,7 +11,7 @@ from oz_api.retrieval_postgres import (
     suggest_from_postgres,
     vector_literal,
 )
-from oz_api.retrieval_rerank import boost_named_suggestions, maybe_rerank
+from oz_api.rerank import boost_named_suggestions, maybe_rerank
 
 
 def suggest(ctx: RetrievalContext, query: str, max_results: int, fingerprint: str = "") -> list[dict[str, Any]]:
@@ -30,7 +30,8 @@ def search(
     max_results: int,
     fingerprint: str = "",
 ) -> list[dict[str, Any]]:
-    rows = search_from_postgres(ctx, query, library_scope, max_results, fingerprint)
+    candidate_pool = max(max_results * 10, 50)
+    rows = search_from_postgres(ctx, query, library_scope, candidate_pool, fingerprint)
     if rows is None:
         rows = search_from_fixtures(ctx.storage, query, library_scope=library_scope, max_results=max_results)
     reranked = maybe_rerank(ctx, f"search:{library_scope or '*'}", query, fingerprint, rows)

@@ -56,12 +56,12 @@ def parse_scope(scope: str | None) -> tuple[str | None, str | None]:
     return vendor, library
 
 def score_value(value: Any) -> float:
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, dict):
         for key in ("rerank_score", "score", "hybrid", "combined", "fts"):
             nested = value.get(key)
-            if isinstance(nested, int | float):
+            if isinstance(nested, (int, float)):
                 return float(nested)
     return 0.0
 

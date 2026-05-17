@@ -5,7 +5,6 @@ import socket
 import sys
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -91,36 +90,19 @@ class HardeningTests(unittest.TestCase):
 
     def test_pinned_http_fetch_preserves_host_header(self) -> None:
         seen_host: list[str] = []
+        server = OneShotHttpServer(seen_host)
+        server.start()
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:
-                seen_host.append(self.headers.get("Host", ""))
-                body = b"ok"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, _format: str, *_args: object) -> None:
-                return
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
         try:
-            port = server.server_address[1]
             with EnvPatch(OZ_CRAWLER_ALLOW_PRIVATE_NETWORKS="1"), patch(
                 "oz_crawler.security.socket.getaddrinfo",
-                return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))],
+                return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", server.port))],
             ):
-                response = security.fetch_public_url(f"http://example.test:{port}/docs")
+                response = security.fetch_public_url(f"http://example.test:{server.port}/docs")
         finally:
-            server.shutdown()
-            thread.join(timeout=2)
-            server.server_close()
+            server.stop()
         self.assertEqual(response.body, b"ok")
-        self.assertEqual(seen_host, [f"example.test:{port}"])
+        self.assertEqual(seen_host, [f"example.test:{server.port}"])
 
     def test_admin_rows_escape_dynamic_values(self) -> None:
         malicious = '<script>alert("x")</script>'
@@ -142,6 +124,55 @@ class HardeningTests(unittest.TestCase):
         )
         self.assertNotIn("<script>", html)
         self.assertIn("&lt;script&gt;", html)
+
+
+class OneShotHttpServer:
+    def __init__(self, seen_host: list[str]) -> None:
+        self.seen_host = seen_host
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = int(self.sock.getsockname()[1])
+        self.thread = threading.Thread(target=self._serve_once, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        try:
+            self.sock.close()
+        finally:
+            self.thread.join(timeout=2)
+
+    def _serve_once(self) -> None:
+        try:
+            conn, _addr = self.sock.accept()
+        except OSError:
+            return
+        with conn:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            self.seen_host.append(host_header(data))
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"Content-Length: 2\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+                b"ok"
+            )
+
+
+def host_header(request_bytes: bytes) -> str:
+    for line in request_bytes.decode("iso-8859-1", errors="replace").split("\r\n"):
+        if line.lower().startswith("host:"):
+            return line.split(":", 1)[1].strip()
+    return ""
 
 
 if __name__ == "__main__":
