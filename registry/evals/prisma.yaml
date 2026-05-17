@@ -6,7 +6,10 @@
       "name": "schema migrate relation client",
       "query": "schema migrate relation client",
       "patterns": ["schema", "migrate|migration", "relation", "PrismaClient|client"],
-      "expected_files": ["guides/orm/prisma-schema.md", "guides/orm/prisma-client.md"],
+      "expected_files": [
+        "guides/orm/prisma-client.md",
+        "guides/orm/prisma-schema/data-model/relations.md"
+      ],
       "must_include": ["schema", "client"],
       "must_not_include": ["testimonial", "customer story"]
     }

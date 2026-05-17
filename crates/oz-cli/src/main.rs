@@ -388,11 +388,50 @@ fn should_sync_skill(command: &Command) -> bool {
 }
 
 fn normalize_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-        .filter(|term| !term.is_empty())
-        .map(|term| term.to_ascii_lowercase())
-        .collect()
+    let mut terms = Vec::new();
+    for raw in query.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
+        if raw.is_empty() {
+            continue;
+        }
+        push_unique_term(&mut terms, &raw.to_ascii_lowercase());
+        for part in split_camel_token(raw) {
+            push_unique_term(&mut terms, &part.to_ascii_lowercase());
+        }
+    }
+    terms
+}
+
+fn push_unique_term(terms: &mut Vec<String>, term: &str) {
+    if !term.is_empty() && !terms.iter().any(|existing| existing == term) {
+        terms.push(term.to_string());
+    }
+}
+
+fn split_camel_token(token: &str) -> Vec<String> {
+    let mut output = Vec::new();
+    let mut current = String::new();
+    let mut previous: Option<char> = None;
+    for ch in token.chars() {
+        if ch == '_' {
+            if !current.is_empty() {
+                output.push(std::mem::take(&mut current));
+            }
+            previous = None;
+            continue;
+        }
+        if previous.is_some_and(|prev| {
+            (prev.is_ascii_lowercase() || prev.is_ascii_digit()) && ch.is_ascii_uppercase()
+        }) && !current.is_empty()
+        {
+            output.push(std::mem::take(&mut current));
+        }
+        current.push(ch);
+        previous = Some(ch);
+    }
+    if !current.is_empty() {
+        output.push(current);
+    }
+    output
 }
 
 fn to_project_path(project_root: &Path, path: &Path) -> String {
@@ -425,6 +464,10 @@ mod tests {
         assert_eq!(
             normalize_query("middleware jwt cookies.get"),
             vec!["middleware", "jwt", "cookies", "get"]
+        );
+        assert_eq!(
+            normalize_query("NextRequest PrismaClient"),
+            vec!["nextrequest", "next", "request", "prismaclient", "prisma", "client"]
         );
     }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -226,13 +227,18 @@ def read_description(fixture: Path, library: str) -> str:
 
 def normalize_query(query: str) -> list[str]:
     terms: list[str] = []
-    current: list[str] = []
-    for char in query.lower():
-        if char.isalnum() or char == "_":
-            current.append(char)
-        elif current:
-            terms.append("".join(current))
-            current.clear()
-    if current:
-        terms.append("".join(current))
+    seen: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9_]+", query):
+        for term in query_term_variants(raw):
+            if term and term not in seen:
+                seen.add(term)
+                terms.append(term)
     return terms
+
+
+def query_term_variants(raw: str) -> list[str]:
+    compact = re.sub(r"[^a-z0-9]+", "", raw.lower())
+    split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw.replace("_", " "))
+    variants = [compact]
+    variants.extend(part.lower() for part in split.split())
+    return variants

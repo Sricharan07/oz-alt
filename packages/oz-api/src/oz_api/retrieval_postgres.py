@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 from urllib import request
 
+from oz_api.ranking import local_chunk_score
 from oz_api.retrieval_common import parse_scope
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
@@ -162,7 +164,12 @@ def search_from_postgres(
                 content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
-                lv.version
+                lv.version,
+                c.path as relative_path,
+                c.heading_path,
+                c.symbols,
+                c.content_type,
+                c.content
               from chunks c
               join library_versions lv on lv.id = c.version_id
               join libraries l on l.id = lv.library_id
@@ -182,7 +189,12 @@ def search_from_postgres(
                 content_type_score(c.content_type) as type_score,
                 v.name || '/' || l.name as library,
                 v.name as vendor,
-                lv.version
+                lv.version,
+                c.path as relative_path,
+                c.heading_path,
+                c.symbols,
+                c.content_type,
+                c.content
               from chunks c
               join library_versions lv on lv.id = c.version_id
               join libraries l on l.id = lv.library_id
@@ -199,15 +211,21 @@ def search_from_postgres(
                 max(fts_score) + max(vector_score) + (max(quality_score) * 0.15) + max(type_score) as score,
                 library,
                 vendor,
-                version
+                version,
+                relative_path,
+                heading_path,
+                symbols,
+                content_type,
+                max(quality_score) as quality_score,
+                content
               from (
                 select * from fts_candidates
                 union all
                 select * from vector_candidates
               ) candidates
-              group by path, start_line, library, vendor, version
+              group by path, start_line, library, vendor, version, relative_path, heading_path, symbols, content_type, content
             )
-            select path, start_line, score, library, vendor, version
+            select path, start_line, score, library, vendor, version, relative_path, heading_path, symbols, content_type, quality_score, content
             from ranked
             order by score desc, path asc, start_line asc
             limit %s
@@ -227,7 +245,13 @@ def search_from_postgres(
                 + content_type_score(c.content_type) as score,
               v.name || '/' || l.name as library,
               v.name as vendor,
-              lv.version
+              lv.version,
+              c.path as relative_path,
+              c.heading_path,
+              c.symbols,
+              c.content_type,
+              greatest(coalesce(c.quality_score, 1), 0) as quality_score,
+              c.content
             from chunks c
             join library_versions lv on lv.id = c.version_id
             join libraries l on l.id = lv.library_id
@@ -242,17 +266,7 @@ def search_from_postgres(
             with connection.cursor() as cursor:
                 cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
-        return [
-            {
-                "path": row[0],
-                "line": row[1],
-                "score": float(row[2]),
-                "library": row[3],
-                "vendor": row[4],
-                "version": row[5],
-            }
-            for row in rows
-        ]
+        return score_postgres_rows(rows, query)
     except Exception:
         return None
 
@@ -293,6 +307,32 @@ def normalized_tsquery(query: str) -> str:
 
 def candidate_limit(max_results: int) -> int:
     return max(max_results * 10, 50)
+
+def score_postgres_rows(rows: list[Any], query: str) -> list[dict[str, Any]]:
+    terms = normalize_query(query)
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        chunk = {
+            "path": row[6],
+            "heading_path": row[7],
+            "symbols": row[8],
+            "content_type": row[9],
+            "quality_score": row[10],
+            "text": row[11],
+        }
+        score = float(row[2]) + (local_chunk_score(chunk, terms) / 8.0)
+        scored.append(
+            {
+                "path": row[0],
+                "line": row[1],
+                "score": round(score, 4),
+                "library": row[3],
+                "vendor": row[4],
+                "version": row[5],
+            }
+        )
+    scored.sort(key=lambda item: (-float(item["score"]), str(item["path"]), int(item.get("line") or 1)))
+    return scored
 
 def postgres_connection(database_url: str | None) -> Any | None:
     if not database_url:

@@ -2,18 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import http.cookiejar
 import json
-import os
-import re
-import secrets
-import shutil
-import string
-import subprocess
-import tempfile
-import urllib.parse
-import urllib.request
-from pathlib import Path
+
+from prod_smoke_support import cleanup_paths, configure_cli, create_cli_auth, npm_install, run, smoke_env, temp_workspace
 
 
 def main() -> int:
@@ -25,19 +16,12 @@ def main() -> int:
     parser.add_argument("--grep", default="cleanup|dependency")
     args = parser.parse_args()
 
-    tmp_home = Path(tempfile.mkdtemp(prefix="oz-beta-home-"))
-    tmp_project = Path(tempfile.mkdtemp(prefix="oz-beta-project-"))
-    tmp_install = Path(tempfile.mkdtemp(prefix="oz-beta-npm-"))
+    tmp_home, tmp_project, tmp_install = temp_workspace("oz-beta")
     try:
-        npm_install(tmp_install)
-        oz = tmp_install / "node_modules" / ".bin" / "oz"
+        oz = npm_install(tmp_install)
         auth = create_cli_auth(args.app_url, args.api_url)
-        env = os.environ.copy()
-        env["HOME"] = str(tmp_home)
-        env["OZ_DISABLE_KEYCHAIN"] = "1"
-        run([str(oz), "config", "set", "api_url", args.api_url], env=env)
-        run([str(oz), "config", "set", "auth_token", "--", auth["access_token"]], env=env)
-        run([str(oz), "config", "set", "refresh_token", "--", auth["refresh_token"]], env=env)
+        env = smoke_env(tmp_home)
+        configure_cli(oz, args.api_url, auth, env)
         run([str(oz), "--version"], env=env)
         run([str(oz), "init"], cwd=tmp_project, env=env)
         run([str(oz), "doctor"], cwd=tmp_project, env=env)
@@ -51,81 +35,7 @@ def main() -> int:
         print(json.dumps({"ok": True, "email": auth["email"], "project": str(tmp_project)}, indent=2))
         return 0
     finally:
-        shutil.rmtree(tmp_home, ignore_errors=True)
-        shutil.rmtree(tmp_install, ignore_errors=True)
-
-
-def npm_install(prefix: Path) -> None:
-    run(["npm", "install", "--prefix", str(prefix), "@hiringbae/oz@latest"])
-
-
-def create_cli_auth(app_url: str, api_url: str) -> dict[str, str]:
-    suffix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(10))
-    email = f"beta-smoke+{suffix}@tryoz.dev"
-    password = f"OzBetaSmoke!{suffix}9"
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    form(opener, f"{app_url}/signup", {"email": email, "password": password, "confirm_password": password})
-    device = json_request(opener, f"{api_url}/auth/device", {"client_name": "beta-smoke"})
-    device_page = get(opener, f"{app_url}/device?code={urllib.parse.quote(str(device['user_code']))}")
-    form(
-        opener,
-        f"{app_url}/device",
-        {"csrf": hidden_value(device_page, "csrf"), "user_code": device["user_code"], "action": "approve"},
-    )
-    token = json_request(opener, f"{api_url}/auth/token", {"device_code": device["device_code"]})
-    refreshed = json_request(opener, f"{api_url}/auth/refresh", {"refresh_token": token["refresh_token"]})
-    return {
-        "email": email,
-        "access_token": refreshed["access_token"],
-        "refresh_token": refreshed.get("refresh_token") or token["refresh_token"],
-    }
-
-
-def json_request(opener: urllib.request.OpenerDirector, url: str, payload: dict[str, object]) -> dict[str, object]:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with opener.open(req, timeout=30) as response:
-        return json.loads(response.read())
-
-
-def form(opener: urllib.request.OpenerDirector, url: str, payload: dict[str, str]) -> str:
-    req = urllib.request.Request(
-        url,
-        data=urllib.parse.urlencode(payload).encode(),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    with opener.open(req, timeout=30) as response:
-        return response.read().decode("utf-8", "replace")
-
-
-def get(opener: urllib.request.OpenerDirector, url: str) -> str:
-    with opener.open(url, timeout=30) as response:
-        return response.read().decode("utf-8", "replace")
-
-
-def hidden_value(html: str, name: str) -> str:
-    match = re.search(rf'name="{re.escape(name)}"\s+value="([^"]*)"', html)
-    if not match:
-        raise SystemExit(f"missing hidden input: {name}")
-    return match.group(1)
-
-
-def run(
-    command: list[str],
-    *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-) -> str:
-    result = subprocess.run(command, cwd=cwd, env=env, check=True, text=True, capture_output=True)
-    output = result.stdout + result.stderr
-    print(output, end="")
-    return output
+        cleanup_paths(tmp_home, tmp_project, tmp_install)
 
 
 if __name__ == "__main__":
