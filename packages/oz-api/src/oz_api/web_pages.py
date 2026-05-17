@@ -290,7 +290,36 @@ def render_device_page(
 
 
 def status_page() -> str:
-    return "<!doctype html><h1>Oz Status</h1><p>API is operational.</p>"
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Oz Status</title>
+  <style>
+    body { margin: 32px; color: #202124; font-family: ui-sans-serif, system-ui, sans-serif; }
+    main { max-width: 720px; }
+    h1 { font-size: 24px; }
+    section { border-top: 1px solid #d8dee4; padding-top: 16px; margin-top: 20px; }
+    .ok { color: #116329; font-weight: 600; }
+    code { background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 4px; padding: 2px 5px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Oz Status</h1>
+    <p class="ok">Operational</p>
+    <section>
+      <h2>Public endpoints</h2>
+      <p>API health: <code>https://api.tryoz.dev/health</code></p>
+      <p>Catalog: <code>https://api.tryoz.dev/catalog</code></p>
+    </section>
+    <section>
+      <h2>Incident policy</h2>
+      <p>During an active incident, this page is updated with affected endpoints, start time, mitigation, and next update time.</p>
+    </section>
+  </main>
+</body>
+</html>"""
 
 
 def cookie_header(

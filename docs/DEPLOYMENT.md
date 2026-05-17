@@ -70,6 +70,24 @@ S3 is used only for immutable packs, catalog JSON, crawl artifacts, and backups.
 Postgres is the product database. Redis owns queues, rate limits, short-lived
 cache, and job locks. Do not store admin state in S3 JSONL in production.
 
+## Backup And Restore
+
+Production backups are `pg_dump -Fc` files uploaded to S3 and recorded in
+Postgres `backup_runs`. Each beta-ready backup must also be restored into a
+temporary database and queried before it is marked `verified`.
+
+Run a verified backup from the Docker host:
+
+```bash
+OZ_VERIFY_BACKUP_RESTORE=1 bash scripts/backup-postgres-to-s3.sh
+```
+
+Recommended EC2 cron:
+
+```cron
+17 3 * * * cd /opt/oz/current && OZ_VERIFY_BACKUP_RESTORE=1 bash scripts/backup-postgres-to-s3.sh >> /var/log/oz-backup.log 2>&1
+```
+
 ## AWS EC2 Production
 
 The current production AWS shape is one Docker host plus S3:
@@ -269,4 +287,10 @@ Run the 10-task representative agent loop before promoting a release:
 
 ```bash
 bash scripts/eval-agent-tasks.sh
+```
+
+Run the production beta smoke from a clean npm install:
+
+```bash
+python3 scripts/beta-smoke-prod.py
 ```

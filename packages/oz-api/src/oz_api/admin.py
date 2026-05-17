@@ -33,6 +33,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
     quality_rows = "\n".join(render_quality_row(row) for row in snapshot["quality_runs"][:50])
     eval_rows = "\n".join(render_eval_row(row) for row in snapshot["eval_runs"][:50])
     pack_rows = "\n".join(render_pack_row(row) for row in snapshot["pack_builds"][:50])
+    backup_rows = "\n".join(render_backup_row(row) for row in snapshot["backup_runs"][:50])
     return f"""<!doctype html>
 <html>
 <head>
@@ -66,6 +67,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <div class="metric">Crawler jobs: {len(crawler_jobs)}</div>
   <div class="metric">Quality runs: {len(snapshot["quality_runs"])}</div>
   <div class="metric">Eval runs: {len(snapshot["eval_runs"])}</div>
+  <div class="metric">Backups: {len(snapshot["backup_runs"])}</div>
   <h2>Operations</h2>
   <div class="grid">
     <form class="panel" method="post" action="/admin/enqueue-crawl">
@@ -143,6 +145,8 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <table><thead><tr><th>Library</th><th>Version</th><th>Type</th><th>Passed</th><th>Metrics</th><th>Created</th></tr></thead><tbody>{eval_rows}</tbody></table>
   <h2>Pack Builds</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Pack SHA</th><th>Key</th><th>Bytes</th><th>Created</th></tr></thead><tbody>{pack_rows}</tbody></table>
+  <h2>Backup Runs</h2>
+  <table><thead><tr><th>Status</th><th>Key</th><th>Bytes</th><th>SHA256</th><th>Started</th><th>Verified</th><th>Error</th></tr></thead><tbody>{backup_rows}</tbody></table>
   <h2>Zero-result Suggest Queries</h2>
   <table><thead><tr><th>Query length</th><th>Count</th></tr></thead><tbody>{zero_result_rows}</tbody></table>
   <h2>Crawler Jobs</h2>
@@ -277,6 +281,15 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             join libraries l on l.id = p.library_id
             join vendors v on v.id = l.vendor_id
             order by p.created_at desc
+            limit 200
+            """
+        ),
+        "backup_runs": db_rows(
+            """
+            select backup_key, byte_size, sha256, status, started_at::text as started_at,
+                   restore_verified_at::text as restore_verified_at, last_error
+            from backup_runs
+            order by started_at desc
             limit 200
             """
         ),
@@ -562,6 +575,16 @@ def render_pack_row(row: dict[str, Any]) -> str:
         f"<tr><td>{esc(library)}</td><td>{esc(row.get('version'))}</td>"
         f"<td>{esc(sha[:12])}</td><td>{esc(row.get('pack_key'))}</td>"
         f"<td>{esc(row.get('byte_size'))}</td><td>{esc(row.get('created_at'))}</td></tr>"
+    )
+
+
+def render_backup_row(row: dict[str, Any]) -> str:
+    sha = str(row.get("sha256") or "")
+    return (
+        f"<tr><td>{esc(row.get('status'))}</td><td>{esc(row.get('backup_key'))}</td>"
+        f"<td>{esc(row.get('byte_size'))}</td><td>{esc(sha[:12])}</td>"
+        f"<td>{esc(row.get('started_at'))}</td><td>{esc(row.get('restore_verified_at'))}</td>"
+        f"<td>{esc(row.get('last_error'))}</td></tr>"
     )
 
 

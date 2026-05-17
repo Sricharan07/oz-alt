@@ -90,8 +90,17 @@ def tree_sitter_symbols(code: str, language: str) -> list[ExtractedSymbol]:
     parser = tree_sitter_parser(language)
     if parser is None:
         return []
-    tree = parser.parse(code.encode("utf-8"))
-    source = code.encode("utf-8")
+    try:
+        tree = parser.parse(code)
+        source: str | bytes = code
+    except TypeError:
+        try:
+            source = code.encode("utf-8")
+            tree = parser.parse(source)
+        except Exception:
+            return []
+    except Exception:
+        return []
     output: list[ExtractedSymbol] = []
     walk_tree(tree.root_node, source, output)
     return output
@@ -113,7 +122,7 @@ def tree_sitter_parser(language: str):
         return None
 
 
-def walk_tree(node, source: bytes, output: list[ExtractedSymbol]) -> None:
+def walk_tree(node, source: str | bytes, output: list[ExtractedSymbol]) -> None:
     node_type = str(getattr(node, "type", ""))
     name_node = node.child_by_field_name("name") if hasattr(node, "child_by_field_name") else None
     if name_node is not None and node_type in SYMBOL_NODE_KINDS:
@@ -141,8 +150,10 @@ SYMBOL_NODE_KINDS = {
 }
 
 
-def node_text(node, source: bytes) -> str:
-    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+def node_text(node, source: str | bytes) -> str:
+    if isinstance(source, bytes):
+        return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+    return source[node.start_byte : node.end_byte]
 
 
 def regex_symbols(code: str) -> list[ExtractedSymbol]:
