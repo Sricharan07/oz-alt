@@ -38,7 +38,7 @@ psql_exec() {
 }
 
 record_started() {
-  psql_exec -At -c "insert into backup_runs (backup_key, status) values ('$(sql_escape "$backup_key")', 'started') returning id;"
+  psql_exec -qAt -c "insert into backup_runs (backup_key, status) values ('$(sql_escape "$backup_key")', 'started') returning id;"
 }
 
 record_failed() {
