@@ -83,9 +83,9 @@ def url_allowed_by_profile(url: str, profile: LibraryProfile | None) -> bool:
         return False
     if profile.allowed_hosts and not host_matches(host, profile.allowed_hosts):
         return False
-    if profile.denied_paths and path_matches(path, profile.denied_paths):
+    if profile.denied_paths and path_matches(path, profile.denied_paths, root_matches_all=False):
         return False
-    if profile.allowed_paths and not path_matches(path, profile.allowed_paths):
+    if profile.allowed_paths and not path_matches(path, profile.allowed_paths, root_matches_all=True):
         return False
     return True
 
@@ -98,13 +98,13 @@ def host_matches(host: str, allowed_hosts: list[str]) -> bool:
     return False
 
 
-def path_matches(path: str, patterns: list[str]) -> bool:
+def path_matches(path: str, patterns: list[str], *, root_matches_all: bool) -> bool:
     for pattern in patterns:
         normalized = pattern.lower().strip()
         if not normalized:
             continue
         if normalized == "/":
-            if path == "/":
+            if root_matches_all or path == "/":
                 return True
             continue
         if path.startswith(normalized):

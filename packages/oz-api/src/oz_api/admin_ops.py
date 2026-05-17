@@ -520,19 +520,19 @@ def source_allowed(source_url: str, profile: dict[str, Any]) -> bool:
         return False
     if allowed_hosts and not any(host == item or host.endswith(f".{item}") for item in allowed_hosts):
         return False
-    if denied_paths and any(path_matches_profile(path, item) for item in denied_paths):
+    if denied_paths and any(path_matches_profile(path, item, root_matches_all=False) for item in denied_paths):
         return False
-    if allowed_paths and not any(path_matches_profile(path, item) for item in allowed_paths):
+    if allowed_paths and not any(path_matches_profile(path, item, root_matches_all=True) for item in allowed_paths):
         return False
     return True
 
 
-def path_matches_profile(path: str, pattern: str) -> bool:
+def path_matches_profile(path: str, pattern: str, *, root_matches_all: bool) -> bool:
     normalized = pattern.lower().strip()
     if not normalized:
         return False
     if normalized == "/":
-        return path == "/"
+        return root_matches_all or path == "/"
     return path.startswith(normalized)
 
 
