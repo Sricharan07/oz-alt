@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Oz SLO report hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=oz-slo-report.service
+
+[Install]
+WantedBy=timers.target

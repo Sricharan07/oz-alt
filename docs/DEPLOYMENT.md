@@ -87,8 +87,11 @@ Install the EC2 systemd timer:
 ```bash
 sudo cp infra/systemd/oz-backup.service /etc/systemd/system/oz-backup.service
 sudo cp infra/systemd/oz-backup.timer /etc/systemd/system/oz-backup.timer
+sudo cp infra/systemd/oz-enterprise-alerts.* /etc/systemd/system/
+sudo cp infra/systemd/oz-slo-report.* /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now oz-backup.timer
+sudo systemctl enable --now oz-enterprise-alerts.timer oz-slo-report.timer
 ```
 
 ## Enterprise Readiness Checks
@@ -99,13 +102,32 @@ Run these before inviting a larger beta group:
 python3 scripts/security-smoke.py
 python3 scripts/eval-search-quality.py --repo-root . --record-db
 python3 scripts/enterprise-checks.py --api-url https://api.tryoz.dev --require-search-quality
+python3 scripts/enterprise-alerts.py --api-url https://api.tryoz.dev --require-search-quality
+python3 scripts/slo-report.py --window-hours 24
 ```
 
 The same commands can run inside the production API container with `/app` as
 the repo root. Results are recorded in Postgres and visible in the admin panel
-under system checks, search quality runs, crawl logs, quality runs, eval runs,
-pack builds, and backup runs. See `docs/ENTERPRISE_READINESS.md` for the full
-operator checklist.
+under system checks, operations alerts, SLO reports, search quality runs, crawl
+logs, quality runs, eval runs, pack builds, and backup runs. See
+`docs/ENTERPRISE_READINESS.md` for the full operator checklist.
+
+## Release Evidence
+
+Every public CLI release should include:
+
+- binaries for supported platforms
+- `.sha256` checksum files
+- `release-manifest.json`
+- `sbom.spdx.json`
+- GitHub build provenance attestation
+
+Generate and verify release evidence locally:
+
+```bash
+python3 scripts/generate-release-manifest.py --dist dist --version 0.1.2
+python3 scripts/verify-release-artifacts.py --dist dist
+```
 
 ## AWS EC2 Production
 

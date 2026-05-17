@@ -77,11 +77,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Generate release manifest and SBOM
+        run: |
+          version="${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}"
+          version="${version#v}"
+          python scripts/generate-release-manifest.py --dist dist --version "$version" --output dist/release-manifest.json --sbom dist/sbom.spdx.json
+          python scripts/verify-release-artifacts.py --dist dist --manifest dist/release-manifest.json --sbom dist/sbom.spdx.json
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*
       - uses: softprops/action-gh-release@v2
         with:
           repository: Sricharan07/oz

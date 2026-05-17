@@ -39,14 +39,15 @@ from oz_api.auth import (
 )
 from oz_api.limits import index_request_allowed, rate_limit_allowed
 from oz_api.freshness import stale_libraries_from_payload
+from oz_api.metrics import metrics_authorized, render_prometheus_metrics
 from oz_api.retrieval import (
     RetrievalContext,
-    latest_entry as retrieval_latest_entry,
     search as retrieval_search,
     suggest as retrieval_suggest,
     unique_libraries_to_pull as retrieval_unique_libraries_to_pull,
 )
 from oz_api.queue import crawler_job_event, missing_required_crawler_fields
+from oz_api.server_helpers import bulk_refs_payload, cookie_domain, first_form_values, secure_cookie, single_ref_payload
 from oz_api.storage import RegistryStorage
 from oz_api.telemetry import sanitize_telemetry
 from oz_api.usage import record_telemetry_event, record_usage_event, usage_summary
@@ -164,6 +165,20 @@ def build_handler(state: ServerState) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def send_text(
+            self,
+            text: str,
+            *,
+            content_type: str = "text/plain; charset=utf-8",
+            status: HTTPStatus = HTTPStatus.OK,
+        ) -> None:
+            body = text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def log_message(self, format: str, *args: Any) -> None:
             return
 
@@ -180,6 +195,7 @@ def is_authorized(handler: BaseHTTPRequestHandler, state: ServerState) -> bool:
         "/privacy",
         "/terms",
         "/status",
+        "/metrics",
         "/login",
         "/login/",
         "/signup",
@@ -233,10 +249,6 @@ def cookie_token(handler: BaseHTTPRequestHandler, name: str) -> str | None:
     return None
 
 
-def read_catalog_generated_at(state: ServerState) -> str | None:
-    return state.storage.catalog_generated_at()
-
-
 def route_get(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
     parsed = urlparse(handler.path)
     path = parsed.path.strip("/")
@@ -257,6 +269,13 @@ def route_get(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
 
     if parsed.path == "/status":
         handler.send_html(status_page())
+        return
+
+    if parsed.path == "/metrics":
+        if not metrics_authorized(handler.headers):
+            handler.send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        handler.send_text(render_prometheus_metrics(), content_type="text/plain; version=0.0.4; charset=utf-8")
         return
 
     if parsed.path in {"/login", "/login/"}:
@@ -334,18 +353,11 @@ def route_get(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
 
     if len(parts) == 3 and parts[0] == "refs":
         vendor, library = parts[1], parts[2]
-        entry = retrieval_latest_entry(state.storage, vendor, library)
-        if entry is None:
+        payload = single_ref_payload(state, vendor, library)
+        if payload is None:
             handler.send_json({"error": "library not indexed"}, status=HTTPStatus.NOT_FOUND)
             return
-        handler.send_json(
-            {
-                "vendor": vendor,
-                "library": library,
-                "version": entry["version"],
-                "ref_sha": entry.get("ref_sha", "local"),
-            }
-        )
+        handler.send_json(payload)
         return
 
     if len(parts) == 4 and parts[0] == "pack":
@@ -912,64 +924,8 @@ def route_post(handler: BaseHTTPRequestHandler, state: ServerState) -> None:
     handler.send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
 
-def bulk_refs_payload(state: ServerState, query: str) -> dict[str, Any]:
-    params = parse_qs(query)
-    stale_libraries: list[dict[str, Any]] = []
-    for raw in params.get("library", []):
-        parsed = parse_pulled_library(raw)
-        if parsed is None:
-            continue
-        vendor, library, version = parsed
-        entry = retrieval_latest_entry(state.storage, vendor, library)
-        if entry is None:
-            continue
-        newer_version = str(entry.get("version") or "")
-        if newer_version and newer_version != version:
-            stale_libraries.append(
-                {
-                    "vendor": vendor,
-                    "library": library,
-                    "version": version,
-                    "newer_version": newer_version,
-                    "ref_sha": entry.get("ref_sha"),
-                }
-            )
-    return {
-        "stale_libraries": stale_libraries,
-        "fingerprint": params.get("fingerprint", [""])[0],
-        "catalog_generated_at": read_catalog_generated_at(state),
-    }
-
-
-def parse_pulled_library(value: str) -> tuple[str, str, str] | None:
-    if "@" not in value or "/" not in value:
-        return None
-    name, version = value.rsplit("@", 1)
-    vendor, library = name.split("/", 1)
-    if not vendor or not library or not version:
-        return None
-    return vendor, library, version
-
-
-def first_form_values(form: dict[str, list[str]]) -> dict[str, str]:
-    return {key: values[0] if values else "" for key, values in form.items()}
-
-
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def secure_cookie() -> bool:
-    value = os.environ.get("OZ_COOKIE_SECURE")
-    if value:
-        return value.lower() in {"1", "true", "yes", "on"}
-    public_url = os.environ.get("OZ_PUBLIC_BASE_URL") or os.environ.get("OZ_APP_URL") or ""
-    return public_url.startswith("https://")
-
-
-def cookie_domain() -> str | None:
-    value = os.environ.get("OZ_COOKIE_DOMAIN", "").strip()
-    return value or None
 
 
 def main() -> None:

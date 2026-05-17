@@ -1,0 +1,10 @@
+[Unit]
+Description=Oz hourly SLO report
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+EnvironmentFile=-/opt/oz/current/.env.production
+ExecStart=/usr/bin/docker exec docker-oz-api-1 python /app/scripts/slo-report.py --window-hours 24

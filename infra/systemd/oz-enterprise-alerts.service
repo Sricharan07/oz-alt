@@ -1,0 +1,10 @@
+[Unit]
+Description=Oz enterprise readiness checks and alerts
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+EnvironmentFile=-/opt/oz/current/.env.production
+ExecStart=/usr/bin/docker exec docker-oz-api-1 python /app/scripts/enterprise-alerts.py --api-url https://api.tryoz.dev --require-search-quality

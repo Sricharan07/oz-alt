@@ -19,4 +19,12 @@ jobs:
       - run: cargo test --workspace
       - run: bash scripts/check-line-counts.sh
       - run: python -m py_compile packages/oz-crawler/src/oz_crawler/*.py packages/oz-api/src/oz_api/*.py scripts/*.py
+      - run: python scripts/security-smoke.py
       - run: bash scripts/e2e-local.sh
+      - name: Verify release manifest tooling
+        run: |
+          mkdir -p /tmp/oz-release-dist
+          printf 'test artifact\n' >/tmp/oz-release-dist/oz-linux-x64
+          sha256sum /tmp/oz-release-dist/oz-linux-x64 >/tmp/oz-release-dist/oz-linux-x64.sha256
+          python scripts/generate-release-manifest.py --dist /tmp/oz-release-dist --version 0.0.0 --output /tmp/oz-release-dist/release-manifest.json --sbom /tmp/oz-release-dist/sbom.spdx.json
+          python scripts/verify-release-artifacts.py --dist /tmp/oz-release-dist --manifest /tmp/oz-release-dist/release-manifest.json --sbom /tmp/oz-release-dist/sbom.spdx.json

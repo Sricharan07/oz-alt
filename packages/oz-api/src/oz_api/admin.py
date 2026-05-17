@@ -37,6 +37,8 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
     backup_rows = "\n".join(render_backup_row(row) for row in snapshot["backup_runs"][:50])
     crawl_log_rows = "\n".join(render_crawl_log_row(row) for row in snapshot["crawl_job_logs"][:80])
     system_check_rows = "\n".join(render_system_check_row(row) for row in snapshot["system_checks"][:50])
+    alert_rows = "\n".join(render_alert_row(row) for row in snapshot["ops_alerts"][:50])
+    slo_rows = "\n".join(render_slo_row(row) for row in snapshot["slo_reports"][:50])
     return f"""<!doctype html>
 <html>
 <head>
@@ -71,9 +73,14 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <div class="metric">Quality runs: {len(snapshot["quality_runs"])}</div>
   <div class="metric">Eval runs: {len(snapshot["eval_runs"])}</div>
   <div class="metric">Search quality: {len(snapshot["search_quality_runs"])}</div>
+  <div class="metric">Open alerts: {sum(1 for row in snapshot["ops_alerts"] if str(row.get("status")) == "open")}</div>
   <div class="metric">Backups: {len(snapshot["backup_runs"])}</div>
   <h2>System Checks</h2>
   <table><thead><tr><th>Check</th><th>Status</th><th>Message</th><th>Metadata</th><th>Created</th></tr></thead><tbody>{system_check_rows}</tbody></table>
+  <h2>Operations Alerts</h2>
+  <table><thead><tr><th>Severity</th><th>Status</th><th>Title</th><th>Delivery</th><th>Created</th><th>Resolved</th></tr></thead><tbody>{alert_rows}</tbody></table>
+  <h2>SLO Reports</h2>
+  <table><thead><tr><th>Passed</th><th>API health</th><th>Search quality</th><th>Crawler success</th><th>Pack signatures</th><th>Backup fresh</th><th>Window</th><th>Created</th></tr></thead><tbody>{slo_rows}</tbody></table>
   <h2>Operations</h2>
   <div class="grid">
     <form class="panel" method="post" action="/admin/enqueue-crawl">
@@ -327,6 +334,26 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             """
             select check_name, status, message, metadata_json, created_at::text as created_at
             from system_checks
+            order by created_at desc
+            limit 200
+            """
+        ),
+        "ops_alerts": db_rows(
+            """
+            select severity, status, title, delivery_status, delivery_error,
+                   created_at::text as created_at, resolved_at::text as resolved_at
+            from ops_alerts
+            order by status asc, created_at desc
+            limit 200
+            """
+        ),
+        "slo_reports": db_rows(
+            """
+            select passed, api_health_ok_rate, search_quality_pass_rate,
+                   crawler_success_rate, pack_signature_coverage, backup_fresh,
+                   window_start::text as window_start, window_end::text as window_end,
+                   created_at::text as created_at
+            from slo_reports
             order by created_at desc
             limit 200
             """
@@ -651,6 +678,36 @@ def render_system_check_row(row: dict[str, Any]) -> str:
         f"<td>{esc(row.get('message'))}</td><td>{esc(compact_json(row.get('metadata_json')))}</td>"
         f"<td>{esc(row.get('created_at'))}</td></tr>"
     )
+
+
+def render_alert_row(row: dict[str, Any]) -> str:
+    delivery = str(row.get("delivery_status") or "")
+    if row.get("delivery_error"):
+        delivery = f"{delivery}: {row.get('delivery_error')}"
+    return (
+        f"<tr><td>{esc(row.get('severity'))}</td><td>{esc(row.get('status'))}</td>"
+        f"<td>{esc(row.get('title'))}</td><td>{esc(delivery)}</td>"
+        f"<td>{esc(row.get('created_at'))}</td><td>{esc(row.get('resolved_at'))}</td></tr>"
+    )
+
+
+def render_slo_row(row: dict[str, Any]) -> str:
+    window = f"{row.get('window_start')} to {row.get('window_end')}"
+    return (
+        f"<tr><td>{esc(row.get('passed'))}</td><td>{pct(row.get('api_health_ok_rate'))}</td>"
+        f"<td>{pct(row.get('search_quality_pass_rate'))}</td>"
+        f"<td>{pct(row.get('crawler_success_rate'))}</td>"
+        f"<td>{pct(row.get('pack_signature_coverage'))}</td>"
+        f"<td>{esc(row.get('backup_fresh'))}</td><td>{esc(window)}</td>"
+        f"<td>{esc(row.get('created_at'))}</td></tr>"
+    )
+
+
+def pct(value: Any) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "0.0%"
 
 
 def compact_json(value: Any) -> str:

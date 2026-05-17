@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Oz enterprise readiness checks every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=oz-enterprise-alerts.service
+
+[Install]
+WantedBy=timers.target

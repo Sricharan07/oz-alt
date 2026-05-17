@@ -66,6 +66,107 @@ def record_system_check(check_name: str, status: str, message: str, metadata: di
     )
 
 
+def record_ops_alert(
+    *,
+    fingerprint: str,
+    severity: str,
+    title: str,
+    body: str,
+    metadata: dict[str, Any] | None = None,
+    delivery_status: str | None = None,
+    delivery_error: str | None = None,
+) -> None:
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    store.execute(
+        """
+        insert into ops_alerts (
+          fingerprint, severity, status, title, body, metadata_json,
+          delivery_status, delivery_error, delivered_at
+        )
+        values (
+          :fingerprint, :severity, 'open', :title, :body, cast(:metadata as jsonb),
+          :delivery_status, :delivery_error,
+          case when :delivery_status = 'delivered' then now() else null end
+        )
+        on conflict (fingerprint) do update
+        set severity = excluded.severity,
+            status = 'open',
+            title = excluded.title,
+            body = excluded.body,
+            metadata_json = excluded.metadata_json,
+            delivery_status = excluded.delivery_status,
+            delivery_error = excluded.delivery_error,
+            delivered_at = coalesce(excluded.delivered_at, ops_alerts.delivered_at),
+            resolved_at = null,
+            updated_at = now()
+        """,
+        {
+            "fingerprint": fingerprint[:240],
+            "severity": severity if severity in {"info", "warning", "critical"} else "warning",
+            "title": title[:240],
+            "body": body[:4000],
+            "metadata": json.dumps(metadata or {}, sort_keys=True),
+            "delivery_status": delivery_status,
+            "delivery_error": (delivery_error or "")[:1000] or None,
+        },
+    )
+
+
+def resolve_ops_alerts(prefix: str) -> int:
+    store = AuthStore.from_env()
+    if store is None:
+        return 0
+    rows = store.execute(
+        """
+        update ops_alerts
+        set status = 'resolved', resolved_at = now(), updated_at = now()
+        where fingerprint like :prefix and status = 'open'
+        returning id
+        """,
+        {"prefix": f"{prefix}%"},
+    )
+    return len(rows)
+
+
+def record_slo_report(result: dict[str, Any]) -> None:
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    store.execute(
+        """
+        insert into slo_reports (
+          window_start, window_end, passed, api_health_ok_rate, search_quality_pass_rate,
+          crawler_success_rate, pack_signature_coverage, backup_fresh, metrics
+        )
+        values (
+          cast(:window_start as timestamptz),
+          cast(:window_end as timestamptz),
+          :passed,
+          :api_health_ok_rate,
+          :search_quality_pass_rate,
+          :crawler_success_rate,
+          :pack_signature_coverage,
+          :backup_fresh,
+          cast(:metrics as jsonb)
+        )
+        """,
+        {
+            "window_start": result["window_start"],
+            "window_end": result["window_end"],
+            "passed": bool(result.get("passed")),
+            "api_health_ok_rate": float(metrics.get("api_health_ok_rate") or 0),
+            "search_quality_pass_rate": float(metrics.get("search_quality_pass_rate") or 0),
+            "crawler_success_rate": float(metrics.get("crawler_success_rate") or 0),
+            "pack_signature_coverage": float(metrics.get("pack_signature_coverage") or 0),
+            "backup_fresh": bool(metrics.get("backup_fresh")),
+            "metrics": json.dumps(metrics, sort_keys=True),
+        },
+    )
+
+
 def result_metrics(result: dict[str, Any]) -> dict[str, float]:
     checks = result.get("checks") if isinstance(result.get("checks"), list) else []
     total = len(checks)
