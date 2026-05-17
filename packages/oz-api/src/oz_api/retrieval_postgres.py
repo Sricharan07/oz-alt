@@ -151,7 +151,7 @@ def search_from_postgres(
             fts_params.extend([scope_vendor, scope_library])
             vector_params.extend([scope_vendor, scope_library])
         fts_params.append(candidates)
-        vector_params.extend([vector, candidates, max_results])
+        vector_params.extend([vector, candidates, candidates])
         params = fts_params + vector_params
         sql = f"""
             with fts_candidates as (
@@ -233,9 +233,9 @@ def search_from_postgres(
     else:
         if scope_vendor:
             where_scope = "and v.name = %s and l.name = %s"
-            params = [terms, terms, scope_vendor, scope_library, max_results]
+            params = [terms, terms, scope_vendor, scope_library, candidates]
         else:
-            params = [terms, terms, max_results]
+            params = [terms, terms, candidates]
         sql = f"""
             select
               '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
