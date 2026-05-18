@@ -43,8 +43,9 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         missing_symbols = missing_expected_symbols(symbols, profile.expected_symbols)
         if missing_symbols:
             errors.append("missing expected symbols: " + ", ".join(missing_symbols))
-        total_seen = len(pages) + len(rejected)
-        junk_ratio = len(rejected) / total_seen if total_seen else 1.0
+        junk_rejections = true_junk_rejections(rejected)
+        total_seen = len(pages) + len(junk_rejections)
+        junk_ratio = len(junk_rejections) / total_seen if total_seen else 1.0
         if junk_ratio > profile.max_junk_ratio:
             errors.append(f"junk ratio {junk_ratio:.2f} exceeds {profile.max_junk_ratio:.2f}")
     else:
@@ -71,6 +72,8 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         "chunks": len(chunks),
         "symbols": len(symbols),
         "duplicate_chunk_ratio": round(duplicate_ratio, 4),
+        "junk_documents": len(true_junk_rejections(rejected)),
+        "policy_rejected_documents": len(rejected) - len(true_junk_rejections(rejected)),
         "content_types": content_types,
         "missing_source_anchors": missing_anchors,
         "missing_token_counts": missing_token_counts,
@@ -101,6 +104,20 @@ def rejected_pages(target: Path) -> list[dict[str, Any]]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+def true_junk_rejections(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if not is_policy_rejection(row)]
+
+
+def is_policy_rejection(row: dict[str, Any]) -> bool:
+    reasons = [str(reason).lower() for reason in row.get("reasons") or []]
+    content_type = str(row.get("content_type") or "").lower()
+    return (
+        content_type in {"duplicate", "archived_version"}
+        or any(reason.startswith("duplicate content") for reason in reasons)
+        or any("version" in reason and ("archived" in reason or "target" in reason) for reason in reasons)
+    )
 
 
 def symbol_names(target: Path) -> set[str]:

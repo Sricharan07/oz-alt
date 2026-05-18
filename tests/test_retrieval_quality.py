@@ -21,6 +21,7 @@ from oz_crawler.crawl import prepare_pages
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.token_counting import token_count
+from oz_crawler.validation import true_junk_rejections
 
 
 class RetrievalQualityTests(unittest.TestCase):
@@ -101,6 +102,14 @@ class RetrievalQualityTests(unittest.TestCase):
             rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
 
         self.assertEqual(len(rows), 1)
+
+    def test_validation_junk_ratio_excludes_policy_dedup_rejections(self) -> None:
+        rows = [
+            {"content_type": "duplicate", "reasons": ["duplicate content", "canonical source: https://docs.example/a"]},
+            {"content_type": "junk", "reasons": ["marketing/login language"]},
+        ]
+
+        self.assertEqual(len(true_junk_rejections(rows)), 1)
 
     def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
         with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):
