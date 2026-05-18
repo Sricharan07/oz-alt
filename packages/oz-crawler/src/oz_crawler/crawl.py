@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -476,7 +477,9 @@ def prepare_pages(
     sanitized_pages = [
         replace(page, title=sanitize_secret_tokens(page.title), markdown=clean_markdown(page.markdown)) for page in pages
     ]
-    assigned_pages, version_rejections = filter_current_version(assign_page_paths(sanitized_pages), target_version=version)
+    unique_pages, duplicate_rejections = dedupe_pages_by_content(sanitized_pages)
+    rejected.extend(duplicate_rejections)
+    assigned_pages, version_rejections = filter_current_version(assign_page_paths(unique_pages), target_version=version)
     rejected.extend(version_rejections)
     for page in assigned_pages:
         quality = score_page(page, profile)
@@ -492,6 +495,34 @@ def prepare_pages(
             )
         )
     return accepted, rejected
+
+
+def dedupe_pages_by_content(pages: list[NormalizedPage]) -> tuple[list[NormalizedPage], list[dict[str, Any]]]:
+    seen: dict[str, NormalizedPage] = {}
+    accepted: list[NormalizedPage] = []
+    rejected: list[dict[str, Any]] = []
+    for page in pages:
+        key = page_content_key(page.markdown)
+        canonical = seen.get(key)
+        if canonical is not None:
+            rejected.append(
+                {
+                    "title": page.title,
+                    "source_url": page.source_url,
+                    "score": 0,
+                    "reasons": ["duplicate content", f"canonical source: {canonical.source_url}"],
+                    "content_type": "duplicate",
+                }
+            )
+            continue
+        seen[key] = page
+        accepted.append(page)
+    return accepted, rejected
+
+
+def page_content_key(markdown: str) -> str:
+    normalized = re.sub(r"\s+", " ", markdown.strip().lower())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def rejection_row(page: NormalizedPage, quality: QualityResult) -> dict[str, Any]:

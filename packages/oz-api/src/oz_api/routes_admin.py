@@ -169,6 +169,15 @@ async def admin_crawler_jobs(request: Request):
     return load_admin_snapshot(state_from_request(request).storage)["crawler_jobs"]
 
 
+@router.get("/admin/crawl-job-logs")
+async def admin_crawl_job_logs(request: Request):
+    rows = load_admin_snapshot(state_from_request(request).storage)["crawl_job_logs"]
+    job_id = request.query_params.get("job_id")
+    if job_id:
+        rows = [row for row in rows if str(row.get("job_id")) == job_id]
+    return rows
+
+
 @router.get("/admin/usage")
 async def admin_usage(request: Request):
     return load_admin_snapshot(state_from_request(request).storage)["usage_events"]

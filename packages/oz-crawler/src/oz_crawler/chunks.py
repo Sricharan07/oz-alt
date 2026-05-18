@@ -27,6 +27,7 @@ class MarkdownChunk:
 def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
     rows: list[dict[str, Any]] = []
     seen_chunk_shas: set[str] = set()
+    seen_content_keys: set[str] = set()
     for page in pages:
         source_path = source_path_for_page(page)
         chunks = chunk_markdown(page.markdown, source_url=page.source_url, page_type=page.content_type)
@@ -34,9 +35,11 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
             chunk_key = scoped_chunk_key(source_path, chunk.chunk_key or str(idx))
             parent_chunk_key = scoped_chunk_key(source_path, chunk.parent_key) if chunk.parent_key else None
             chunk_sha = stable_chunk_sha(target, source_path, idx, chunk.text)
-            if chunk_sha in seen_chunk_shas:
+            content_key = normalized_chunk_key(chunk.text)
+            if chunk_sha in seen_chunk_shas or content_key in seen_content_keys:
                 continue
             seen_chunk_shas.add(chunk_sha)
+            seen_content_keys.add(content_key)
             rows.append(
                 {
                     "id": chunk_key,
@@ -297,6 +300,11 @@ def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) ->
     vendor, library, version = target.parts[-3:]
     payload = "\0".join([vendor, library, version, source_path, str(ordinal), text])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def normalized_chunk_key(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def slugify(value: str) -> str:

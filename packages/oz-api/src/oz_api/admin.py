@@ -175,7 +175,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <h2>Admin Actions</h2>
   <table><thead><tr><th>User</th><th>Action</th><th>Target</th><th>Created</th></tr></thead><tbody>{admin_action_rows}</tbody></table>
   <h2>Queues</h2>
-  <p><a href="/admin/index-requests">Index requests JSON</a> · <a href="/admin/crawler-jobs">Crawler jobs JSON</a> · <a href="/admin/telemetry">Telemetry JSON</a> · <a href="/admin/usage">Usage JSON</a> · <a href="/admin/actions">Actions JSON</a> · <a href="/admin/promotions">Promotions JSON</a> · <a href="/admin/freshness">Freshness JSON</a> · <a href="/admin/quality">Quality JSON</a> · <a href="/admin/evals">Evals JSON</a> · <a href="/admin/packs">Packs JSON</a></p>
+  <p><a href="/admin/index-requests">Index requests JSON</a> · <a href="/admin/crawler-jobs">Crawler jobs JSON</a> · <a href="/admin/crawl-job-logs">Crawl logs JSON</a> · <a href="/admin/telemetry">Telemetry JSON</a> · <a href="/admin/usage">Usage JSON</a> · <a href="/admin/actions">Actions JSON</a> · <a href="/admin/promotions">Promotions JSON</a> · <a href="/admin/freshness">Freshness JSON</a> · <a href="/admin/quality">Quality JSON</a> · <a href="/admin/evals">Evals JSON</a> · <a href="/admin/packs">Packs JSON</a></p>
 </body>
 </html>"""
 

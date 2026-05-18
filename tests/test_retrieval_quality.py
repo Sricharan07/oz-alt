@@ -17,6 +17,7 @@ from oz_api.rerank import boost_named_suggestions, boost_query_matches, parse_re
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
 from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
+from oz_crawler.crawl import prepare_pages
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.token_counting import token_count
@@ -71,6 +72,35 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertIn("chunk_sha", row)
         self.assertNotIn("embedding", row)
         self.assertNotIn("embedding_model", row)
+
+    def test_prepare_pages_rejects_duplicate_source_content(self) -> None:
+        markdown = "# useEffect\n\n" + "React effect cleanup dependencies example. " * 20
+        pages = [
+            NormalizedPage(title="useEffect", markdown=markdown, source_url="https://react.dev/reference/react/useEffect"),
+            NormalizedPage(title="useEffect copy", markdown=markdown, source_url="https://react.dev/reference/react/useEffect"),
+        ]
+
+        accepted, rejected = prepare_pages(pages, profile=None, version="19")
+
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("duplicate content", rejected[0]["reasons"])
+
+    def test_write_chunks_dedupes_exact_chunk_content_across_pages(self) -> None:
+        markdown = "# Shared\n\n" + "Use the same setup sequence. " * 25
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vendor" / "library" / "latest"
+            target.mkdir(parents=True)
+            write_chunks(
+                target,
+                [
+                    NormalizedPage(title="One", markdown=markdown, source_url="https://docs.example/one", path="guides/one.md"),
+                    NormalizedPage(title="Two", markdown=markdown, source_url="https://docs.example/two", path="guides/two.md"),
+                ],
+            )
+            rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
+
+        self.assertEqual(len(rows), 1)
 
     def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
         with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):
