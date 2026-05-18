@@ -10,7 +10,6 @@ from oz_api.admin_ops import (
     get_library_profile,
     mark_crawler_job_completed,
     mark_crawler_job_embedding_waiting,
-    mark_crawler_job_failed,
     mark_crawler_job_started,
     update_crawler_job_progress,
     record_crawler_job_log,

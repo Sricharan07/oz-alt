@@ -6,7 +6,7 @@ from typing import Any
 
 from oz_api.storage import RegistryStorage
 from oz_api.versions import latest_entry as latest_versioned_entry
-from oz_api.versions import parse_scope, parse_versioned_scope, resolve_catalog_entry
+from oz_api.versions import parse_versioned_scope, resolve_catalog_entry
 
 def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()

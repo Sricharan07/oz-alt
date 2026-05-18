@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 from oz_api.redis_store import redis_client
 
@@ -73,4 +72,3 @@ def retrieval_statement_timeout_ms() -> int:
         return max(1, int(os.environ.get("OZ_RETRIEVAL_STATEMENT_TIMEOUT_MS", "1500")))
     except ValueError:
         return 1500
-

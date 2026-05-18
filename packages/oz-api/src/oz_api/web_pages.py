@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from oz_api.admin import esc
 from oz_api.auth import AuthPrincipal, PASSWORD_MIN_LENGTH, public_base_url
+from oz_api.html_utils import esc
 
 
 def render_home_page() -> str:

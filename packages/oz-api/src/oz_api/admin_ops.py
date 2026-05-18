@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from oz_api.auth import AuthPrincipal
 from oz_api.auth_store import AuthStore
-from oz_api.queue import crawler_job_event, enqueue_crawler_job
+from oz_api.queue import enqueue_crawler_job
 from oz_api.storage import RegistryStorage
 
 

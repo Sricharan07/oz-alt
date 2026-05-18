@@ -60,7 +60,6 @@ def score_page(page: NormalizedPage, profile: LibraryProfile | None) -> QualityR
     word_count = len(re.findall(r"\w+", lower))
     heading_count = len(re.findall(r"(?m)^#{1,4}\s+", text))
     code_blocks = len(re.findall(r"```", text)) // 2
-    links = len(re.findall(r"\[[^\]]+\]\([^)]+\)", text))
     required_hits = required_topic_hits(lower, profile)
     marketing_hits = sum(1 for term in MARKETING_TERMS if term in lower)
     doc_hits = sum(1 for term in DOC_TERMS if term in lower)

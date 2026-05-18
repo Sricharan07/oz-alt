@@ -4,13 +4,13 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-import sys
 
 sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 

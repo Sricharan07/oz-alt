@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from oz_api import auth, limits  # noqa: E402
-from oz_api.admin import render_alert_row, render_catalog_row, render_user_row  # noqa: E402
 from oz_api.admin_templates import render_admin_template  # noqa: E402
 from oz_api.http_context import content_length_too_large, request_body_limit_bytes  # noqa: E402
 from oz_api.rerank import rerank_timeout_seconds  # noqa: E402
@@ -169,27 +168,6 @@ class HardeningTests(unittest.TestCase):
                     security.fetch_public_url(f"http://example.test:{server.port}/docs", max_bytes=4, attempts=1)
         finally:
             server.stop()
-
-    def test_admin_rows_escape_dynamic_values(self) -> None:
-        malicious = '<script>alert("x")</script>'
-        html = "\n".join(
-            [
-                render_alert_row({"severity": malicious, "status": malicious, "title": malicious}),
-                render_user_row({"email": malicious, "role": malicious}, csrf=malicious),
-                render_catalog_row(
-                    {
-                        "vendor": malicious,
-                        "library": malicious,
-                        "version": malicious,
-                        "description": malicious,
-                        "source_urls": [malicious],
-                    },
-                    csrf=malicious,
-                ),
-            ]
-        )
-        self.assertNotIn("<script>", html)
-        self.assertIn("&lt;script&gt;", html)
 
     def test_admin_template_autoescapes_dynamic_values(self) -> None:
         malicious = '<script>alert("x")</script>'

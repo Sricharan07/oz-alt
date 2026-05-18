@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from urllib.parse import parse_qs
 
-from oz_api.retrieval import latest_entry as retrieval_latest_entry
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_postgres import ref_from_postgres
 from oz_api.versions import available_versions, major_version_delta, parse_versioned_scope, resolve_catalog_entry

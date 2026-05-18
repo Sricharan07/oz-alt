@@ -44,7 +44,6 @@ def search_from_fixtures(
 ) -> list[dict[str, Any]]:
     terms = normalize_query(query)
     scope = parse_versioned_scope(library_scope)
-    scope_vendor, scope_library = scope.vendor, scope.library
     selected_versions = selected_fixture_versions(storage, scope)
     hits: list[dict[str, Any]] = []
 

@@ -4,7 +4,6 @@ import argparse
 from pathlib import Path
 
 from oz_crawler.crawl import CrawlOptions, crawl_single_page
-from oz_crawler.worker import run_local_worker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,30 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
     crawl.add_argument("--require-profile", action="store_true", help="Fail if registry/library_profiles.json has no profile.")
     crawl.add_argument("--fail-on-validation", action="store_true", help="Fail when profile quality gates do not pass.")
 
-    worker = subcommands.add_parser("worker", help="Process local crawler queue jobs.")
-    worker.add_argument(
-        "--queue",
-        type=Path,
-        default=Path("registry/admin/crawler_jobs.jsonl"),
-        help="JSONL queue path written by the local API.",
-    )
-    worker.add_argument(
-        "--registry-root",
-        type=Path,
-        default=Path("registry/fixtures"),
-        help="Fixture registry root.",
-    )
-    worker.add_argument("--max-pages", type=int, default=8)
-    worker.add_argument(
-        "--fetcher",
-        choices=["auto", "http", "dynamic", "stealth", "stdlib"],
-        default="auto",
-        help="Scrapling fetcher mode for queued jobs.",
-    )
-    worker.add_argument("--concurrency", type=int, default=6)
-    worker.add_argument("--delay", type=float, default=0.0)
-    worker.add_argument("--no-robots", action="store_true")
-
     return parser
 
 
@@ -100,18 +75,6 @@ def main() -> None:
             ),
         )
         print(target)
-    elif args.command == "worker":
-        processed = run_local_worker(
-            queue_path=args.queue,
-            registry_root=args.registry_root,
-            max_pages=args.max_pages,
-            fetcher=args.fetcher,
-            concurrent_requests=args.concurrency,
-            download_delay=args.delay,
-            robots_txt=not args.no_robots,
-        )
-        print(f"processed {processed} crawler jobs")
-
 
 if __name__ == "__main__":
     main()

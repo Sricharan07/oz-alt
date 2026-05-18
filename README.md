@@ -8,15 +8,15 @@ This repository contains the end-to-end beta product:
 2. Immutable `.ozpack` bundles in `registry/packs`.
 3. A Rust CLI with `setup`, `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `prune`, `doctor`, and `config`.
 4. A Docker-first Python API that serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, user dashboard, and admin routes.
-5. A crawler wired to D4Vinci/Scrapling's Spider/session APIs, with stdlib fallback, chunking, symbol extraction, and optional OpenAI embedding generation.
+5. A crawler wired to D4Vinci/Scrapling's Spider/session APIs, with chunking, symbol extraction, and durable Postgres-backed indexing jobs.
 6. Docker Compose production services for Postgres/pgvector, Redis, S3-compatible pack storage, API, worker, scheduler, and Caddy.
 
 ## Repository Layout
 
 - `crates/oz-cli` - Rust CLI binary.
 - `crates/oz-objects` - content-addressed local object store and pack verification.
-- `packages/oz-crawler` - documentation crawler and local worker.
-- `packages/oz-api` - local/container registry API.
+- `packages/oz-crawler` - documentation crawler.
+- `packages/oz-api` - Docker/Postgres/Redis registry API, worker, and scheduler control plane.
 - `packages/oz-npm` - npm global wrapper package.
 - `registry/fixtures` - 15 seeded documentation trees.
 - `registry/packs` - generated `.ozpack` bundles.
@@ -79,7 +79,7 @@ Scrapling is vendored under `third_party/Scrapling` with Git metadata removed, a
 Index the generated chunks into Postgres for semantic API retrieval:
 
 ```bash
-OPENAI_API_KEY='sk-...' OZ_DATABASE_URL='postgres://...' python3 scripts/index-registry-to-db.py
+VOYAGE_API_KEY='...' OZ_DATABASE_URL='postgres://...' python3 scripts/index-registry-to-db.py
 ```
 
 ## Deployment

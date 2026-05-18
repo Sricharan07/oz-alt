@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from oz_api.admin import esc, load_admin_snapshot, render_admin
+from oz_api.admin import load_admin_snapshot, render_admin
 from oz_api.admin_ops import (
     approve_crawl,
     log_admin_action,
@@ -21,6 +21,7 @@ from oz_api.auth import (
 )
 from oz_api.auth_store import AuthStore, postgres_connection
 from oz_api.embedding_jobs import cancel_embedding_job
+from oz_api.html_utils import esc
 from oz_api.http_context import first_form_value, principal_for_request, read_form_payload, session_cookie, state_from_request
 from oz_api.queue import crawler_job_event, missing_required_crawler_fields
 from oz_api.server_helpers import first_form_values

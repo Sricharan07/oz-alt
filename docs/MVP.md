@@ -18,7 +18,7 @@ Implemented:
 - Admin dashboard with index request queue and approve-to-crawl action.
 - 15 launch libraries crawled, chunked, indexed, and packed.
 - Redis-backed crawler queue worker, scheduled recrawl queueing, pack publication, catalog upsert, and Postgres chunk indexing.
-- Optional OpenAI embeddings and reranking with Redis caching.
+- Voyage-first embeddings, optional fallback providers, cross-encoder reranking, and Redis caching.
 - Postgres schema with pgvector, FTS, metadata, requests, telemetry, auth, library profiles, quality runs, and crawler jobs.
 - Docker-first deployment stack.
 - Release scripts, npm wrapper, Homebrew formula generation, and curl-install source script.
