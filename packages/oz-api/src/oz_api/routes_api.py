@@ -24,6 +24,7 @@ from oz_api.retrieval import (
 from oz_api.server_helpers import bulk_refs_payload, single_ref_payload
 from oz_api.telemetry import sanitize_telemetry
 from oz_api.usage import record_telemetry_event, record_usage_event
+from oz_api.versions import VersionResolutionError
 
 router = APIRouter()
 
@@ -35,9 +36,15 @@ async def refs(request: Request):
 
 @router.get("/refs/{vendor}/{library}")
 async def single_ref(request: Request, vendor: str, library: str):
-    payload = single_ref_payload(state_from_request(request), vendor, library)
+    requested_version = request.query_params.get("version")
+    try:
+        payload = single_ref_payload(state_from_request(request), vendor, library, requested_version)
+    except VersionResolutionError as exc:
+        return JSONResponse(exc.response_payload(), status_code=exc.status_code)
     if payload is None:
-        return JSONResponse({"error": "library not indexed"}, status_code=404)
+        return JSONResponse({"error": "library_not_found", "vendor": vendor, "library": library}, status_code=404)
+    if payload.get("error"):
+        return JSONResponse(payload, status_code=404)
     return payload
 
 
@@ -45,13 +52,25 @@ async def single_ref(request: Request, vendor: str, library: str):
 async def pack(request: Request, vendor: str, library: str, version: str):
     state = state_from_request(request)
     principal = principal_for_request(request)
-    record_usage_event(principal, "pack_download", library=f"{vendor}/{library}@{version}")
-    pack_url = state.storage.get_pack_url(vendor, library, version)
+    try:
+        resolved = single_ref_payload(state, vendor, library, version)
+    except VersionResolutionError as exc:
+        return JSONResponse(exc.response_payload(), status_code=exc.status_code)
+    if resolved is None:
+        return JSONResponse({"error": "library_not_found", "vendor": vendor, "library": library}, status_code=404)
+    if resolved.get("error"):
+        return JSONResponse(resolved, status_code=404)
+    canonical_version = str(resolved["version"])
+    record_usage_event(principal, "pack_download", library=f"{vendor}/{library}@{canonical_version}")
+    pack_url = state.storage.get_pack_url(vendor, library, canonical_version)
     if pack_url:
         return RedirectResponse(pack_url, status_code=302)
-    pack_bytes = state.storage.get_pack_bytes(vendor, library, version)
+    pack_bytes = state.storage.get_pack_bytes(vendor, library, canonical_version)
     if pack_bytes is None:
-        return JSONResponse({"error": "pack not found"}, status_code=404)
+        return JSONResponse(
+            {"error": "pack_not_found", "vendor": vendor, "library": library, "version": canonical_version},
+            status_code=404,
+        )
     return Response(
         pack_bytes,
         media_type="application/vnd.oz.pack",
@@ -66,7 +85,8 @@ async def auth_device_start(request: Request):
         return start_device_authorization(ip=client_ip(request), user_agent=request.headers.get("user-agent", ""))
     except (AuthError, RuntimeError) as exc:
         status = 429 if str(exc) == "rate_limited" else 400
-        return JSONResponse({"error": str(exc)}, status_code=status)
+        headers = {"Retry-After": "60", "RateLimit-Limit": "30", "RateLimit-Remaining": "0", "RateLimit-Reset": "60"} if status == 429 else None
+        return JSONResponse({"error": str(exc)}, status_code=status, headers=headers)
 
 
 @router.post("/auth/token")
@@ -145,13 +165,16 @@ async def search(request: Request):
     library_scope = payload.get("library_scope")
     max_results = int(payload.get("max_results", 20))
     ctx = RetrievalContext.from_env(state.storage)
-    results = retrieval_search(
-        ctx,
-        query,
-        library_scope=library_scope,
-        max_results=max_results,
-        fingerprint=str(payload.get("project_fingerprint", "")),
-    )
+    try:
+        results = retrieval_search(
+            ctx,
+            query,
+            library_scope=library_scope,
+            max_results=max_results,
+            fingerprint=str(payload.get("project_fingerprint", "")),
+        )
+    except VersionResolutionError as exc:
+        return JSONResponse(exc.response_payload(), status_code=exc.status_code)
     record_usage_event(
         principal_for_request(request),
         "search",
@@ -173,7 +196,11 @@ async def index_request(request: Request):
     payload = await read_json_payload(request)
     requesting_user = str(payload.get("requesting_user", "local"))
     if not index_request_allowed(requesting_user):
-        return JSONResponse({"error": "rate limited"}, status_code=429)
+        return JSONResponse(
+            {"error": "rate_limited"},
+            status_code=429,
+            headers={"Retry-After": "3600", "RateLimit-Limit": "20", "RateLimit-Remaining": "0", "RateLimit-Reset": "3600"},
+        )
     event = submit_index_request(
         state.storage,
         payload,

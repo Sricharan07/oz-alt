@@ -144,13 +144,14 @@ create table if not exists freshness_policies (
   id bigserial primary key,
   vendor text not null,
   library text not null,
+  version text not null default 'latest',
   source_url text not null,
   recrawl_interval_hours integer not null default 24,
   enabled boolean not null default true,
   created_by uuid references users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (vendor, library)
+  unique (vendor, library, version)
 );
 
 create index if not exists freshness_policies_enabled_idx on freshness_policies(enabled);

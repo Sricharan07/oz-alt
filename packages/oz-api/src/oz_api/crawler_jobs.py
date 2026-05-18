@@ -617,31 +617,53 @@ def enqueue_due_freshness_policies(storage: RegistryStorage) -> int:
     try:
         rows = store.execute(
             """
-            select fp.vendor, fp.library as library_name, fp.source_url,
-                   coalesce(lv.version, 'latest') as version,
-                   fp.recrawl_interval_hours
-            from freshness_policies fp
-            left join vendors v on v.name = fp.vendor
-            left join libraries l on l.vendor_id = v.id and l.name = fp.library
-            left join lateral (
-              select version, last_crawled_at
-              from library_versions
-              where library_id = l.id
-              order by indexed_at desc nulls last, created_at desc
-              limit 1
-            ) lv on true
-            where fp.enabled = true
+            with ranked_versions as (
+              select fp.vendor,
+                     fp.library as library_name,
+                     fp.source_url,
+                     coalesce(nullif(fp.version, 'latest'), lv.version, 'latest') as version,
+                     coalesce(lv.last_crawled_at, timestamp with time zone 'epoch') as last_crawled_at,
+                     lv.last_requested_at,
+                     dense_rank() over (order by coalesce(lv.pull_count, 0) desc, lv.last_requested_at desc nulls last) as usage_rank,
+                     fp.recrawl_interval_hours,
+                     l.id as library_id
+              from freshness_policies fp
+              left join vendors v on v.name = fp.vendor
+              left join libraries l on l.vendor_id = v.id and l.name = fp.library
+              left join refs r on r.library_id = l.id and r.channel = 'latest'
+              left join library_versions lv on lv.library_id = l.id
+                   and lv.id = case
+                     when fp.version = 'latest' then coalesce(l.default_version_id, r.version_id)
+                     else lv.id
+                   end
+                   and (fp.version = 'latest' or lv.version = fp.version)
+                   and lv.archived_at is null
+              where fp.enabled = true
+            ),
+            due as (
+              select *,
+                     case
+                       when usage_rank <= 100 then 24
+                       when usage_rank <= 1000 then 360
+                       when usage_rank <= 5000 then 720
+                       else 1080
+                     end as tier_interval_hours
+              from ranked_versions
+            )
+            select vendor, library_name, source_url, version,
+                   least(recrawl_interval_hours, tier_interval_hours)::integer as recrawl_interval_hours
+            from due
+            where library_id is not null
+              and (last_requested_at is not null or version = 'latest')
               and not exists (
                 select 1
                 from crawler_jobs j
-                where j.library_id = l.id
-                  and j.status in ('queued', 'running')
+                where j.library_id = due.library_id
+                  and j.version = due.version
+                  and j.status in ('queued', 'running', 'batch_running')
               )
-              and (
-                lv.last_crawled_at is null
-                or lv.last_crawled_at < now() - make_interval(hours => fp.recrawl_interval_hours)
-              )
-            order by fp.updated_at asc
+              and last_crawled_at < now() - make_interval(hours => least(recrawl_interval_hours, tier_interval_hours)::integer)
+            order by usage_rank asc, last_crawled_at asc
             limit 100
             """
         )

@@ -26,6 +26,7 @@ from oz_api.rerank import (
     zeroentropy_scores,
 )
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
+from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
 from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
 from oz_crawler.crawl import prepare_pages
@@ -36,6 +37,19 @@ from oz_crawler.validation import USEFUL_CONTENT_TYPES, true_junk_rejections
 
 
 class RetrievalQualityTests(unittest.TestCase):
+    def test_version_resolution_uses_semver_not_string_sort(self) -> None:
+        entries = [{"version": version} for version in ["v9.0.0", "v10.0.0", "v11.0.0", "v2.0.0", "v15.1.8"]]
+
+        self.assertEqual(latest_entry(entries)["version"], "v15.1.8")
+        self.assertEqual(resolve_catalog_entry(entries, "15")["version"], "v15.1.8")
+
+    def test_versioned_scope_accepts_at_and_path_forms(self) -> None:
+        at_scope = parse_versioned_scope("vercel/next.js@15.1.8")
+        path_scope = parse_versioned_scope("/vercel/next.js/v15.1.8")
+
+        self.assertEqual((at_scope.vendor, at_scope.library, at_scope.version), ("vercel", "next.js", "15.1.8"))
+        self.assertEqual((path_scope.vendor, path_scope.library, path_scope.version), ("vercel", "next.js", "v15.1.8"))
+
     def test_intent_classifier_routes_symbol_queries_to_api_reference(self) -> None:
         intent = classify_query("NextRequest cookies API parameters")
         self.assertEqual(intent.content_type, "api_reference")

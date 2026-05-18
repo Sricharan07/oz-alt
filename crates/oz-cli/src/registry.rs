@@ -1,10 +1,16 @@
 use super::*;
 
 pub(crate) fn parse_library_spec(input: &str) -> Result<LibrarySpec> {
-    let (name, version) = match input.rfind('@') {
-        Some(idx) if idx > 0 => (&input[..idx], Some(input[idx + 1..].to_string())),
-        _ => (input, None),
+    let cleaned = input.trim().trim_start_matches('/');
+    let (mut name, mut version) = match cleaned.rfind('@') {
+        Some(idx) if idx > 0 => (&cleaned[..idx], Some(cleaned[idx + 1..].to_string())),
+        _ => (cleaned, None),
     };
+    let path_parts = name.split('/').collect::<Vec<_>>();
+    if version.is_none() && path_parts.len() >= 3 && looks_like_version(path_parts[path_parts.len() - 1]) {
+        version = Some(path_parts[path_parts.len() - 1].to_string());
+        name = &name[..name.rfind('/').expect("path has slash")];
+    }
     if name.trim().is_empty() {
         bail!("library name cannot be empty");
     }
@@ -24,9 +30,8 @@ pub(crate) fn parse_library_spec(input: &str) -> Result<LibrarySpec> {
     })
 }
 
-pub(crate) fn parse_scope(input: &str) -> Result<(String, String)> {
-    let spec = parse_library_spec(input)?;
-    Ok((spec.vendor, spec.library))
+pub(crate) fn parse_library_scope(input: &str) -> Result<LibrarySpec> {
+    parse_library_spec(input.trim_start_matches('/'))
 }
 
 pub(crate) fn resolve_registry_source(
@@ -71,11 +76,11 @@ fn best_catalog_entry<'a>(
                 && spec
                     .version
                     .as_ref()
-                    .map(|version| entry.version == *version)
+                    .map(|version| version_matches(&entry.version, version))
                     .unwrap_or(true)
         })
         .collect::<Vec<_>>();
-    matches.sort_by(|a, b| a.version.cmp(&b.version));
+    matches.sort_by(|a, b| compare_versions(&a.version, &b.version));
     matches.pop()
 }
 
@@ -88,12 +93,13 @@ fn apply_lockfile_version_hint(
         return;
     }
     for version_hint in lockfile_version_hints(project_root, spec) {
-        if catalog.libraries.iter().any(|entry| {
-            entry.vendor == spec.vendor
-                && entry.library == spec.library
-                && entry.version == version_hint
-        }) {
-            spec.version = Some(version_hint);
+        let candidate = LibrarySpec {
+            vendor: spec.vendor.clone(),
+            library: spec.library.clone(),
+            version: Some(version_hint),
+        };
+        if let Some(entry) = best_catalog_entry(catalog, &candidate) {
+            spec.version = Some(entry.version.clone());
             return;
         }
     }
@@ -183,10 +189,21 @@ fn resolve_fixture_source(project_root: &Path, spec: &mut LibrarySpec) -> Result
         );
     }
 
-    if let Some(version) = &spec.version {
-        let exact = library_root.join(version);
+    if let Some(version) = spec.version.clone() {
+        let exact = library_root.join(&version);
         if exact.exists() {
             return Ok(exact);
+        }
+        let mut matches = fs::read_dir(&library_root)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|candidate| version_matches(candidate, &version))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| compare_versions(a, b));
+        if let Some(resolved) = matches.pop() {
+            spec.version = Some(resolved.clone());
+            return Ok(library_root.join(resolved));
         }
         bail!(
             "version {} is not available for {}/{} in the local development registry",
@@ -201,7 +218,7 @@ fn resolve_fixture_source(project_root: &Path, spec: &mut LibrarySpec) -> Result
         .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect::<Vec<_>>();
-    versions.sort();
+    versions.sort_by(|a, b| compare_versions(a, b));
     let version = versions
         .pop()
         .with_context(|| format!("no versions found under {}", library_root.display()))?;
@@ -212,7 +229,7 @@ fn resolve_fixture_source(project_root: &Path, spec: &mut LibrarySpec) -> Result
 pub(crate) fn best_registry_match(
     project_root: &Path,
     terms: &[String],
-    scope: &Option<(String, String)>,
+    scope: &Option<LibrarySpec>,
 ) -> Result<Option<String>> {
     let fixtures = match fixtures_root(project_root) {
         Some(path) => path,
@@ -233,8 +250,14 @@ pub(crate) fn best_registry_match(
         };
         if scope
             .as_ref()
-            .map(|(scope_vendor, scope_library)| {
-                vendor == *scope_vendor && library == *scope_library
+            .map(|scope| {
+                vendor == scope.vendor
+                    && library == scope.library
+                    && scope
+                        .version
+                        .as_ref()
+                        .map(|requested| version_matches(&version, requested))
+                        .unwrap_or(true)
             })
             .unwrap_or(false)
             == false
@@ -263,6 +286,72 @@ pub(crate) fn best_registry_match(
         }
     }
     Ok(best.map(|(_, spec)| spec))
+}
+
+pub(crate) fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    version_sort_key(left).cmp(&version_sort_key(right))
+}
+
+pub(crate) fn version_matches(candidate: &str, requested: &str) -> bool {
+    let candidate_norm = normalize_version(candidate);
+    let requested_norm = normalize_version(requested);
+    if candidate_norm == requested_norm {
+        return true;
+    }
+    let candidate_parts = numeric_parts(&candidate_norm);
+    let requested_parts = numeric_parts(&requested_norm);
+    if candidate_parts.is_empty() || requested_parts.is_empty() || requested_parts.len() > candidate_parts.len() {
+        return false;
+    }
+    candidate_parts[..requested_parts.len()] == requested_parts[..]
+}
+
+fn version_sort_key(version: &str) -> (u8, [u64; 4], String) {
+    let normalized = normalize_version(version);
+    let parts = numeric_parts(&normalized);
+    if parts.is_empty() {
+        let rank = if matches!(normalized.as_str(), "latest" | "stable" | "current" | "default") {
+            1
+        } else {
+            0
+        };
+        return (rank, [0, 0, 0, 0], normalized);
+    }
+    let mut padded = [0, 0, 0, 0];
+    for (index, value) in parts.into_iter().take(4).enumerate() {
+        padded[index] = value;
+    }
+    (2, padded, normalized)
+}
+
+fn normalize_version(version: &str) -> String {
+    version.trim().trim_start_matches('v').trim_start_matches('V').to_ascii_lowercase()
+}
+
+fn looks_like_version(value: &str) -> bool {
+    let normalized = normalize_version(value);
+    matches!(normalized.as_str(), "latest" | "stable" | "current" | "default")
+        || numeric_parts(&normalized).len() >= 2
+        || value.starts_with('v')
+        || value.starts_with('V')
+}
+
+fn numeric_parts(version: &str) -> Vec<u64> {
+    let core = version
+        .split(|ch| ch == '-' || ch == '+')
+        .next()
+        .unwrap_or(version);
+    let mut parts = Vec::new();
+    for part in core.split('.') {
+        if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+            return Vec::new();
+        }
+        match part.parse::<u64>() {
+            Ok(value) => parts.push(value),
+            Err(_) => return Vec::new(),
+        }
+    }
+    parts
 }
 
 fn fixture_identity(fixtures_root: &Path, file_path: &Path) -> Option<(String, String, String)> {
@@ -362,7 +451,9 @@ pub(crate) fn build_catalog(project_root: &Path) -> Result<RegistryCatalog> {
     }
 
     libraries.sort_by(|a, b| {
-        (&a.vendor, &a.library, &a.version).cmp(&(&b.vendor, &b.library, &b.version))
+        (&a.vendor, &a.library)
+            .cmp(&(&b.vendor, &b.library))
+            .then_with(|| compare_versions(&a.version, &b.version))
     });
     Ok(RegistryCatalog {
         schema_version: 1,
@@ -577,7 +668,7 @@ pub(crate) fn latest_version(
         .filter(|entry| entry.vendor == vendor && entry.library == library)
         .map(|entry| entry.version)
         .collect::<Vec<_>>();
-    versions.sort();
+    versions.sort_by(|a, b| compare_versions(a, b));
     Ok(versions.pop())
 }
 

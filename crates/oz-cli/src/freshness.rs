@@ -23,8 +23,13 @@ pub(crate) fn warn_stale_libraries(project_root: &Path) -> Result<()> {
         }
         if let Ok(response) = api_get_json::<BulkRefsResponse>(&config, &route) {
             for stale in response.stale_libraries {
+                let action = if stale.breaking_changes_likely {
+                    "major-version change; review your lockfile before running"
+                } else {
+                    "run"
+                };
                 eprintln!(
-                    "oz: {}/{}@{} is stale (newer: {}). Run 'oz update {}/{}'.",
+                    "oz: {}/{}@{} is stale (newer: {}). {action} 'oz update {}/{}'.",
                     stale.vendor,
                     stale.library,
                     stale.version,

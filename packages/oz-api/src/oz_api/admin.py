@@ -135,6 +135,28 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
       </select>
       <button class="primary" type="submit">Create invite</button>
     </form>
+    <form class="panel" method="post" action="/admin/default-version">
+      <input type="hidden" name="csrf" value="{esc(csrf)}">
+      <h2>Default Version</h2>
+      <label for="default_vendor">Vendor</label>
+      <input id="default_vendor" name="vendor" required>
+      <label for="default_library">Library</label>
+      <input id="default_library" name="library_name" required>
+      <label for="default_version">Version</label>
+      <input id="default_version" name="version" required>
+      <button type="submit">Set default</button>
+    </form>
+    <form class="panel" method="post" action="/admin/promote-version">
+      <input type="hidden" name="csrf" value="{esc(csrf)}">
+      <h2>Promote / Rollback</h2>
+      <label for="promote_vendor">Vendor</label>
+      <input id="promote_vendor" name="vendor" required>
+      <label for="promote_library">Library</label>
+      <input id="promote_library" name="library_name" required>
+      <label for="promote_version">Version</label>
+      <input id="promote_version" name="version" required>
+      <button type="submit">Point latest here</button>
+    </form>
   </div>
   <h2>Index Requests</h2>
   <table><thead><tr><th>Library</th><th>Vendor</th><th>Source</th><th>Requests</th><th>Requested by</th><th></th></tr></thead><tbody>{request_rows}</tbody></table>
@@ -232,7 +254,7 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
         ),
         "freshness_policies": db_rows(
             """
-            select vendor, library, source_url, recrawl_interval_hours, enabled,
+            select vendor, library, version, source_url, recrawl_interval_hours, enabled,
                    updated_at::text as updated_at
             from freshness_policies
             order by updated_at desc
@@ -643,7 +665,7 @@ def render_promotion_row(row: dict[str, Any]) -> str:
 
 
 def render_policy_row(row: dict[str, Any]) -> str:
-    library = f"{row.get('vendor')}/{row.get('library')}"
+    library = f"{row.get('vendor')}/{row.get('library')}@{row.get('version') or 'latest'}"
     return (
         f"<tr><td>{esc(library)}</td><td>{esc(row.get('source_url'))}</td>"
         f"<td>{esc(row.get('recrawl_interval_hours'))}h</td><td>{esc(row.get('enabled'))}</td>"

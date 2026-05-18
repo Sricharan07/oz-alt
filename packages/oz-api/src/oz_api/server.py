@@ -52,7 +52,11 @@ def install_middleware(app: FastAPI) -> None:
         state: ServerState = request.app.state.oz_state
         try:
             if request.method == "POST" and not request_rate_limit_allowed(request):
-                return JSONResponse({"error": "rate limited"}, status_code=429)
+                return JSONResponse(
+                    {"error": "rate_limited"},
+                    status_code=429,
+                    headers={"Retry-After": "60", "RateLimit-Limit": "60", "RateLimit-Remaining": "0", "RateLimit-Reset": "60"},
+                )
             if not is_authorized_request(request, state):
                 if unauthorized_is_html(request):
                     return HTMLResponse(render_login_page(), status_code=401)

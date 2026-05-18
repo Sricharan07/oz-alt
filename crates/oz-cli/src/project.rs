@@ -85,7 +85,7 @@ pub(crate) fn prune_libraries(
         bail!("use only one prune selector: library, --stale, or --all");
     }
 
-    let parsed_scope = scope.map(parse_scope).transpose()?;
+    let parsed_scope = scope.map(parse_library_scope).transpose()?;
     let config = read_config().unwrap_or_default();
     let mut lock = read_lock(project_root)?;
     let original_pulls = lock.pulls.clone();
@@ -95,7 +95,15 @@ pub(crate) fn prune_libraries(
     for pull in original_pulls {
         let matches_scope = parsed_scope
             .as_ref()
-            .map(|(vendor, library)| pull.vendor == *vendor && pull.library == *library)
+            .map(|scope| {
+                pull.vendor == scope.vendor
+                    && pull.library == scope.library
+                    && scope
+                        .version
+                        .as_ref()
+                        .map(|requested| version_matches(&pull.version, requested))
+                        .unwrap_or(true)
+            })
             .unwrap_or(false);
         let matches_stale = if stale {
             latest_version_for(project_root, &config, &pull.vendor, &pull.library)?

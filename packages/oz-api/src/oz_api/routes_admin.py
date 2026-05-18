@@ -4,7 +4,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from oz_api.admin import esc, load_admin_snapshot, render_admin
-from oz_api.admin_ops import approve_crawl, log_admin_action, upsert_library_profile
+from oz_api.admin_ops import (
+    approve_crawl,
+    log_admin_action,
+    promote_library_version,
+    set_library_default_version,
+    upsert_library_profile,
+)
 from oz_api.auth import (
     AuthError,
     create_password_invite,
@@ -72,6 +78,30 @@ async def library_profile(request: Request) -> HTMLResponse:
         upsert_library_profile(first_form_values(form), principal_for_request(request))
     except Exception as exc:
         return HTMLResponse(f"<!doctype html><p>{esc(str(exc))}</p>", status_code=400)
+    return HTMLResponse('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status_code=202)
+
+
+@router.post("/admin/default-version")
+async def default_version(request: Request) -> HTMLResponse:
+    form = await read_form_payload(request)
+    if not verify_csrf(session_cookie(request), first_form_value(form, "csrf")):
+        return HTMLResponse("<!doctype html><p>Invalid CSRF token.</p>", status_code=403)
+    try:
+        set_library_default_version(first_form_values(form), principal_for_request(request))
+    except Exception as exc:
+        return HTMLResponse(admin_result_page("Default version failed", str(exc)), status_code=400)
+    return HTMLResponse('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status_code=202)
+
+
+@router.post("/admin/promote-version")
+async def promote_version(request: Request) -> HTMLResponse:
+    form = await read_form_payload(request)
+    if not verify_csrf(session_cookie(request), first_form_value(form, "csrf")):
+        return HTMLResponse("<!doctype html><p>Invalid CSRF token.</p>", status_code=403)
+    try:
+        promote_library_version(first_form_values(form), principal_for_request(request))
+    except Exception as exc:
+        return HTMLResponse(admin_result_page("Promote version failed", str(exc)), status_code=400)
     return HTMLResponse('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status_code=202)
 
 

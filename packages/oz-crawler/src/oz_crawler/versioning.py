@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from oz_crawler.normalize import NormalizedPage
 
 
-VERSION_RE = re.compile(r"^(?:v)?(\d+)(?:\.(\d+))?(?:\.(\d+))?$", re.I)
+VERSION_RE = re.compile(r"^(?:v(\d+)(?:\.(\d+))?(?:\.(\d+))?|(\d+)\.(\d+)(?:\.(\d+))?)$", re.I)
 ARCHIVE_TOKENS = {"legacy", "deprecated", "old", "previous", "archive", "archives"}
 
 
@@ -57,7 +57,7 @@ def version_markers(page: NormalizedPage) -> set[str]:
             continue
         match = VERSION_RE.match(normalized)
         if match:
-            markers.add(match.group(1))
+            markers.add(next(group for group in match.groups() if group))
     return markers
 
 

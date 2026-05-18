@@ -461,18 +461,19 @@ def upsert_freshness_policy(payload: dict[str, Any], principal: AuthPrincipal | 
     vendor = clean(payload.get("vendor") or payload.get("vendor_hint"))
     library = clean(payload.get("library_name") or payload.get("library"))
     source_url = clean(payload.get("source_url") or payload.get("source_url_hint"))
+    version = clean(payload.get("version")) or "latest"
     if not vendor or not library or not source_url:
         return
     try:
         store.execute(
             """
             insert into freshness_policies (
-              vendor, library, source_url, recrawl_interval_hours, created_by, updated_at
+              vendor, library, version, source_url, recrawl_interval_hours, created_by, updated_at
             )
             values (
-              :vendor, :library, :source_url, :interval_hours, cast(:created_by as uuid), now()
+              :vendor, :library, :version, :source_url, :interval_hours, cast(:created_by as uuid), now()
             )
-            on conflict (vendor, library) do update
+            on conflict (vendor, library, version) do update
             set source_url = excluded.source_url,
                 recrawl_interval_hours = excluded.recrawl_interval_hours,
                 enabled = true,
@@ -481,6 +482,7 @@ def upsert_freshness_policy(payload: dict[str, Any], principal: AuthPrincipal | 
             {
                 "vendor": vendor,
                 "library": library,
+                "version": version,
                 "source_url": source_url,
                 "interval_hours": int_value(payload.get("recrawl_interval_hours"), default=24, minimum=1),
                 "created_by": principal.user_id if principal else None,
@@ -488,6 +490,89 @@ def upsert_freshness_policy(payload: dict[str, Any], principal: AuthPrincipal | 
         )
     except Exception:
         return
+
+
+def set_library_default_version(payload: dict[str, Any], principal: AuthPrincipal | None) -> None:
+    store = AuthStore.from_env()
+    if store is None:
+        raise RuntimeError("database is unavailable")
+    vendor = clean(payload.get("vendor"))
+    library = clean(payload.get("library_name") or payload.get("library"))
+    version = clean(payload.get("version"))
+    if not vendor or not library or not version:
+        raise RuntimeError("vendor, library, and version are required")
+    row = store.one(
+        """
+        select lv.id
+        from library_versions lv
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        where v.name = :vendor and l.name = :library and lv.version = :version
+          and lv.archived_at is null
+        """,
+        {"vendor": vendor, "library": library, "version": version},
+    )
+    if not row:
+        raise RuntimeError(f"{vendor}/{library}@{version} is not an active indexed version")
+    store.execute(
+        """
+        update libraries l
+        set default_version_id = :version_id,
+            updated_at = now()
+        from vendors v
+        where v.id = l.vendor_id and v.name = :vendor and l.name = :library
+        """,
+        {"version_id": row["id"], "vendor": vendor, "library": library},
+    )
+    log_admin_action(
+        principal,
+        "library_default_version_set",
+        target_type="library",
+        target=f"{vendor}/{library}",
+        metadata={"version": version},
+    )
+
+
+def promote_library_version(payload: dict[str, Any], principal: AuthPrincipal | None) -> None:
+    store = AuthStore.from_env()
+    if store is None:
+        raise RuntimeError("database is unavailable")
+    vendor = clean(payload.get("vendor"))
+    library = clean(payload.get("library_name") or payload.get("library"))
+    version = clean(payload.get("version"))
+    if not vendor or not library or not version:
+        raise RuntimeError("vendor, library, and version are required")
+    row = store.one(
+        """
+        select l.id as library_id, lv.id as version_id, lv.ref_sha
+        from library_versions lv
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        where v.name = :vendor and l.name = :library and lv.version = :version
+          and lv.archived_at is null
+        """,
+        {"vendor": vendor, "library": library, "version": version},
+    )
+    if not row:
+        raise RuntimeError(f"{vendor}/{library}@{version} is not an active indexed version")
+    store.execute(
+        """
+        insert into refs(library_id, channel, version_id, ref_sha)
+        values (:library_id, 'latest', :version_id, :ref_sha)
+        on conflict (library_id, channel) do update
+          set version_id = excluded.version_id,
+              ref_sha = excluded.ref_sha,
+              updated_at = now()
+        """,
+        {"library_id": row["library_id"], "version_id": row["version_id"], "ref_sha": row["ref_sha"]},
+    )
+    log_admin_action(
+        principal,
+        "library_version_promoted",
+        target_type="library",
+        target=f"{vendor}/{library}",
+        metadata={"version": version},
+    )
 
 
 def log_admin_action(

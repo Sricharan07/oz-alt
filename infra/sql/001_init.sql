@@ -48,6 +48,9 @@ create table if not exists libraries (
   name text not null,
   description text not null default '',
   source_url text,
+  default_version_id bigint,
+  redirected_to_library_id bigint references libraries(id) on delete set null,
+  version_strategy text not null default 'semver',
   search_document tsvector generated always as (
     setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(description, '')), 'B')
@@ -68,10 +71,24 @@ create table if not exists library_versions (
   last_crawled_at timestamptz,
   crawl_error_count integer not null default 0,
   pull_count bigint not null default 0,
+  last_requested_at timestamptz,
   benchmark_score double precision not null default 0,
+  archived_at timestamptz,
+  version_rank integer,
+  drift_score double precision not null default 0,
   created_at timestamptz not null default now(),
   unique (library_id, version)
 );
+
+do $$
+begin
+  alter table libraries
+    add constraint libraries_default_version_fk
+    foreign key (default_version_id) references library_versions(id) on delete set null;
+exception when duplicate_object then
+  null;
+end
+$$;
 
 create table if not exists refs (
   id bigserial primary key,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from oz_api.storage import RegistryStorage
+from oz_api.versions import latest_entry as latest_versioned_entry, major_version_delta
 
 
 def stale_libraries_from_payload(storage: RegistryStorage, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -31,6 +32,9 @@ def stale_libraries_from_payload(storage: RegistryStorage, payload: dict[str, An
                     "version": version,
                     "newer_version": newer_version or version,
                     "ref_sha": latest_ref or None,
+                    "breaking_changes_likely": bool(
+                        version_stale and (major_version_delta(version, newer_version) or 0) > 0
+                    ),
                 }
             )
     return stale
@@ -60,7 +64,4 @@ def latest_catalog_entry(storage: RegistryStorage, vendor: str, library: str) ->
         for entry in storage.load_catalog()
         if entry.get("vendor") == vendor and entry.get("library") == library
     ]
-    if not matches:
-        return None
-    matches.sort(key=lambda entry: str(entry.get("version") or ""))
-    return matches[-1]
+    return latest_versioned_entry(matches)

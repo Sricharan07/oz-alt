@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from oz_api.storage import RegistryStorage
+from oz_api.versions import latest_entry as latest_versioned_entry
+from oz_api.versions import parse_scope, parse_versioned_scope, resolve_catalog_entry
 
 def unique_libraries_to_pull(results: list[dict[str, Any]]) -> list[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()
@@ -42,18 +44,18 @@ def latest_entry(storage: RegistryStorage, vendor: str, library: str) -> dict[st
         for entry in storage.load_catalog()
         if entry.get("vendor") == vendor and entry.get("library") == library
     ]
-    if not matches:
-        return None
-    matches.sort(key=lambda entry: entry.get("version", ""))
-    return matches[-1]
+    return latest_versioned_entry(matches)
 
-def parse_scope(scope: str | None) -> tuple[str | None, str | None]:
-    if not scope:
-        return None, None
-    if "/" not in scope:
-        return "npm", scope
-    vendor, library = scope.split("/", 1)
-    return vendor, library
+def scoped_entry(storage: RegistryStorage, scope: str) -> dict[str, Any] | None:
+    parsed = parse_versioned_scope(scope)
+    if not parsed.vendor or not parsed.library:
+        return None
+    matches = [
+        entry
+        for entry in storage.load_catalog()
+        if entry.get("vendor") == parsed.vendor and entry.get("library") == parsed.library
+    ]
+    return resolve_catalog_entry(matches, parsed.version)
 
 def score_value(value: Any) -> float:
     if isinstance(value, (int, float)):

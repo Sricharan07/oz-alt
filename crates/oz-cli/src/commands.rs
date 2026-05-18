@@ -223,13 +223,18 @@ fn pull_library_remote(
             parsed.version = Some(version_hint);
         }
     }
-    if parsed.version.is_none() {
-        let refs: RefResponse = api_get_json(
-            config,
-            &format!("/refs/{}/{}", parsed.vendor, parsed.library),
-        )?;
-        parsed.version = Some(refs.version);
-    }
+    let refs_route = if let Some(version) = parsed.version.as_deref() {
+        format!(
+            "/refs/{}/{}?version={}",
+            parsed.vendor,
+            parsed.library,
+            url_component(version)
+        )
+    } else {
+        format!("/refs/{}/{}", parsed.vendor, parsed.library)
+    };
+    let refs: RefResponse = api_get_json(config, &refs_route)?;
+    parsed.version = Some(refs.version);
     let version = parsed
         .version
         .clone()
@@ -519,14 +524,22 @@ fn suggest_results_with_commands(query: &str, results: &[SuggestResult]) -> Vec<
 pub(crate) fn update_libraries(project_root: &Path, scope: Option<&str>) -> Result<()> {
     let lock = read_lock(project_root)?;
     let config = read_config().unwrap_or_default();
-    let parsed_scope = scope.map(parse_scope).transpose()?;
+    let parsed_scope = scope.map(parse_library_scope).transpose()?;
     let pulls = lock
         .pulls
         .iter()
         .filter(|pull| {
             parsed_scope
                 .as_ref()
-                .map(|(vendor, library)| pull.vendor == *vendor && pull.library == *library)
+                .map(|scope| {
+                    pull.vendor == scope.vendor
+                        && pull.library == scope.library
+                        && scope
+                            .version
+                            .as_ref()
+                            .map(|requested| version_matches(&pull.version, requested))
+                            .unwrap_or(true)
+                })
                 .unwrap_or(true)
         })
         .cloned()

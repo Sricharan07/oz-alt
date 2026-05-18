@@ -15,6 +15,7 @@ from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddin
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
+from oz_api.versions import compare_versions
 from oz_crawler.content_types import block_content_type, classify_content_type
 from oz_crawler.token_counting import token_count
 
@@ -61,6 +62,16 @@ def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
             embedded_chunks=embedded_chunks,
             pending_embedding_chunks=sum(result.pending_chunks for result in results if not result.complete),
         )
+
+
+class VersionOrder:
+    def __init__(self, version: str) -> None:
+        self.version = version
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, VersionOrder):
+            return NotImplemented
+        return compare_versions(self.version, other.version) < 0
 
 
 def count_registry(storage: RegistryStorage, catalog: list[dict[str, Any]]) -> IndexStats:
@@ -572,13 +583,14 @@ class PostgresWriter(IndexWriter):
     def upsert_version(self, library_id: int, entry: dict[str, Any]) -> int:
         return self.scalar(
             """
-            insert into library_versions(library_id, version, ref_sha, pack_key, indexed_at, last_crawled_at)
-            values (%s, %s, %s, %s, nullif(%s, '')::timestamptz, now())
+            insert into library_versions(library_id, version, ref_sha, pack_key, indexed_at, last_crawled_at, archived_at)
+            values (%s, %s, %s, %s, nullif(%s, '')::timestamptz, now(), null)
             on conflict (library_id, version) do update
               set ref_sha = excluded.ref_sha,
                   pack_key = excluded.pack_key,
                   indexed_at = excluded.indexed_at,
-                  last_crawled_at = now()
+                  last_crawled_at = now(),
+                  archived_at = null
             returning id
             """,
             (
@@ -602,6 +614,28 @@ class PostgresWriter(IndexWriter):
             """,
             (library_id, version_id, ref_sha),
         )
+        self.archive_excess_versions(library_id, keep=int(os.environ.get("OZ_MAX_VERSIONS_PER_LIBRARY", "20")))
+
+    def archive_excess_versions(self, library_id: int, *, keep: int) -> None:
+        if keep <= 0:
+            return
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select id, version from library_versions where library_id = %s",
+                (library_id,),
+            )
+            rows = [{"id": row[0], "version": row[1]} for row in cursor.fetchall()]
+            rows.sort(key=lambda row: VersionOrder(str(row["version"])), reverse=True)
+            for rank, row in enumerate(rows, start=1):
+                cursor.execute(
+                    """
+                    update library_versions
+                    set archived_at = case when %s > %s then coalesce(archived_at, now()) else null end,
+                        version_rank = %s
+                    where id = %s
+                    """,
+                    (rank, keep, rank, row["id"]),
+                )
 
     def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
         chunk_shas = sorted(set(current_chunk_shas))

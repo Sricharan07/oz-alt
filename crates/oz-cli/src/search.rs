@@ -20,7 +20,7 @@ pub(crate) fn search_docs(
         return search_docs_remote(project_root, &config, query, library_scope, json);
     }
 
-    let scope = library_scope.map(parse_scope).transpose()?;
+    let scope = library_scope.map(parse_library_scope).transpose()?;
     let mut hits = search_vendor_tree(project_root, &vendors_root, &terms, &scope)?;
 
     if hits.is_empty() {
@@ -242,7 +242,7 @@ fn remote_search_with_pulls(
     max_results: usize,
 ) -> Result<SearchResponse> {
     let lock = read_lock(project_root)?;
-    let response: SearchResponse = api_post_json(
+    let mut response: SearchResponse = api_post_json(
         config,
         "/search",
         serde_json::json!({
@@ -257,6 +257,16 @@ fn remote_search_with_pulls(
         let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
         pull_library_impl(project_root, &spec, true)?;
     }
+    let mut remaining_stale = Vec::new();
+    for stale in &response.stale_libraries {
+        if stale.breaking_changes_likely {
+            remaining_stale.push(stale.clone());
+            continue;
+        }
+        let spec = format!("{}/{}@{}", stale.vendor, stale.library, stale.newer_version);
+        pull_library_impl(project_root, &spec, true)?;
+    }
+    response.stale_libraries = remaining_stale;
     Ok(response)
 }
 
@@ -344,7 +354,7 @@ fn local_context_hits(
     terms: &[String],
     library_scope: Option<&str>,
 ) -> Result<Vec<(String, usize)>> {
-    let scope = library_scope.map(parse_scope).transpose()?;
+    let scope = library_scope.map(parse_library_scope).transpose()?;
     let mut hits =
         search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
     if hits.is_empty() {
@@ -434,7 +444,7 @@ fn search_vendor_tree(
     project_root: &Path,
     root: &Path,
     terms: &[String],
-    scope: &Option<(String, String)>,
+    scope: &Option<LibrarySpec>,
 ) -> Result<Vec<SearchHit>> {
     let mut hits = Vec::new();
     if !root.exists() {
@@ -586,8 +596,8 @@ fn collect_symbol_hits(
     Ok(())
 }
 
-fn path_matches_scope(path: &Path, scope: &Option<(String, String)>) -> bool {
-    let Some((vendor, library)) = scope else {
+fn path_matches_scope(path: &Path, scope: &Option<LibrarySpec>) -> bool {
+    let Some(scope) = scope else {
         return true;
     };
 
@@ -596,9 +606,20 @@ fn path_matches_scope(path: &Path, scope: &Option<(String, String)>) -> bool {
         .map(|component| component.as_os_str().to_string_lossy().to_string())
         .collect::<Vec<_>>();
 
-    components
-        .windows(2)
-        .any(|window| window[0] == *vendor && window[1].starts_with(&format!("{library}@")))
+    components.windows(2).any(|window| {
+        if window[0] != scope.vendor {
+            return false;
+        }
+        let prefix = format!("{}@", scope.library);
+        if !window[1].starts_with(&prefix) {
+            return false;
+        }
+        scope
+            .version
+            .as_ref()
+            .map(|requested| version_matches(window[1].trim_start_matches(&prefix), requested))
+            .unwrap_or(true)
+    })
 }
 
 fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -> Result<()> {

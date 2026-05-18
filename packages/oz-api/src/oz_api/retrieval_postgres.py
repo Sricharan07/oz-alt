@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import logging
+from functools import cmp_to_key
 from typing import Any
 
 from oz_api.embeddings import embedding_for_query
 from oz_api.intent import classify_query, intent_name
 from oz_api.ranking import local_chunk_score
-from oz_api.retrieval_common import parse_scope
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
+from oz_api.versions import (
+    VersionResolutionError,
+    available_versions,
+    compare_versions,
+    latest_entry,
+    parse_versioned_scope,
+    version_matches,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +48,9 @@ def suggest_from_postgres(
                      coalesce(lv.benchmark_score, 0) as benchmark_score
               from libraries l
               join vendors v on v.id = l.vendor_id
-              join library_versions lv on lv.library_id = l.id
+              join refs r on r.library_id = l.id and r.channel = 'latest'
+              join library_versions lv on lv.id = coalesce(l.default_version_id, r.version_id)
+                   and lv.archived_at is null
               left join chunks c on c.version_id = lv.id and coalesce(c.dedupe_canonical, true)
               left join trust_scores ts on ts.library_id = l.id
               where l.search_document @@ websearch_to_tsquery('english', %s)
@@ -57,11 +67,13 @@ def suggest_from_postgres(
                      coalesce(ts.value, 0) as trust_score,
                      coalesce(lv.benchmark_score, 0) as benchmark_score
               from chunks c
-              join library_versions lv on lv.id = c.version_id
+              join library_versions lv on lv.id = c.version_id and lv.archived_at is null
               join libraries l on l.id = lv.library_id
               join vendors v on v.id = l.vendor_id
+              join refs r on r.library_id = l.id and r.channel = 'latest'
               left join trust_scores ts on ts.library_id = l.id
               where c.embedding is not null and coalesce(c.dedupe_canonical, true)
+                and lv.id = coalesce(l.default_version_id, r.version_id)
               order by c.embedding <=> %s::vector
               limit %s
             ),
@@ -95,7 +107,9 @@ def suggest_from_postgres(
                    coalesce(l.description, '') as reason
             from libraries l
             join vendors v on v.id = l.vendor_id
-            join library_versions lv on lv.library_id = l.id
+            join refs r on r.library_id = l.id and r.channel = 'latest'
+            join library_versions lv on lv.id = coalesce(l.default_version_id, r.version_id)
+                 and lv.archived_at is null
             left join chunks c on c.version_id = lv.id and coalesce(c.dedupe_canonical, true)
             left join trust_scores ts on ts.library_id = l.id
             where l.search_document @@ websearch_to_tsquery('english', %s)
@@ -134,23 +148,31 @@ def search_from_postgres(
     query_intent = classify_query(query)
     symbol_pattern = like_pattern(query_intent.symbols or normalize_query(query)[:4])
     vector = vector_literal(embedding) if (embedding := embedding_for_query(query)) else None
-    scope_vendor, scope_library = parse_scope(library_scope)
-    where_scope = "and v.name = %s and l.name = %s" if scope_vendor else ""
+    scope = parse_versioned_scope(library_scope)
+    scope_vendor, scope_library = scope.vendor, scope.library
+    scope_version_id: int | None = None
+    if scope_vendor and scope_library:
+        scope_version_id = resolve_db_version_id(connection, scope_vendor, scope_library, scope.version)
+    where_scope = (
+        "and v.name = %s and l.name = %s and lv.id = %s"
+        if scope_vendor
+        else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
+    )
     candidates = candidate_limit(max_results)
     params: list[Any] = [terms, intent, terms]
     if scope_vendor:
-        params.extend([scope_vendor, scope_library])
+        params.extend([scope_vendor, scope_library, scope_version_id])
     params.append(candidates)
     vector_cte = empty_vector_cte()
     if vector:
         vector_cte = vector_candidate_cte(where_scope)
         params.extend([vector, intent])
         if scope_vendor:
-            params.extend([scope_vendor, scope_library])
+            params.extend([scope_vendor, scope_library, scope_version_id])
         params.extend([vector, candidates])
     params.extend([intent, symbol_pattern, symbol_pattern, symbol_pattern])
     if scope_vendor:
-        params.extend([scope_vendor, scope_library])
+        params.extend([scope_vendor, scope_library, scope_version_id])
     params.extend([candidates, max_results])
     sql = f"""
         with fts_candidates as (
@@ -214,7 +236,10 @@ def search_from_postgres(
             with connection.cursor() as cursor:
                 cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
+                mark_search_versions_requested(cursor, rows)
         return score_postgres_rows(rows, query)
+    except VersionResolutionError:
+        raise
     except Exception as exc:
         LOGGER.warning("postgres search failed: %s", exc)
         return None
@@ -246,6 +271,7 @@ def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> st
         join library_versions lv on lv.id = c.version_id
         join libraries l on l.id = lv.library_id
         join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
         left join chunks p on p.id = c.parent_chunk_id
     """
 
@@ -341,6 +367,31 @@ def rerank_text(row: Any) -> str:
     )
 
 
+def mark_search_versions_requested(cursor: Any, rows: list[Any]) -> None:
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows[:20]:
+        vendor = str(row[4] or "")
+        library_full = str(row[3] or "")
+        version = str(row[5] or "")
+        library = library_full.split("/", 1)[1] if "/" in library_full else library_full
+        if vendor and library and version:
+            seen.add((vendor, library, version))
+    for vendor, library, version in seen:
+        cursor.execute(
+            """
+            update library_versions lv
+            set last_requested_at = now()
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            where lv.library_id = l.id
+              and v.name = %s
+              and l.name = %s
+              and lv.version = %s
+            """,
+            (vendor, library, version),
+        )
+
+
 def postgres_connection(database_url: str | None) -> Any | None:
     if not database_url:
         return None
@@ -354,3 +405,153 @@ def postgres_connection(database_url: str | None) -> Any | None:
     except Exception as exc:
         LOGGER.warning("postgres connection failed: %s", exc)
         return None
+
+
+def resolve_db_version_id(connection: Any, vendor: str, library: str, requested_version: str | None) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select l.id as library_id,
+                   l.redirected_to_library_id,
+                   rl.name as redirected_library,
+                   rv.name as redirected_vendor,
+                   l.default_version_id,
+                   r.version_id as latest_version_id,
+                   lv.id as version_id,
+                   lv.version,
+                   lv.archived_at
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            left join libraries rl on rl.id = l.redirected_to_library_id
+            left join vendors rv on rv.id = rl.vendor_id
+            left join refs r on r.library_id = l.id and r.channel = 'latest'
+            left join library_versions lv on lv.library_id = l.id
+            where v.name = %s and l.name = %s
+            order by lv.created_at desc nulls last
+            """,
+            (vendor, library),
+        )
+        columns = [getattr(column, "name", column[0]) for column in cursor.description]
+        rows = [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
+
+    if not rows:
+        raise VersionResolutionError(
+            "library_not_found",
+            f"library {vendor}/{library} is not indexed",
+            payload={"vendor": vendor, "library": library},
+        )
+    redirected = rows[0].get("redirected_to_library_id")
+    if redirected:
+        redirect_vendor = str(rows[0].get("redirected_vendor") or "")
+        redirect_library = str(rows[0].get("redirected_library") or "")
+        raise VersionResolutionError(
+            "library_redirected",
+            f"library {vendor}/{library} moved to {redirect_vendor}/{redirect_library}",
+            status_code=301,
+            payload={"vendor": vendor, "library": library, "redirect_library": f"{redirect_vendor}/{redirect_library}"},
+        )
+
+    versions = [
+        {"id": row["version_id"], "version": row["version"], "archived_at": row.get("archived_at")}
+        for row in rows
+        if row.get("version_id") is not None and row.get("version")
+    ]
+    active_versions = [row for row in versions if not row.get("archived_at")]
+    if not active_versions:
+        raise VersionResolutionError(
+            "library_not_finalized",
+            f"library {vendor}/{library} exists but has no promoted version yet",
+            status_code=202,
+            payload={"vendor": vendor, "library": library},
+        )
+
+    if requested_version:
+        matches = [row for row in active_versions if version_matches(str(row["version"]), requested_version)]
+        selected = latest_entry(matches)
+        if not selected:
+            raise VersionResolutionError(
+                "version_not_found",
+                f"version {requested_version} is not indexed for {vendor}/{library}",
+                payload={
+                    "vendor": vendor,
+                    "library": library,
+                    "requested_version": requested_version,
+                    "available_versions": available_versions(active_versions),
+                },
+            )
+        return int(selected["id"])
+
+    default_id = rows[0].get("default_version_id") or rows[0].get("latest_version_id")
+    if default_id and any(int(row["id"]) == int(default_id) for row in active_versions):
+        return int(default_id)
+    selected = latest_entry(active_versions)
+    if selected:
+        return int(selected["id"])
+    raise VersionResolutionError(
+        "library_not_finalized",
+        f"library {vendor}/{library} exists but has no promoted version yet",
+        status_code=202,
+        payload={"vendor": vendor, "library": library},
+    )
+
+
+def ref_from_postgres(
+    ctx: RetrievalContext,
+    vendor: str,
+    library: str,
+    requested_version: str | None = None,
+    *,
+    count_usage: bool = True,
+) -> dict[str, Any] | None:
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return None
+    with connection:
+        version_id = resolve_db_version_id(connection, vendor, library, requested_version)
+        with connection.cursor() as cursor:
+            if count_usage:
+                cursor.execute(
+                    """
+                    update library_versions
+                    set last_requested_at = now(), pull_count = pull_count + 1
+                    where id = %s
+                    """,
+                    (version_id,),
+                )
+            cursor.execute(
+                """
+                select v.name as vendor,
+                       l.name as library,
+                       lv.version,
+                       lv.ref_sha,
+                       lv.pack_key,
+                       lv.pull_count,
+                       lv.last_crawled_at::text,
+                       lv.indexed_at::text,
+                       array(
+                         select av.version
+                         from library_versions av
+                         where av.library_id = l.id and av.archived_at is null
+                       ) as versions
+                from library_versions lv
+                join libraries l on l.id = lv.library_id
+                join vendors v on v.id = l.vendor_id
+                where lv.id = %s
+                """,
+                (version_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            versions = sorted([str(item) for item in (row[8] or [])], key=cmp_to_key(compare_versions), reverse=True)
+            return {
+                "vendor": row[0],
+                "library": row[1],
+                "version": row[2],
+                "ref_sha": row[3],
+                "pack_key": row[4],
+                "pull_count": int(row[5] or 0),
+                "last_crawled_at": row[6],
+                "indexed_at": row[7],
+                "available_versions": versions,
+            }

@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from oz_api.ranking import local_chunk_score, local_markdown_score
-from oz_api.retrieval_common import parse_scope, read_jsonl
+from oz_api.retrieval_common import read_jsonl
 from oz_api.storage import RegistryStorage, normalize_query
+from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
 
 def suggest_from_catalog(storage: RegistryStorage, query: str, max_results: int) -> list[dict[str, Any]]:
     terms = normalize_query(query)
     rows: list[tuple[int, dict[str, Any]]] = []
-    for entry in storage.load_catalog():
+    for entry in default_catalog_entries(storage):
         haystack = " ".join(
             [
                 entry.get("vendor", ""),
@@ -42,14 +43,16 @@ def search_from_fixtures(
     max_results: int,
 ) -> list[dict[str, Any]]:
     terms = normalize_query(query)
-    scope_vendor, scope_library = parse_scope(library_scope)
+    scope = parse_versioned_scope(library_scope)
+    scope_vendor, scope_library = scope.vendor, scope.library
+    selected_versions = selected_fixture_versions(storage, scope)
     hits: list[dict[str, Any]] = []
 
     for fixture in storage.fixtures_root.glob("*/*/*"):
         if not fixture.is_dir():
             continue
         vendor, library, version = fixture.parts[-3:]
-        if scope_vendor and (vendor != scope_vendor or library != scope_library):
+        if (vendor, library, version) not in selected_versions:
             continue
         chunk_path = fixture / "_chunks.jsonl"
         if chunk_path.exists():
@@ -111,6 +114,42 @@ def search_from_fixtures(
         if len(deduped) >= max_results:
             break
     return deduped
+
+
+def default_catalog_entries(storage: RegistryStorage) -> list[dict[str, Any]]:
+    by_library: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in storage.load_catalog():
+        key = (str(entry.get("vendor") or ""), str(entry.get("library") or ""))
+        by_library.setdefault(key, []).append(entry)
+    output = [latest for entries in by_library.values() if (latest := latest_entry(entries))]
+    return output
+
+
+def selected_fixture_versions(storage: RegistryStorage, scope: Any) -> set[tuple[str, str, str]]:
+    fixtures = [
+        (path.parts[-3], path.parts[-2], path.parts[-1])
+        for path in storage.fixtures_root.glob("*/*/*")
+        if path.is_dir()
+    ]
+    if scope.vendor and scope.library:
+        matches = [
+            {"vendor": vendor, "library": library, "version": version}
+            for vendor, library, version in fixtures
+            if vendor == scope.vendor and library == scope.library
+        ]
+        selected = resolve_catalog_entry(matches, scope.version)
+        return {
+            (str(selected["vendor"]), str(selected["library"]), str(selected["version"]))
+        } if selected else set()
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for vendor, library, version in fixtures:
+        grouped.setdefault((vendor, library), []).append({"vendor": vendor, "library": library, "version": version})
+    return {
+        (str(selected["vendor"]), str(selected["library"]), str(selected["version"]))
+        for entries in grouped.values()
+        if (selected := latest_entry(entries))
+    }
 
 
 def symbol_rows(fixture: Any) -> list[dict[str, Any]]:

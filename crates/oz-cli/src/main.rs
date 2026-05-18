@@ -373,6 +373,8 @@ struct StaleLibrary {
     library: String,
     version: String,
     newer_version: String,
+    #[serde(default)]
+    breaking_changes_likely: bool,
 }
 
 fn main() -> Result<()> {
@@ -525,6 +527,24 @@ mod tests {
         assert_eq!(parsed.vendor, "vercel");
         assert_eq!(parsed.library, "next.js");
         assert_eq!(parsed.version.as_deref(), Some("15"));
+    }
+
+    #[test]
+    fn parses_path_version_specs() {
+        let parsed = parse_library_spec("/vercel/next.js/v15.1.8").unwrap();
+        assert_eq!(parsed.vendor, "vercel");
+        assert_eq!(parsed.library, "next.js");
+        assert_eq!(parsed.version.as_deref(), Some("v15.1.8"));
+    }
+
+    #[test]
+    fn compares_versions_semantically() {
+        let mut versions = vec!["v9.0.0", "v10.0.0", "v15.1.8", "v2.0.0"];
+        versions.sort_by(|a, b| compare_versions(a, b));
+        assert_eq!(versions.last(), Some(&"v15.1.8"));
+        assert!(version_matches("v14.3.0", "14"));
+        assert!(version_matches("v14.3.0", "14.3"));
+        assert!(!version_matches("v15.0.0", "14"));
     }
 
     #[test]
