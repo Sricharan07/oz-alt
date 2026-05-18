@@ -59,14 +59,12 @@ services:
 
   oz-web:
     build:
-      context: ../..
+      context: ../../frontend-main
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      oz-api:
+        condition: service_started
     env_file:
       - path: ../../.env.production
         required: false

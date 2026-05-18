@@ -51,9 +51,12 @@ Admin privileges are a `users.role = 'admin'` database flag seeded by an operato
 
 ## Dashboard And Admin
 
-The user dashboard is intentionally small in v1: it shows the signed-in account,
-CLI login instructions, local-docs usage guidance, and links to status/privacy
-pages. It does not expose private indexing, team spaces, API keys, MCP, or chat.
+The user console is the React app in `frontend-main`. It shows CLI setup,
+library catalog browsing, pack metadata, status, account entry points, and
+device approval links. It does not expose private indexing, team spaces, API
+keys, or chat. The console talks to backend JSON endpoints through same-origin
+nginx proxying in production, so cookies and auth redirects stay on the Oz
+domain.
 
 The admin panel is the catalog control plane. Admins create library profiles,
 approve index requests, queue crawls/recrawls, maintain freshness policies, and

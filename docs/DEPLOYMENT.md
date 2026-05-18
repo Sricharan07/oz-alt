@@ -42,7 +42,7 @@ The Docker-first runtime is the primary production shape:
 
 ```text
 caddy/nginx -> oz-web + oz-api
-oz-web      -> user dashboard, admin dashboard, auth pages
+oz-web      -> React user console for app.tryoz.dev and tryoz.dev
 oz-api      -> CLI/API endpoints
 oz-worker   -> Redis crawl queue + Scrapling + Postgres + S3
 oz-scheduler-> freshness policies + Redis crawl queue
@@ -180,7 +180,8 @@ infra/docker/docker-compose.aws-ec2.yml
 ```
 
 It uses host-local Postgres and Redis volumes, AWS S3 for packs/catalog/artifacts,
-Caddy for `app.tryoz.dev`, `admin.tryoz.dev`, and `api.tryoz.dev`.
+Caddy sends `tryoz.dev` and `app.tryoz.dev` to the React console, and sends
+`admin.tryoz.dev` plus `api.tryoz.dev` to the backend API/admin service.
 
 Cloudflare records required:
 
