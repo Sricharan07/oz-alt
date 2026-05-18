@@ -121,6 +121,7 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         pack_key="",
         ref_sha=str(manifest["tree_sha256"]),
     )
+    record_eval_run(eval_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
     search_eval = search_eval_report(storage, f"{vendor}/{library}", version)
     if search_eval is not None:
         record_eval_run(eval_entry, eval_type="semantic_search", passed=bool(search_eval["passed"]), metrics=search_eval)
@@ -168,7 +169,6 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         )
         return
     upsert_catalog_entry(storage, catalog_entry)
-    record_eval_run(catalog_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
     record_catalog_promotion(catalog_entry, job, quality)
     record_crawler_job_log(job, "info", "catalog promoted", {"pack_key": pack_key})
     mark_crawler_job_completed(job, pack_key=pack_key, ref_sha=str(manifest["tree_sha256"]))
