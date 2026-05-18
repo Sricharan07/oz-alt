@@ -30,7 +30,7 @@ const navItems = [
   { to: "/libraries", label: "Libraries", icon: Library },
   { to: "/setup", label: "Setup", icon: Terminal },
   { to: "/status", label: "Status", icon: Gauge },
-  { to: "/account", label: "Account", icon: UserRound }
+  { to: "/settings", label: "Account", icon: UserRound }
 ];
 
 export default function App() {
@@ -97,7 +97,7 @@ function ConsoleLayout() {
             <Route path="libraries/:vendor/*" element={<LibraryDetailPage />} />
             <Route path="setup" element={<SetupPage />} />
             <Route path="status" element={<StatusPage />} />
-            <Route path="account" element={<AccountPage />} />
+            <Route path="settings" element={<AccountPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
