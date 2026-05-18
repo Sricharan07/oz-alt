@@ -63,6 +63,9 @@ OZ_APP_URL='https://app.tryoz.dev'
 OZ_COOKIE_SECURE=1
 OZ_COOKIE_DOMAIN='.tryoz.dev'
 OZ_JWT_SECRET='use-a-long-random-secret'
+OZ_DB_POOL_MIN_SIZE=1
+OZ_DB_POOL_MAX_SIZE=20
+OZ_DB_POOL_TIMEOUT_SECONDS=10
 VOYAGE_API_KEY='...'        # default embeddings: voyage-code-3, 1024 dims
 JINA_API_KEY='...'          # optional cross-encoder rerank, or set OZ_JINA_RERANK_URL for self-hosted
 COHERE_API_KEY='...'        # optional when OZ_RERANK_PROVIDER=cohere
@@ -92,11 +95,26 @@ Install the EC2 systemd timer:
 ```bash
 sudo cp infra/systemd/oz-backup.service /etc/systemd/system/oz-backup.service
 sudo cp infra/systemd/oz-backup.timer /etc/systemd/system/oz-backup.timer
+sudo cp infra/systemd/oz-postgres-maintenance.* /etc/systemd/system/
+sudo cp infra/systemd/oz-pack-storage-tiers.* /etc/systemd/system/
 sudo cp infra/systemd/oz-enterprise-alerts.* /etc/systemd/system/
 sudo cp infra/systemd/oz-slo-report.* /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now oz-backup.timer
+sudo systemctl enable --now oz-postgres-maintenance.timer oz-pack-storage-tiers.timer
 sudo systemctl enable --now oz-enterprise-alerts.timer oz-slo-report.timer
+```
+
+Install S3 lifecycle rules for pack/artifact retention:
+
+```bash
+bash scripts/apply-s3-lifecycle.sh "$OZ_PACKS_BUCKET"
+```
+
+Run Postgres/pgvector maintenance manually after large reindexes:
+
+```bash
+bash scripts/postgres-maintenance.sh
 ```
 
 ## Enterprise Readiness Checks

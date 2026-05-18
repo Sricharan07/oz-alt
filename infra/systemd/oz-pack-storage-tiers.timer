@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Oz pack storage tier reconciliation daily
+
+[Timer]
+OnCalendar=*-*-* 04:41:00 UTC
+Persistent=true
+Unit=oz-pack-storage-tiers.service
+
+[Install]
+WantedBy=timers.target

@@ -23,7 +23,7 @@ from oz_api.retrieval import (
 )
 from oz_api.server_helpers import bulk_refs_payload, single_ref_payload
 from oz_api.telemetry import sanitize_telemetry
-from oz_api.usage import record_telemetry_event, record_usage_event
+from oz_api.usage import record_pack_download_metrics, record_telemetry_event, record_usage_event
 from oz_api.versions import VersionResolutionError
 
 router = APIRouter()
@@ -62,6 +62,7 @@ async def pack(request: Request, vendor: str, library: str, version: str):
         return JSONResponse(resolved, status_code=404)
     canonical_version = str(resolved["version"])
     record_usage_event(principal, "pack_download", library=f"{vendor}/{library}@{canonical_version}")
+    record_pack_download_metrics(vendor, library, canonical_version)
     pack_url = state.storage.get_pack_url(vendor, library, canonical_version)
     if pack_url:
         return RedirectResponse(pack_url, status_code=302)

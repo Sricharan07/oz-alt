@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class RegistryStorage:
                 body,
                 content_type="application/vnd.oz.pack",
                 cache_control="public, max-age=31536000, immutable",
+                tags={"oz-role": "pack", "oz-canonical": "true", "oz-storage-tier": "hot"},
             )
             return key
 
@@ -183,6 +185,7 @@ class RegistryStorage:
         *,
         content_type: str | None = None,
         cache_control: str | None = None,
+        tags: dict[str, str] | None = None,
         ) -> None:
         client = s3_client()
         if client is None:
@@ -192,6 +195,8 @@ class RegistryStorage:
             kwargs["ContentType"] = content_type
         if cache_control:
             kwargs["CacheControl"] = cache_control
+        if tags:
+            kwargs["Tagging"] = s3_tagging(tags)
         client.put_object(**kwargs)
 
 
@@ -212,6 +217,10 @@ def s3_client() -> Any | None:
         except Exception as exc:
             LOGGER.warning("failed to configure S3 path-style addressing: %s", exc)
     return boto3.client("s3", **kwargs)
+
+
+def s3_tagging(tags: dict[str, str]) -> str:
+    return "&".join(f"{quote_plus(str(key))}={quote_plus(str(value))}" for key, value in sorted(tags.items()))
 
 
 def database_configured() -> bool:

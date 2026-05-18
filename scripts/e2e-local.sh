@@ -14,6 +14,9 @@ pick_python() {
       continue
     fi
     if "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+if sys.version_info < (3, 11):
+    raise SystemExit(1)
 import fastapi
 import uvicorn
 PY
@@ -52,7 +55,7 @@ oz status
 oz doctor
 oz install --codex
 
-OZ_ENV=local PYTHONPATH=packages/oz-api/src "$PYTHON" -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
+OZ_ENV=local PYTHONPATH=packages/oz-api/src:packages/oz-crawler/src "$PYTHON" -m oz_api.server --repo-root . --host 127.0.0.1 --port 8765 &
 server_pid="$!"
 sleep 1
 

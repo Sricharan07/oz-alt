@@ -70,6 +70,30 @@ def record_usage_event(
         return
 
 
+def record_pack_download_metrics(vendor: str, library: str, version: str) -> None:
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    try:
+        store.execute(
+            """
+            update pack_builds pb
+            set download_count = pb.download_count + 1,
+                last_downloaded_at = now(),
+                storage_tier = 'hot'
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            where pb.library_id = l.id
+              and v.name = :vendor
+              and l.name = :library
+              and pb.version = :version
+            """,
+            {"vendor": vendor, "library": library, "version": version},
+        )
+    except Exception:
+        return
+
+
 def record_telemetry_event(principal: AuthPrincipal | None, telemetry: dict[str, Any]) -> None:
     store = AuthStore.from_env()
     if store is None:

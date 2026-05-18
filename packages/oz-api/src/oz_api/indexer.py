@@ -849,10 +849,10 @@ class PostgresWriter(IndexWriter):
                   quality_score = excluded.quality_score,
                   token_count = excluded.token_count,
                   source_anchor = excluded.source_anchor,
-                  embedding_model = excluded.embedding_model,
-                  embedding_dimensions = excluded.embedding_dimensions,
+                  embedding_model = coalesce(excluded.embedding_model, chunks.embedding_model),
+                  embedding_dimensions = coalesce(excluded.embedding_dimensions, chunks.embedding_dimensions),
                   content = excluded.content,
-                  embedding = excluded.embedding
+                  embedding = coalesce(excluded.embedding, chunks.embedding)
             """,
             (
                 version_id,

@@ -1,0 +1,9 @@
+[Unit]
+Description=Oz Postgres and pgvector maintenance
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+ExecStart=/usr/bin/bash /opt/oz/current/scripts/postgres-maintenance.sh

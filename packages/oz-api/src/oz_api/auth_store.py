@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from oz_api.db import postgres_connection
+
 
 @dataclass(frozen=True)
 class AuthStore:
@@ -37,19 +39,6 @@ class AuthStore:
                     return []
                 columns = [getattr(column, "name", column[0]) for column in cursor.description]
                 return [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
-
-def postgres_connection(database_url: str | None) -> Any | None:
-    if not database_url:
-        return None
-    try:
-        import psycopg  # type: ignore
-    except ImportError:
-        return None
-    try:
-        return psycopg.connect(database_url)
-    except Exception:
-        return None
-
 
 def named_to_pyformat(sql: str) -> str:
     return re.sub(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", sql)

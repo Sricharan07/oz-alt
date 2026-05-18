@@ -189,7 +189,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <h2>Search Quality Runs</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Passed</th><th>P@1</th><th>P@5</th><th>MRR</th><th>Materialized</th><th>Zero</th><th>Junk</th><th>Created</th></tr></thead><tbody>{search_quality_rows}</tbody></table>
   <h2>Pack Builds</h2>
-  <table><thead><tr><th>Library</th><th>Version</th><th>Pack SHA</th><th>Key</th><th>Bytes</th><th>Created</th></tr></thead><tbody>{pack_rows}</tbody></table>
+  <table><thead><tr><th>Library</th><th>Version</th><th>Pack SHA</th><th>Key</th><th>Bytes</th><th>Tier</th><th>Downloads</th><th>Last Download</th><th>Created</th></tr></thead><tbody>{pack_rows}</tbody></table>
   <h2>Embedding Jobs</h2>
   <table><thead><tr><th>Library</th><th>Status</th><th>Mode</th><th>Pending</th><th>Cached</th><th>Embedded</th><th>Failed</th><th>Tokens</th><th>Batch</th><th>Updated</th><th>Error</th><th>Action</th></tr></thead><tbody>{embedding_job_rows}</tbody></table>
   <h2>Backup Runs</h2>
@@ -351,7 +351,9 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
         "pack_builds": db_rows(
             """
             select v.name as vendor, l.name as library, p.version, p.pack_sha, p.pack_key,
-                   p.byte_size, p.created_at::text as created_at
+                   p.byte_size, p.storage_tier, p.download_count,
+                   p.last_downloaded_at::text as last_downloaded_at,
+                   p.created_at::text as created_at
             from pack_builds p
             join libraries l on l.id = p.library_id
             join vendors v on v.id = l.vendor_id
@@ -729,7 +731,9 @@ def render_pack_row(row: dict[str, Any]) -> str:
     return (
         f"<tr><td>{esc(library)}</td><td>{esc(row.get('version'))}</td>"
         f"<td>{esc(sha[:12])}</td><td>{esc(row.get('pack_key'))}</td>"
-        f"<td>{esc(row.get('byte_size'))}</td><td>{esc(row.get('created_at'))}</td></tr>"
+        f"<td>{esc(row.get('byte_size'))}</td><td>{esc(row.get('storage_tier'))}</td>"
+        f"<td>{esc(row.get('download_count'))}</td><td>{esc(row.get('last_downloaded_at'))}</td>"
+        f"<td>{esc(row.get('created_at'))}</td></tr>"
     )
 
 

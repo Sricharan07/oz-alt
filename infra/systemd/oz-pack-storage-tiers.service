@@ -1,0 +1,10 @@
+[Unit]
+Description=Oz pack storage tier reconciliation
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+EnvironmentFile=-/opt/oz/current/.env.production
+ExecStart=/usr/bin/docker exec docker-oz-api-1 python /app/scripts/reconcile-pack-storage-tiers.py

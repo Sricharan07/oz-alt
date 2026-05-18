@@ -191,10 +191,15 @@ def missing_embedding_chunks(connection: Any, version_id: int) -> list[dict[str,
         """
         select id, chunk_sha, content, token_count
         from chunks
-        where version_id = %s and embedding is null
+        where version_id = %s
+          and (
+            embedding is null
+            or embedding_model is distinct from %s
+            or embedding_dimensions is distinct from %s
+          )
         order by id
         """,
-        (version_id,),
+        (version_id, embedding_model(), embedding_dimensions()),
     )
 
 
@@ -263,7 +268,11 @@ def apply_cache_hits(connection: Any, version_id: int, chunks: list[dict[str, An
               embedding_dimensions = ec.dimensions
           from embedding_cache ec
           where c.version_id = %s
-            and c.embedding is null
+            and (
+              c.embedding is null
+              or c.embedding_model is distinct from %s
+              or c.embedding_dimensions is distinct from %s
+            )
             and ec.chunk_sha = c.chunk_sha
             and ec.provider = %s
             and ec.model = %s
@@ -274,7 +283,15 @@ def apply_cache_hits(connection: Any, version_id: int, chunks: list[dict[str, An
         )
         select count(*) as count from updated
         """,
-        (version_id, embedding_provider(), embedding_model(), embedding_dimensions(), cache_schema_version()),
+        (
+            version_id,
+            embedding_model(),
+            embedding_dimensions(),
+            embedding_provider(),
+            embedding_model(),
+            embedding_dimensions(),
+            cache_schema_version(),
+        ),
     )
     return int(row.get("count") or 0) if row else 0
 
@@ -296,10 +313,10 @@ def embed_sync(
             failed += 1
             upsert_embedding_item(connection, job_id, row, "failed", "missing embedding")
             continue
-        apply_embedding(connection, version_id, row, embedding)
-        upsert_embedding_cache(connection, row, embedding)
-        upsert_embedding_item(connection, job_id, row, "embedded", None)
-        embedded += 1
+        if apply_embedding(connection, version_id, row, embedding):
+            upsert_embedding_cache(connection, row, embedding)
+            upsert_embedding_item(connection, job_id, row, "embedded", None)
+            embedded += 1
     status = "embeddings_applied" if failed == 0 else "failed"
     update_embedding_job(
         connection,
@@ -544,10 +561,10 @@ def apply_voyage_batch_outputs(connection: Any, job_id: int, version_id: int, ba
         embedding = batch_line_embedding(item)
         if not row or not valid_embedding(embedding):
             continue
-        apply_embedding(connection, version_id, row, embedding)
-        upsert_embedding_cache(connection, row, embedding)
-        upsert_embedding_item(connection, job_id, row, "embedded", None)
-        applied += 1
+        if apply_embedding(connection, version_id, row, embedding):
+            upsert_embedding_cache(connection, row, embedding)
+            upsert_embedding_item(connection, job_id, row, "embedded", None)
+            applied += 1
     error_file_id = str(batch.get("error_file_id") or "")
     execute(
         connection,
@@ -587,18 +604,33 @@ def batch_line_embedding(item: dict[str, Any]) -> list[float] | None:
     return [float(value) for value in embedding] if isinstance(embedding, list) else None
 
 
-def apply_embedding(connection: Any, version_id: int, row: dict[str, Any], embedding: list[float]) -> None:
-    execute(
-        connection,
-        """
-        update chunks
-        set embedding = %s::vector,
-            embedding_model = %s,
-            embedding_dimensions = %s
-        where version_id = %s and id = %s
-        """,
-        (vector_literal(embedding), embedding_model(), embedding_dimensions(), version_id, int(row["id"])),
-    )
+def apply_embedding(connection: Any, version_id: int, row: dict[str, Any], embedding: list[float]) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            update chunks
+            set embedding = %s::vector,
+                embedding_model = %s,
+                embedding_dimensions = %s
+            where version_id = %s
+              and id = %s
+              and (
+                embedding is null
+                or embedding_model is distinct from %s
+                or embedding_dimensions is distinct from %s
+              )
+            """,
+            (
+                vector_literal(embedding),
+                embedding_model(),
+                embedding_dimensions(),
+                version_id,
+                int(row["id"]),
+                embedding_model(),
+                embedding_dimensions(),
+            ),
+        )
+        return int(cursor.rowcount or 0) > 0
 
 
 def upsert_embedding_cache(connection: Any, row: dict[str, Any], embedding: list[float]) -> None:

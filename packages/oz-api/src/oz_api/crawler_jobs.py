@@ -234,7 +234,7 @@ def index_catalog_entry(storage: RegistryStorage, entry: dict[str, Any]) -> list
 
 def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
     ctx = RetrievalContext.from_env(storage)
-    if postgres_connection(ctx.database_url) is None:
+    if not ctx.database_url:
         return 0
     ready = embedding_ready_rows(ctx.database_url)
     if not ready:

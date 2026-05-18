@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from collections.abc import AsyncIterator
 from typing import Awaitable, Callable
 
 import uvicorn
@@ -11,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from oz_api.auth import production_env
+from oz_api.db import close_postgres_pools
 from oz_api.http_context import (
     ServerState,
     is_authorized_request,
@@ -27,7 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def create_app(state: ServerState | None = None) -> FastAPI:
-    app = FastAPI(title="Oz API", version="0.1.0", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Oz API", version="0.1.0", docs_url=None, redoc_url=None, lifespan=app_lifespan)
     app.state.oz_state = state or ServerState(repo_root=Path.cwd())
     install_exception_handlers(app)
     install_middleware(app)
@@ -36,6 +39,14 @@ def create_app(state: ServerState | None = None) -> FastAPI:
     app.include_router(admin_router)
     app.include_router(api_router)
     return app
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        close_postgres_pools()
 
 
 def install_exception_handlers(app: FastAPI) -> None:

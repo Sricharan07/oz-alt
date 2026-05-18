@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Oz Postgres maintenance monthly
+
+[Timer]
+OnCalendar=monthly
+Persistent=true
+Unit=oz-postgres-maintenance.service
+
+[Install]
+WantedBy=timers.target

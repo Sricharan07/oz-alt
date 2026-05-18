@@ -5,6 +5,7 @@ from functools import cmp_to_key
 from typing import Any
 
 from oz_api.embeddings import embedding_for_query
+from oz_api.db import postgres_connection
 from oz_api.intent import classify_query, intent_name
 from oz_api.ranking import local_chunk_score
 from oz_api.retrieval_context import RetrievalContext
@@ -390,21 +391,6 @@ def mark_search_versions_requested(cursor: Any, rows: list[Any]) -> None:
             """,
             (vendor, library, version),
         )
-
-
-def postgres_connection(database_url: str | None) -> Any | None:
-    if not database_url:
-        return None
-    try:
-        import psycopg  # type: ignore
-    except ImportError as exc:
-        LOGGER.warning("psycopg package is unavailable: %s", exc)
-        return None
-    try:
-        return psycopg.connect(database_url)
-    except Exception as exc:
-        LOGGER.warning("postgres connection failed: %s", exc)
-        return None
 
 
 def resolve_db_version_id(connection: Any, vendor: str, library: str, requested_version: str | None) -> int:
