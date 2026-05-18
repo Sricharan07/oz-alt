@@ -11,8 +11,11 @@ import {
   KeyRound,
   Library,
   LogIn,
+  Menu,
   Monitor,
   Package,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
   Shield,
@@ -20,7 +23,7 @@ import {
   UserRound
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { getLibrary, getStatus, listLibraries } from "./api.js";
 import { runtimeConfig } from "./config.js";
 import { bytes, compactNumber, dateText, integer, libraryId, libraryPath, percent, statusClass } from "./format.js";
@@ -45,50 +48,98 @@ export default function App() {
 
 function ConsoleLayout() {
   const config = runtimeConfig();
+  const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <Link className="brand" to="/dashboard" aria-label="Oz dashboard">
+    <div className={`dashboard-layout ${mobileOpen ? "sidebar-open" : ""} ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <header className="topbar">
+        <button
+          type="button"
+          className="mobile-nav-toggle"
+          onClick={() => setMobileOpen((open) => !open)}
+          aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
+        >
+          <Menu size={15} aria-hidden="true" />
+          {mobileOpen ? "Close" : "Menu"}
+        </button>
+        <Link className={`topbar-brand ${collapsed ? "collapsed" : ""}`} to="/dashboard" aria-label="Oz dashboard">
           <span className="brand-mark">oz</span>
-          <span className="brand-text">Console</span>
+          {!collapsed ? <span className="topbar-brand-text">Console</span> : null}
         </Link>
-        <nav className="nav-list" aria-label="Primary navigation">
-          {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}>
-              <item.icon size={17} aria-hidden="true" />
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <div className="sidebar-links">
-          <a href={config.adminUrl}>
-            <Settings size={15} aria-hidden="true" />
-            Admin
-          </a>
-          <a href="/privacy">
-            <Shield size={15} aria-hidden="true" />
-            Privacy
-          </a>
-        </div>
-      </aside>
-      <main className="main">
-        <header className="topbar">
-          <div>
-            <strong>Oz</strong>
-            <span>Local documentation packs for coding agents</span>
-          </div>
-          <div className="topbar-actions">
-            <a className="button secondary" href="/device">
-              <KeyRound size={16} aria-hidden="true" />
-              Approve CLI
+        <div className="right-container">
+          <div className="top-buttons">
+            <Link className="top-button search-bar" to="/libraries">
+              <Search size={15} aria-hidden="true" />
+              <span>Search catalog</span>
+            </Link>
+            <a className="top-button" href="/device" aria-label="Approve CLI device">
+              <KeyRound size={15} aria-hidden="true" />
+              <span>Device</span>
             </a>
-            <Link className="button primary" to="/sign-in">
-              <LogIn size={16} aria-hidden="true" />
-              Sign in
+            <Link className="top-button" to="/sign-in" aria-label="Sign in">
+              <LogIn size={15} aria-hidden="true" />
+              <span>Sign in</span>
             </Link>
           </div>
-        </header>
-        <div className="content">
+        </div>
+      </header>
+      <div className="main-container">
+        <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+          <nav className="nav-links" aria-label="Primary navigation">
+            <div className="nav-group">
+              <div className="nav-group-label">Console</div>
+              <div className="sub-links">
+                {navItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) => `sub-link-content ${isActive ? "active" : ""}`}
+                  >
+                    <span className="sidebar-icon">
+                      <item.icon size={18} aria-hidden="true" />
+                    </span>
+                    {!collapsed ? <p>{item.label}</p> : null}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          </nav>
+          <div className="sidebar-footer">
+            <a className="sub-link-content sidebar-pro-link" href={config.adminUrl}>
+              <span className="sidebar-icon">
+                <Settings size={18} aria-hidden="true" />
+              </span>
+              {!collapsed ? (
+                <span className="sidebar-pro-copy">
+                  <span className="sidebar-pro-title">Admin</span>
+                  <span className="sidebar-pro-subtitle">Catalog control</span>
+                </span>
+              ) : null}
+            </a>
+            <a className="sub-link-content" href="/privacy">
+              <span className="sidebar-icon">
+                <Shield size={18} aria-hidden="true" />
+              </span>
+              {!collapsed ? <p>Privacy</p> : null}
+            </a>
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              onClick={() => setCollapsed((value) => !value)}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+            </button>
+          </div>
+        </aside>
+        <button type="button" className="sidebar-backdrop" onClick={() => setMobileOpen(false)} aria-label="Close navigation menu" />
+        <main className="page-content">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<OverviewPage />} />
@@ -100,8 +151,8 @@ function ConsoleLayout() {
             <Route path="settings" element={<AccountPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
