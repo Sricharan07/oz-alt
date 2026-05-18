@@ -8,9 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
+from scripts.worker import queue_has_items
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.rerank import boost_named_suggestions, boost_query_matches, parse_rerank_results, strip_private_fields, zeroentropy_scores
@@ -142,6 +144,17 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual([len(batch) for batch in batches], [2, 1])
         self.assertEqual(batch_line(rows[0])["custom_id"], "sha-0")
         self.assertEqual(batch_line(rows[0])["body"]["input"], ["content 0"])
+
+    def test_worker_detects_pending_queue_before_idle_batch_poll(self) -> None:
+        class FakeRedis:
+            def __init__(self, depth: int) -> None:
+                self.depth = depth
+
+            def llen(self, _queue: str) -> int:
+                return self.depth
+
+        self.assertTrue(queue_has_items(FakeRedis(2), "oz:crawler:jobs"))
+        self.assertFalse(queue_has_items(FakeRedis(0), "oz:crawler:jobs"))
 
     def test_baseline_profile_excludes_legacy_noise(self) -> None:
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])

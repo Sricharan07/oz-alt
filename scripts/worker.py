@@ -40,15 +40,11 @@ def main() -> int:
     while RUNNING:
         item = client.blpop(queue_name, timeout=5)
         if item is not None:
-            _queue, body = item
-            job = parse_job(body)
-            try:
-                process_job(storage, job)
-            except Exception as exc:
-                mark_crawler_job_failed(job, str(exc))
-                print(f"crawler job failed: {exc}", file=sys.stderr)
+            process_queue_item(storage, item)
             if args.once:
                 break
+            continue
+        if queue_has_items(client, queue_name):
             continue
         try:
             process_pending_embedding_promotions(storage)
@@ -57,6 +53,24 @@ def main() -> int:
         if args.once:
             break
     return 0
+
+
+def process_queue_item(storage: RegistryStorage, item: Any) -> None:
+    _queue, body = item
+    job = parse_job(body)
+    try:
+        process_job(storage, job)
+    except Exception as exc:
+        mark_crawler_job_failed(job, str(exc))
+        print(f"crawler job failed: {exc}", file=sys.stderr)
+
+
+def queue_has_items(client: Any, queue_name: str) -> bool:
+    try:
+        return int(client.llen(queue_name) or 0) > 0
+    except Exception as exc:
+        print(f"crawler queue depth check failed: {exc}", file=sys.stderr)
+        return False
 
 
 def parse_job(body: Any) -> dict[str, Any]:

@@ -105,7 +105,7 @@ def poll_pending_embedding_jobs(connection: Any) -> list[EmbeddingEnsureResult]:
             output.append(embed_sync(connection, job_id, version_id, missing_embedding_chunks(connection, version_id), 0))
             update_crawler_embedding_status(connection, crawler_job_id, job_id, output[-1].status)
             continue
-        statuses = [status for batch_id in batch_ids_for_job(job) if (status := voyage_get_batch(batch_id))]
+        statuses = voyage_batch_statuses(connection, job_id, batch_ids_for_job(job))
         if not statuses:
             continue
         remote_states = {str(status.get("status") or "") for status in statuses}
@@ -449,8 +449,27 @@ def voyage_get_batch(batch_id: str) -> dict[str, Any] | None:
         api_key,
         None,
         method="GET",
-        timeout=float_env("OZ_VOYAGE_STATUS_TIMEOUT_SECONDS", 10.0),
+        timeout=float_env("OZ_VOYAGE_STATUS_TIMEOUT_SECONDS", 3.0),
     )
+
+
+def voyage_batch_statuses(connection: Any, job_id: int, batch_ids: list[str]) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    for batch_id in batch_ids:
+        try:
+            status = voyage_get_batch(batch_id)
+        except Exception as exc:
+            LOGGER.warning("failed to poll Voyage batch %s for embedding job %s: %s", batch_id, job_id, exc)
+            update_embedding_job(
+                connection,
+                job_id,
+                "batch_running",
+                metadata={"last_status_poll_error": str(exc), "last_status_poll_batch_id": batch_id},
+            )
+            continue
+        if status:
+            statuses.append(status)
+    return statuses
 
 
 def batch_ids_for_job(job: dict[str, Any]) -> list[str]:
@@ -646,7 +665,7 @@ def update_crawler_embedding_status(connection: Any, crawler_job_id: int | None,
 
 
 def pending_batch_jobs(connection: Any) -> list[dict[str, Any]]:
-    limit = int_env("OZ_EMBEDDING_BATCH_POLL_LIMIT", 5)
+    limit = int_env("OZ_EMBEDDING_BATCH_POLL_LIMIT", 1)
     return rows(
         connection,
         """
