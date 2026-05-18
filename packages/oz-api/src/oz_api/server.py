@@ -10,6 +10,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from oz_api.auth import production_env
 from oz_api.http_context import (
     ServerState,
     is_authorized_request,
@@ -73,6 +74,8 @@ def build_state(args: argparse.Namespace) -> ServerState:
     display_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
     os.environ.setdefault("OZ_PUBLIC_BASE_URL", f"http://{display_host}:{args.port}")
     os.environ.setdefault("OZ_APP_URL", f"http://{display_host}:{args.port}")
+    if production_env() and args.bearer_token == "local-dev-token":
+        raise RuntimeError("refusing to start production API with local-dev-token bearer token")
     return ServerState(
         repo_root=args.repo_root.resolve(),
         require_auth=args.require_auth,
@@ -86,7 +89,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--require-auth", action="store_true")
-    parser.add_argument("--bearer-token", default="local-dev-token")
+    parser.add_argument("--bearer-token", default=os.environ.get("OZ_BEARER_TOKEN", ""))
     args = parser.parse_args()
 
     logging.basicConfig(level=os.environ.get("OZ_LOG_LEVEL", "INFO").upper())

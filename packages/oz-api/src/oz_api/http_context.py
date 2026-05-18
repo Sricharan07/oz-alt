@@ -61,7 +61,7 @@ HTML_AUTH_PATHS = {
 class ServerState:
     repo_root: Path
     require_auth: bool = False
-    bearer_token: str = "local-dev-token"
+    bearer_token: str = ""
 
     @property
     def storage(self) -> RegistryStorage:
