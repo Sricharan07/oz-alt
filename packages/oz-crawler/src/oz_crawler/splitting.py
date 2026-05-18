@@ -27,7 +27,7 @@ def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
             continue
         page_url = frontmatter.get("url") or source_url
         title = frontmatter.get("title") or title_from_markdown(body, page_url)
-        markdown = frontmatter_header(frontmatter) + body.strip() + "\n"
+        markdown = body.strip() + "\n"
         pages.append(NormalizedPage(title=title, markdown=markdown, source_url=page_url))
     return pages
 
@@ -40,16 +40,6 @@ def parse_frontmatter(text: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         output[key.strip()] = value.strip().strip("\"'")
     return output
-
-
-def frontmatter_header(frontmatter: dict[str, str]) -> str:
-    if not frontmatter:
-        return ""
-    lines = ["---"]
-    for key, value in frontmatter.items():
-        lines.append(f"{key}: {value}")
-    lines.extend(["---", ""])
-    return "\n".join(lines)
 
 
 def title_from_markdown(markdown: str, fallback: str) -> str:

@@ -57,9 +57,13 @@ def requeue_queued_crawler_jobs(*, limit: int = 10) -> int:
                p.source_priority,
                p.required_topics,
                p.expected_symbols,
+               p.source_file_patterns,
                p.min_quality_score,
                p.min_documents,
-               p.max_junk_ratio
+               p.max_junk_ratio,
+               p.needs_js,
+               p.include_source_files,
+               p.target_language
         from crawler_jobs j
         join libraries l on l.id = j.library_id
         join vendors v on v.id = l.vendor_id
@@ -112,9 +116,13 @@ def profile_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "source_priority": row.get("source_priority") or [],
         "required_topics": row.get("required_topics") or [],
         "expected_symbols": row.get("expected_symbols") or [],
+        "source_file_patterns": row.get("source_file_patterns") or [],
         "min_quality_score": row.get("min_quality_score", 0.35),
         "min_documents": row.get("min_documents", 2),
         "max_junk_ratio": row.get("max_junk_ratio", 0.25),
+        "needs_js": bool(row.get("needs_js")),
+        "include_source_files": bool(row.get("include_source_files")),
+        "target_language": row.get("target_language") or "en",
     }
 
 
@@ -131,6 +139,9 @@ def crawler_job_event(payload: dict[str, Any]) -> dict[str, Any]:
         "concurrent_requests": payload.get("concurrent_requests"),
         "download_delay": payload.get("download_delay"),
         "robots_txt": payload.get("robots_txt"),
+        "needs_js": payload.get("needs_js"),
+        "include_source_files": payload.get("include_source_files"),
+        "target_language": payload.get("target_language"),
         "profile": payload.get("profile"),
     }
 

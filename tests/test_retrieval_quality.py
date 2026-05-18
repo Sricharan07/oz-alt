@@ -30,8 +30,13 @@ from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog
 from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
 from oz_crawler.crawl import prepare_pages
+from oz_crawler.crawl_runtime import CrawlRunState
+from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage
+from oz_crawler.normalize import clean_markdown
+from oz_crawler.parsers.source_code import source_code_chunks, source_path_allowed
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
+from oz_crawler.splitting import split_llms_full
 from oz_crawler.token_counting import token_count
 from oz_crawler.validation import USEFUL_CONTENT_TYPES, true_junk_rejections
 
@@ -92,6 +97,75 @@ class RetrievalQualityTests(unittest.TestCase):
 
     def test_token_counter_uses_tiktoken_encoding(self) -> None:
         self.assertEqual(token_count("hello world"), 2)
+
+    def test_markdown_cleanup_strips_frontmatter(self) -> None:
+        markdown = clean_markdown("---\ntitle: Middleware\n---\n# Middleware\n\nUse cookies.")
+
+        self.assertNotIn("title: Middleware", markdown)
+        self.assertTrue(markdown.startswith("# Middleware"))
+
+    def test_llms_full_split_does_not_reemit_frontmatter(self) -> None:
+        pages = split_llms_full(
+            "---\ntitle: Routing\nurl: https://docs.example/routing\n---\n# Routing\n\nUse routes.",
+            source_url="https://docs.example/llms-full.txt",
+        )
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].title, "Routing")
+        self.assertNotIn("title:", pages[0].markdown)
+
+    def test_language_filter_rejects_non_target_prose_but_keeps_code_heavy_docs(self) -> None:
+        spanish = " ".join(["el ejemplo para configurar la respuesta con los valores"] * 20)
+        code_heavy = "```ts\n" + "\n".join(["export function readCookie() { return cookies.get('sid') }"] * 20) + "\n```"
+
+        self.assertFalse(language_allowed(spanish, "en"))
+        self.assertTrue(language_allowed(code_heavy, "en"))
+
+    def test_source_code_parser_extracts_documented_exports(self) -> None:
+        source = """/** Create a client. */\nexport function createClient(apiKey: string) {\n  return { apiKey };\n}\n"""
+
+        chunks = source_code_chunks(source, "https://github.com/acme/sdk/blob/main/src/client.ts", language="typescript", limit=5)
+
+        self.assertEqual(chunks[0]["path"], "api-reference/source/createclient.md")
+        self.assertIn("Create a client", chunks[0]["markdown"])
+        self.assertTrue(source_path_allowed("packages/sdk/src/client.ts", ["src/"]))
+        self.assertTrue(source_path_allowed("django/forms/widgets.py", ["django/**/*.py"]))
+        self.assertTrue(source_path_allowed("src/client.ts", []))
+
+    def test_oversized_code_fence_is_split_under_chunk_cap(self) -> None:
+        long_line = "const value = '" + ("x" * 7000) + "';"
+        chunks = chunk_markdown(
+            "# Config\n\n```ts\n" + long_line + "\n```",
+            source_url="https://docs.example/config",
+            page_type="code_example",
+            max_tokens=250,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.text.startswith("```ts") and chunk.text.endswith("```") for chunk in chunks))
+        self.assertTrue(all(token_count(chunk.text) <= 250 for chunk in chunks))
+
+    def test_crawl_run_state_checkpoints_pages_and_dead_letters(self) -> None:
+        progress: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = CrawlRunState.create(root, progress.append)
+            state.record_page("https://docs.example/a", "<main>A</main>", "A")
+            state.record_dead_letter(
+                "https://docs.example/b",
+                stage="page_fetch",
+                error="HTTP 503",
+                attempts=3,
+                status=503,
+                transient=True,
+            )
+            restored = CrawlRunState.create(root)
+
+        self.assertEqual(restored.completed_urls, {"https://docs.example/a"})
+        self.assertEqual(restored.restored_pages[0]["html"], "<main>A</main>")
+        self.assertEqual(restored.dead_letters[0].status, 503)
+        self.assertTrue(progress)
+        self.assertEqual(progress[-1]["dead_letter_items"][0]["status"], 503)
 
     def test_write_chunks_does_not_embed_inline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,12 +270,20 @@ class RetrievalQualityTests(unittest.TestCase):
                 "allowed_hosts": ["docs.djangoproject.com"],
                 "allowed_paths": ["/en/stable/"],
                 "denied_paths": ["/deprecated/"],
+                "source_file_patterns": ["django/**/*.py"],
+                "needs_js": True,
+                "include_source_files": True,
+                "target_language": "en",
             }
         )
 
         self.assertEqual(event["db_job_id"], "49")
         self.assertEqual(event["profile"]["allowed_hosts"], ["docs.djangoproject.com"])
         self.assertEqual(event["profile"]["allowed_paths"], ["/en/stable/"])
+        self.assertEqual(event["profile"]["source_file_patterns"], ["django/**/*.py"])
+        self.assertTrue(event["profile"]["needs_js"])
+        self.assertTrue(event["profile"]["include_source_files"])
+        self.assertEqual(event["profile"]["target_language"], "en")
 
     def test_catalog_promotion_does_not_record_empty_quality_failure(self) -> None:
         class FakeStore:

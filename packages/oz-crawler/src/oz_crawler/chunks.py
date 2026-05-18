@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -73,6 +74,7 @@ def chunk_markdown(
     page_type: str = "prose",
     max_tokens: int = 650,
 ) -> list[MarkdownChunk]:
+    max_tokens = min(max_tokens, max_chunk_tokens())
     blocks = markdown_blocks(markdown)
     sections = section_blocks(blocks)
     chunks: list[MarkdownChunk] = []
@@ -161,7 +163,7 @@ def chunk_section(
         indivisible = block_type in {"code_example", "config", "cli", "error_ref"} or has_code_fence(block[0])
         heading_boundary = bool(re.match(r"^#{2,4}\s+", block[0].strip()))
         if current and (heading_boundary or indivisible or current_tokens + block_tokens > max_tokens):
-            chunks.append(join_chunk(current, source_url=source_url, page_type=page_type, parent_key=parent_key))
+            append_joined_chunk(chunks, current, source_url=source_url, page_type=page_type, parent_key=parent_key)
             overlap = last_overlap(current)
             current = [] if indivisible else overlap
             current_tokens = sum(token_count(item[0]) for item in current)
@@ -170,10 +172,66 @@ def chunk_section(
             current = []
             current_tokens = 0
             continue
+        if block_tokens > max_tokens and indivisible:
+            chunks.extend(split_large_indivisible_block(block, page_type=block_type, parent_key=parent_key, max_tokens=max_tokens))
+            current = []
+            current_tokens = 0
+            continue
         current.append(block)
         current_tokens += block_tokens
     if current:
-        chunks.append(join_chunk(current, source_url=source_url, page_type=page_type, parent_key=parent_key))
+        append_joined_chunk(chunks, current, source_url=source_url, page_type=page_type, parent_key=parent_key)
+    return chunks
+
+
+def split_large_indivisible_block(
+    block: tuple[str, int, int, list[str]],
+    *,
+    page_type: str,
+    parent_key: str | None,
+    max_tokens: int,
+) -> list[MarkdownChunk]:
+    text, start_line, _, heading_path = block
+    fence = re.match(r"^```([^\n]*)\n(?P<body>.*)\n```$", text.strip(), re.S)
+    if not fence:
+        return split_large_block(block, page_type=page_type, parent_key=parent_key, max_tokens=max_tokens)
+    language = fence.group(1).strip()
+    body_lines = fence.group("body").splitlines()
+    chunks: list[MarkdownChunk] = []
+    current: list[str] = []
+    current_tokens = token_count(f"```{language}\n```")
+    current_start = start_line + 1
+    body_budget = max(1, max_tokens - token_count(f"```{language}\n```") - 8)
+    for offset, line in enumerate(body_lines, start=1):
+        for segment in split_text_by_token_budget(line, body_budget):
+            line_tokens = token_count(segment)
+            if current and current_tokens + line_tokens > max_tokens:
+                chunks.append(
+                    MarkdownChunk(
+                        text=f"```{language}\n" + "\n".join(current).strip() + "\n```",
+                        heading_path=list(heading_path),
+                        start_line=current_start - 1,
+                        end_line=start_line + offset,
+                        content_type=page_type,
+                        parent_key=parent_key,
+                    )
+                )
+                current = []
+                current_tokens = token_count(f"```{language}\n```")
+                current_start = start_line + offset
+            current.append(segment)
+            current_tokens += line_tokens
+    if current:
+        chunks.append(
+            MarkdownChunk(
+                text=f"```{language}\n" + "\n".join(current).strip() + "\n```",
+                heading_path=list(heading_path),
+                start_line=current_start - 1,
+                end_line=start_line + len(body_lines) + 1,
+                content_type=page_type,
+                parent_key=parent_key,
+            )
+        )
     return chunks
 
 
@@ -190,23 +248,24 @@ def split_large_block(
     current_tokens = 0
     current_start = start_line
     for offset, line in enumerate(text.splitlines()):
-        line_tokens = token_count(line)
-        if current and current_tokens + line_tokens > max_tokens:
-            chunks.append(
-                MarkdownChunk(
-                    text="\n".join(current).strip(),
-                    heading_path=list(heading_path),
-                    start_line=current_start,
-                    end_line=start_line + offset - 1,
-                    content_type=page_type,
-                    parent_key=parent_key,
+        for segment in split_text_by_token_budget(line, max_tokens):
+            line_tokens = token_count(segment)
+            if current and current_tokens + line_tokens > max_tokens:
+                chunks.append(
+                    MarkdownChunk(
+                        text="\n".join(current).strip(),
+                        heading_path=list(heading_path),
+                        start_line=current_start,
+                        end_line=start_line + offset - 1,
+                        content_type=page_type,
+                        parent_key=parent_key,
+                    )
                 )
-            )
-            current = []
-            current_tokens = 0
-            current_start = start_line + offset
-        current.append(line)
-        current_tokens += line_tokens
+                current = []
+                current_tokens = 0
+                current_start = start_line + offset
+            current.append(segment)
+            current_tokens += line_tokens
     if current:
         chunks.append(
             MarkdownChunk(
@@ -238,6 +297,26 @@ def join_chunk(
         content_type=block_content_type(source_url, text, page_type),
         parent_key=parent_key,
     )
+
+
+def append_joined_chunk(
+    chunks: list[MarkdownChunk],
+    blocks: list[tuple[str, int, int, list[str]]],
+    *,
+    source_url: str,
+    page_type: str,
+    parent_key: str | None,
+) -> None:
+    chunk = join_chunk(blocks, source_url=source_url, page_type=page_type, parent_key=parent_key)
+    if useful_chunk_text(chunk.text):
+        chunks.append(chunk)
+
+
+def useful_chunk_text(text: str) -> bool:
+    non_heading = "\n".join(line for line in text.splitlines() if not re.match(r"^#{1,6}\s+", line.strip())).strip()
+    if not non_heading:
+        return False
+    return bool(non_heading)
 
 
 def last_overlap(blocks: list[tuple[str, int, int, list[str]]]) -> list[tuple[str, int, int, list[str]]]:
@@ -307,6 +386,22 @@ def normalized_chunk_key(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def split_text_by_token_budget(text: str, max_tokens: int) -> list[str]:
+    if token_count(text) <= max_tokens:
+        return [text]
+    remaining = text
+    chunks: list[str] = []
+    while remaining:
+        segment_size = max(1, min(len(remaining), int(len(remaining) * max_tokens / max(token_count(remaining), 1))))
+        segment = remaining[:segment_size]
+        while token_count(segment) > max_tokens and segment_size > 1:
+            segment_size = max(1, int(segment_size * 0.8))
+            segment = remaining[:segment_size]
+        chunks.append(segment)
+        remaining = remaining[segment_size:]
+    return chunks
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
     return slug or "page"
@@ -314,3 +409,10 @@ def slugify(value: str) -> str:
 
 def scoped_chunk_key(source_path: str, key: str) -> str:
     return f"{source_path}#{key}"
+
+
+def max_chunk_tokens() -> int:
+    try:
+        return max(200, min(1200, int(os.environ.get("OZ_MAX_CHUNK_TOKENS", "650"))))
+    except ValueError:
+        return 650

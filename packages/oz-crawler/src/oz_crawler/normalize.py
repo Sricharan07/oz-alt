@@ -97,7 +97,7 @@ def regex_title(html: str) -> str:
 def clean_markdown(markdown: str) -> str:
     lines: list[str] = []
     previous_blank = False
-    for raw_line in sanitize_secret_tokens(markdown).splitlines():
+    for raw_line in strip_frontmatter(sanitize_secret_tokens(markdown)).splitlines():
         line = raw_line.rstrip()
         blank = not line.strip()
         if blank and previous_blank:
@@ -105,6 +105,17 @@ def clean_markdown(markdown: str) -> str:
         lines.append(line)
         previous_blank = blank
     return "\n".join(lines).strip() + "\n"
+
+
+def strip_frontmatter(markdown: str) -> str:
+    text = markdown.lstrip()
+    for marker in ("---", "+++"):
+        if not text.startswith(marker + "\n"):
+            continue
+        end = text.find("\n" + marker + "\n", len(marker) + 1)
+        if end >= 0:
+            return text[end + len(marker) + 2 :]
+    return markdown
 
 
 def sanitize_secret_tokens(text: str) -> str:

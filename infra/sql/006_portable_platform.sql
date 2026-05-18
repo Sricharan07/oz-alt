@@ -19,9 +19,13 @@ create table if not exists library_profiles (
   source_priority jsonb not null default '[]'::jsonb,
   required_topics jsonb not null default '[]'::jsonb,
   expected_symbols jsonb not null default '[]'::jsonb,
+  source_file_patterns jsonb not null default '[]'::jsonb,
   min_quality_score double precision not null default 0.35,
   min_documents integer not null default 2,
   max_junk_ratio double precision not null default 0.25,
+  needs_js boolean not null default false,
+  include_source_files boolean not null default false,
+  target_language text not null default 'en',
   created_by uuid references users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

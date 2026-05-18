@@ -115,13 +115,14 @@ def upsert_library_profile(
         )
         insert into library_profiles (
           library_id, allowed_hosts, allowed_paths, denied_paths, source_priority,
-          required_topics, expected_symbols, min_quality_score, min_documents,
-          max_junk_ratio, created_by, updated_at
+          required_topics, expected_symbols, source_file_patterns, min_quality_score, min_documents,
+          max_junk_ratio, needs_js, include_source_files, target_language, created_by, updated_at
         )
         select id, cast(:allowed_hosts as jsonb), cast(:allowed_paths as jsonb),
                cast(:denied_paths as jsonb), cast(:source_priority as jsonb),
                cast(:required_topics as jsonb), cast(:expected_symbols as jsonb),
-               :min_quality_score, :min_documents, :max_junk_ratio,
+               cast(:source_file_patterns as jsonb), :min_quality_score, :min_documents, :max_junk_ratio,
+               :needs_js, :include_source_files, :target_language,
                cast(:created_by as uuid), now()
         from library_row
         on conflict (library_id) do update
@@ -131,9 +132,13 @@ def upsert_library_profile(
             source_priority = excluded.source_priority,
             required_topics = excluded.required_topics,
             expected_symbols = excluded.expected_symbols,
+            source_file_patterns = excluded.source_file_patterns,
             min_quality_score = excluded.min_quality_score,
             min_documents = excluded.min_documents,
             max_junk_ratio = excluded.max_junk_ratio,
+            needs_js = excluded.needs_js,
+            include_source_files = excluded.include_source_files,
+            target_language = excluded.target_language,
             updated_at = now()
         returning library_id
         """,
@@ -207,8 +212,8 @@ def get_library_profile(vendor: str, library: str) -> dict[str, Any] | None:
         """
         select v.name as vendor, l.name as library, l.source_url,
                p.allowed_hosts, p.allowed_paths, p.denied_paths, p.source_priority,
-               p.required_topics, p.expected_symbols, p.min_quality_score,
-               p.min_documents, p.max_junk_ratio
+               p.required_topics, p.expected_symbols, p.source_file_patterns, p.min_quality_score,
+               p.min_documents, p.max_junk_ratio, p.needs_js, p.include_source_files, p.target_language
         from library_profiles p
         join libraries l on l.id = p.library_id
         join vendors v on v.id = l.vendor_id
@@ -254,6 +259,33 @@ def mark_crawler_job_embedding_waiting(
 
 def mark_crawler_job_failed(job: dict[str, Any], error: str) -> None:
     update_crawler_job(job, "failed", finished=True, error=error[:2000])
+
+
+def update_crawler_job_progress(job: dict[str, Any], progress: dict[str, Any]) -> None:
+    job_id = clean(job.get("db_job_id"))
+    if not job_id:
+        return
+    store = AuthStore.from_env()
+    if store is None:
+        return
+    try:
+        store.execute(
+            """
+            update crawler_jobs
+            set progress_json = cast(:progress as jsonb),
+                dead_letter_json = cast(:dead_letters as jsonb),
+                source_stats_json = cast(:source_stats as jsonb)
+            where id = cast(:job_id as bigint)
+            """,
+            {
+                "job_id": job_id,
+                "progress": json.dumps(progress, sort_keys=True),
+                "dead_letters": json.dumps(progress.get("dead_letter_items") or [], sort_keys=True),
+                "source_stats": json.dumps(progress.get("dead_letters_by_stage") or {}, sort_keys=True),
+            },
+        )
+    except Exception:
+        return
 
 
 def update_crawler_job(
@@ -642,9 +674,13 @@ def profile_params(
         ),
         "required_topics": json.dumps(list_values(payload.get("required_topics")), sort_keys=True),
         "expected_symbols": json.dumps(list_values(payload.get("expected_symbols")), sort_keys=True),
+        "source_file_patterns": json.dumps(list_values(payload.get("source_file_patterns")), sort_keys=True),
         "min_quality_score": float_value(payload.get("min_quality_score"), default=0.35, minimum=0),
         "min_documents": int_value(payload.get("min_documents"), default=2, minimum=1),
         "max_junk_ratio": float_value(payload.get("max_junk_ratio"), default=0.25, minimum=0),
+        "needs_js": bool_value(payload.get("needs_js")),
+        "include_source_files": bool_value(payload.get("include_source_files")),
+        "target_language": clean(payload.get("target_language")) or "en",
         "created_by": principal.user_id if principal else None,
     }
 
@@ -661,9 +697,13 @@ def decode_profile_row(row: dict[str, Any]) -> dict[str, Any]:
         "preferred_urls": json_values(row.get("source_priority")),
         "required_topics": json_values(row.get("required_topics")),
         "expected_symbols": json_values(row.get("expected_symbols")),
+        "source_file_patterns": json_values(row.get("source_file_patterns")),
         "min_quality_score": float(row.get("min_quality_score") or 0.35),
         "min_documents": int(row.get("min_documents") or 2),
         "max_junk_ratio": float(row.get("max_junk_ratio") or 0.25),
+        "needs_js": bool(row.get("needs_js")),
+        "include_source_files": bool(row.get("include_source_files")),
+        "target_language": clean(row.get("target_language")) or "en",
     }
 
 
@@ -698,6 +738,12 @@ def list_values(value: Any) -> list[str]:
     if isinstance(value, list):
         return [clean(item) for item in value if clean(item)]
     return [item.strip() for item in str(value or "").replace("\n", ",").split(",") if item.strip()]
+
+
+def bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return clean(value).lower() in {"1", "true", "yes", "on"}
 
 
 def json_values(value: Any) -> list[str]:

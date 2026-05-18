@@ -12,6 +12,7 @@ from oz_api.admin_ops import (
     mark_crawler_job_embedding_waiting,
     mark_crawler_job_failed,
     mark_crawler_job_started,
+    update_crawler_job_progress,
     record_crawler_job_log,
     record_eval_run,
     record_quality_run,
@@ -64,11 +65,12 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             download_delay=float(job.get("download_delay") or os.environ.get("OZ_CRAWLER_DELAY", "0")),
             robots_txt=str(job.get("robots_txt", os.environ.get("OZ_CRAWLER_ROBOTS", "1"))).lower()
             not in {"0", "false", "no"},
-            crawldir=Path(os.environ["OZ_CRAWLER_CRAWLDIR"]) if os.environ.get("OZ_CRAWLER_CRAWLDIR") else None,
+            crawldir=crawler_checkpoint_dir(job, vendor, library, version),
             headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
             network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
             require_profile=os.environ.get("OZ_CRAWLER_REQUIRE_PROFILE", "1").lower() not in {"0", "false", "no"},
             fail_on_validation=os.environ.get("OZ_CRAWLER_FAIL_ON_VALIDATION", "1").lower() not in {"0", "false", "no"},
+            progress_callback=lambda progress: update_crawler_job_progress(job, progress),
         ),
     )
     record_crawler_job_log(job, "info", "crawl finished", {"fixture_path": str(target)})
@@ -425,9 +427,13 @@ def write_job_profile(registry_root: Path, vendor: str, library: str, job: dict[
                 "preferred_urls": profile.get("preferred_urls") or profile.get("source_priority") or [],
                 "required_topics": profile.get("required_topics") or [],
                 "expected_symbols": profile.get("expected_symbols") or [],
+                "source_file_patterns": profile.get("source_file_patterns") or [],
                 "min_quality_score": profile.get("min_quality_score", 0.35),
                 "min_documents": profile.get("min_documents", 2),
                 "max_junk_ratio": profile.get("max_junk_ratio", 0.25),
+                "needs_js": bool(profile.get("needs_js")),
+                "include_source_files": bool(profile.get("include_source_files")),
+                "target_language": profile.get("target_language") or "en",
             }
         ]
     }
@@ -746,9 +752,13 @@ def static_profile(vendor: str, library: str) -> dict[str, Any] | None:
                 "source_priority": row.get("preferred_urls") or row.get("source_priority") or [],
                 "required_topics": row.get("required_topics") or [],
                 "expected_symbols": row.get("expected_symbols") or [],
+                "source_file_patterns": row.get("source_file_patterns") or [],
                 "min_quality_score": row.get("min_quality_score", 0.35),
                 "min_documents": row.get("min_documents", 2),
                 "max_junk_ratio": row.get("max_junk_ratio", 0.25),
+                "needs_js": bool(row.get("needs_js")),
+                "include_source_files": bool(row.get("include_source_files")),
+                "target_language": row.get("target_language") or "en",
             }
     return None
 
@@ -759,3 +769,12 @@ def parse_body(body: Any) -> dict[str, Any]:
     if isinstance(body, dict):
         return body
     return json.loads(str(body))
+
+
+def crawler_checkpoint_dir(job: dict[str, Any], vendor: Any, library: Any, version: str) -> Path | None:
+    root = os.environ.get("OZ_CRAWLER_CRAWLDIR") or os.environ.get("OZ_CRAWLER_CHECKPOINT_DIR")
+    if not root:
+        root = "/tmp/oz-crawler-checkpoints"
+    job_id = str(job.get("db_job_id") or "").strip()
+    name = job_id or normalize_query(f"{vendor}-{library}-{version}")[:80]
+    return Path(root) / name

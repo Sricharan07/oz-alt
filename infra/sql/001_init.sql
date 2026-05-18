@@ -226,6 +226,10 @@ create table if not exists crawler_jobs (
   attempts integer not null default 0,
   max_pages integer not null default 128,
   last_error text,
+  progress_json jsonb not null default '{}'::jsonb,
+  dead_letter_json jsonb not null default '[]'::jsonb,
+  source_stats_json jsonb not null default '{}'::jsonb,
+  failure_kind text,
   queued_at timestamptz not null default now(),
   started_at timestamptz,
   finished_at timestamptz

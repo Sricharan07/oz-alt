@@ -15,10 +15,12 @@ from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 from oz_crawler.chunks import write_chunks
+from oz_crawler.crawl_runtime import CrawlRunState, ProgressCallback, max_page_bytes, retry_attempts
+from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
 from oz_crawler.profiles import LibraryProfile, load_profile, url_allowed_by_profile
 from oz_crawler.quality import QualityResult, score_page
-from oz_crawler.security import assert_public_http_url, fetch_public_url, pinned_fetch_required
+from oz_crawler.security import CrawlerFetchError, assert_public_http_url, fetch_public_url, pinned_fetch_required
 from oz_crawler.splitting import assign_page_paths
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
@@ -52,6 +54,7 @@ class CrawlOptions:
     network_idle: bool = True
     require_profile: bool = False
     fail_on_validation: bool = False
+    progress_callback: ProgressCallback | None = None
 
     @classmethod
     def from_env(cls, *, max_pages: int) -> "CrawlOptions":
@@ -93,7 +96,8 @@ def crawl_single_page(
     if crawl_options.require_profile and profile is None:
         raise RuntimeError(f"no library profile found for {vendor}/{library}")
 
-    pages = crawl_pages(url, title=title, options=crawl_options, profile=profile)
+    state = CrawlRunState.create(crawl_state_dir(crawl_options, vendor, library, version), crawl_options.progress_callback)
+    pages = crawl_pages(url, title=title, options=crawl_options, profile=profile, state=state)
     if not pages:
         raise RuntimeError(f"no pages crawled from {url}")
 
@@ -118,11 +122,13 @@ def crawl_single_page(
         f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
         encoding="utf-8",
     )
-    artifacts = collect_source_artifacts(url, pages, profile=profile)
+    artifacts = collect_source_artifacts(url, pages, profile=profile, state=state)
     artifact_pages = artifact_normalized_pages(artifacts)
     all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile, version=version)
+    rejected.extend(dead_letter_rejections(state))
     if not all_pages:
         write_rejections(target, rejected)
+        state.write_artifacts(target)
         raise RuntimeError(f"all crawled pages were rejected for {vendor}/{library}")
 
     guide_links: list[tuple[str, str]] = []
@@ -135,6 +141,7 @@ def crawl_single_page(
             encoding="utf-8",
         )
     write_rejections(target, rejected)
+    state.write_artifacts(target)
     write_chunks(target, all_pages)
     write_symbols(target, all_pages, profile=profile)
     (target / "INDEX.md").write_text(
@@ -186,12 +193,15 @@ def crawl_pages(
     title: str | None,
     options: CrawlOptions,
     profile: LibraryProfile | None = None,
+    state: CrawlRunState | None = None,
 ) -> list[NormalizedPage]:
     if options.max_pages <= 0:
         return []
-    crawled = crawl_pages_with_scrapling(url, options=options, profile=profile)
+    if profile is not None and profile.needs_js and options.fetcher == "auto":
+        options = replace(options, fetcher="dynamic")
+    crawled = crawl_pages_with_scrapling(url, options=options, profile=profile, state=state)
     if crawled is None:
-        crawled = crawl_pages_with_stdlib(url, options=options, profile=profile)
+        crawled = crawl_pages_with_stdlib(url, options=options, profile=profile, state=state)
     return [normalize_html(page.html, source_url=page.source_url, title=title or page.title) for page in crawled]
 
 
@@ -200,6 +210,7 @@ def crawl_pages_with_scrapling(
     *,
     options: CrawlOptions,
     profile: LibraryProfile | None = None,
+    state: CrawlRunState | None = None,
 ) -> list[CrawledPage] | None:
     assert_public_http_url(url)
     if options.fetcher.lower() == "stdlib" or pinned_fetch_required():
@@ -224,7 +235,7 @@ def crawl_pages_with_scrapling(
         start_urls = [url]
         allowed_domains = seed_allowed_domains
         concurrent_requests = max(1, options.concurrent_requests)
-        concurrent_requests_per_domain = max(1, options.concurrent_requests)
+        concurrent_requests_per_domain = per_host_concurrency(options.concurrent_requests)
         download_delay = max(0.0, options.download_delay)
         robots_txt_obey = options.robots_txt
 
@@ -266,8 +277,14 @@ def crawl_pages_with_scrapling(
             html = extract_html(response)
             if is_probably_binary_text(html):
                 return
+            if len(html.encode("utf-8")) > max_page_bytes():
+                if state is not None:
+                    state.record_dead_letter(response_url, stage="scrapling_fetch", error="page exceeded max byte size")
+                return
             if html.strip() and len(self.pages) < max_pages:
                 self.pages.append(CrawledPage(source_url=response_url, html=html, title=response_title(response)))
+                if state is not None:
+                    state.record_page(response_url, html, response_title(response))
                 yield {"url": response_url, "bytes": len(html)}
 
             for link in candidate_doc_links(
@@ -309,10 +326,17 @@ def crawl_pages_with_stdlib(
     *,
     options: CrawlOptions,
     profile: LibraryProfile | None = None,
+    state: CrawlRunState | None = None,
 ) -> list[CrawledPage]:
     assert_public_http_url(url)
-    first_html = fetch_html_stdlib(url)
-    pages = [CrawledPage(source_url=url, html=first_html)]
+    run_state = state or CrawlRunState.create(options.crawldir)
+    pages = restored_pages(run_state)
+    if pages:
+        first_html = pages[0].html
+    else:
+        first_html = fetch_html_stdlib(url, state=run_state)
+        pages = [CrawledPage(source_url=url, html=first_html)]
+        run_state.record_page(url, first_html)
     if options.max_pages <= 1:
         return pages
 
@@ -320,8 +344,11 @@ def crawl_pages_with_stdlib(
     if profile is not None:
         discovered.extend(profile.preferred_urls)
     discovered.extend(discover_same_site_links(url, first_html))
-    seen = {url}
-    for linked_url in candidate_doc_links(url, url, first_html, discovered, profile=profile):
+    seen = {page.source_url for page in pages} | {url}
+    queue = candidate_doc_links(url, url, first_html, discovered, profile=profile)
+    for page in list(pages):
+        queue.extend(candidate_doc_links(url, page.source_url, page.html, [], profile=profile))
+    for linked_url in dedupe(queue):
         if len(pages) >= options.max_pages:
             break
         if linked_url in seen:
@@ -329,11 +356,25 @@ def crawl_pages_with_stdlib(
         assert_public_http_url(linked_url)
         seen.add(linked_url)
         try:
-            html = fetch_html_stdlib(linked_url)
+            html = fetch_html_stdlib(linked_url, state=run_state)
+        except CrawlerFetchError as exc:
+            run_state.record_dead_letter(
+                linked_url,
+                stage="page_fetch",
+                error=str(exc),
+                attempts=retry_attempts(),
+                status=exc.status,
+                retry_after=exc.retry_after,
+                transient=exc.transient,
+            )
+            LOGGER.info("skipping linked crawler URL %s: %s", linked_url, exc)
+            continue
         except Exception as exc:
+            run_state.record_dead_letter(linked_url, stage="page_fetch", error=str(exc), attempts=1)
             LOGGER.info("skipping linked crawler URL %s: %s", linked_url, exc)
             continue
         pages.append(CrawledPage(source_url=linked_url, html=html))
+        run_state.record_page(linked_url, html)
     return pages
 
 
@@ -364,9 +405,28 @@ def ensure_vendored_scrapling_path() -> None:
             return
 
 
-def fetch_html_stdlib(url: str) -> str:
+def fetch_html_stdlib(url: str, *, state: CrawlRunState | None = None) -> str:
     assert_public_http_url(url)
-    response = fetch_public_url(url, timeout=20)
+    if state is not None:
+        state.limiter.wait(url)
+    extra_headers = state.cache.conditional_headers(url) if state else {}
+    response = fetch_public_url(
+        url,
+        timeout=20,
+        max_bytes=max_page_bytes(),
+        extra_headers=extra_headers,
+        attempts=retry_attempts(),
+    )
+    if response.status == 304 and state is not None:
+        cached = state.cache.cached_body(url)
+        if cached is None:
+            raise RuntimeError(f"{url} returned 304 but no cached body exists")
+        text = decode_text_response(cached, response.headers.get("content-type"))
+        if text is None:
+            raise RuntimeError(f"{url} cached response is not textual documentation")
+        return text
+    if state is not None:
+        state.cache.store(url, response.body, response.headers, response.status)
     text = decode_text_response(response.body, response.headers.get("content-type"))
     if text is None:
         raise RuntimeError(f"{url} did not return textual documentation")
@@ -482,6 +542,17 @@ def prepare_pages(
     assigned_pages, version_rejections = filter_current_version(assign_page_paths(unique_pages), target_version=version)
     rejected.extend(version_rejections)
     for page in assigned_pages:
+        if profile is not None and not language_allowed(page.markdown, profile.target_language):
+            rejected.append(
+                {
+                    "title": page.title,
+                    "source_url": page.source_url,
+                    "score": 0,
+                    "reasons": [f"language does not match target {profile.target_language}"],
+                    "content_type": "language_mismatch",
+                }
+            )
+            continue
         quality = score_page(page, profile)
         if not quality.accepted:
             rejected.append(rejection_row(page, quality))
@@ -535,6 +606,22 @@ def rejection_row(page: NormalizedPage, quality: QualityResult) -> dict[str, Any
     }
 
 
+def dead_letter_rejections(state: CrawlRunState) -> list[dict[str, Any]]:
+    return [
+        {
+            "title": letter.url,
+            "source_url": letter.url,
+            "score": 0,
+            "reasons": [letter.error],
+            "content_type": f"network_{letter.stage}",
+            "attempts": letter.attempts,
+            "status": letter.status,
+            "transient": letter.transient,
+        }
+        for letter in state.dead_letters
+    ]
+
+
 def write_rejections(target: Path, rejected: list[dict[str, Any]]) -> None:
     path = target / "_rejected.jsonl"
     if not rejected:
@@ -578,6 +665,31 @@ def public_crawl_target(url: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def crawl_state_dir(options: CrawlOptions, vendor: str, library: str, version: str) -> Path | None:
+    if options.crawldir is not None:
+        return options.crawldir
+    root = os.environ.get("OZ_CRAWLER_CHECKPOINT_DIR")
+    if not root:
+        return None
+    safe = slugify(f"{vendor}-{library}-{version}")
+    return Path(root) / safe
+
+
+def restored_pages(state: CrawlRunState) -> list[CrawledPage]:
+    return [
+        CrawledPage(source_url=str(row["source_url"]), html=str(row["html"]), title=str(row.get("title") or "") or None)
+        for row in state.restored_pages
+    ]
+
+
+def per_host_concurrency(global_concurrency: int) -> int:
+    try:
+        configured = int(os.environ.get("OZ_CRAWLER_PER_HOST_CONCURRENCY", "2"))
+    except ValueError:
+        configured = 2
+    return max(1, min(max(1, global_concurrency), configured))
 
 
 def doc_url_score(url: str) -> int:

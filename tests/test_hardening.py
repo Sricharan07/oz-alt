@@ -104,6 +104,39 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(response.body, b"ok")
         self.assertEqual(seen_host, [f"example.test:{server.port}"])
 
+    def test_public_fetch_retries_transient_failures(self) -> None:
+        calls: list[str] = []
+
+        def fake_once(*_args: object, **_kwargs: object) -> security.PinnedFetchResponse:
+            calls.append("call")
+            if len(calls) == 1:
+                raise security.CrawlerFetchError("temporary 503", status=503, transient=True)
+            return security.PinnedFetchResponse("https://docs.example/a", b"ok", {}, 200)
+
+        with patch("oz_crawler.security.fetch_public_url_once", side_effect=fake_once), patch(
+            "oz_crawler.security.time.sleep"
+        ) as sleep:
+            response = security.fetch_public_url("https://docs.example/a", attempts=2)
+
+        self.assertEqual(response.body, b"ok")
+        self.assertEqual(len(calls), 2)
+        sleep.assert_called_once()
+
+    def test_public_fetch_enforces_max_bytes(self) -> None:
+        seen_host: list[str] = []
+        server = OneShotHttpServer(seen_host, body=b"0123456789")
+        server.start()
+
+        try:
+            with EnvPatch(OZ_CRAWLER_ALLOW_PRIVATE_NETWORKS="1"), patch(
+                "oz_crawler.security.socket.getaddrinfo",
+                return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", server.port))],
+            ):
+                with self.assertRaisesRegex(security.CrawlerFetchError, "exceeded 4 bytes"):
+                    security.fetch_public_url(f"http://example.test:{server.port}/docs", max_bytes=4, attempts=1)
+        finally:
+            server.stop()
+
     def test_admin_rows_escape_dynamic_values(self) -> None:
         malicious = '<script>alert("x")</script>'
         html = "\n".join(
@@ -127,8 +160,10 @@ class HardeningTests(unittest.TestCase):
 
 
 class OneShotHttpServer:
-    def __init__(self, seen_host: list[str]) -> None:
+    def __init__(self, seen_host: list[str], *, body: bytes = b"ok", status: int = 200) -> None:
         self.seen_host = seen_host
+        self.body = body
+        self.status = status
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 0))
@@ -159,12 +194,12 @@ class OneShotHttpServer:
                 data += chunk
             self.seen_host.append(host_header(data))
             conn.sendall(
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Type: text/plain\r\n"
-                b"Content-Length: 2\r\n"
-                b"Connection: close\r\n"
-                b"\r\n"
-                b"ok"
+                f"HTTP/1.1 {self.status} OK\r\n".encode("ascii")
+                + b"Content-Type: text/plain\r\n"
+                + f"Content-Length: {len(self.body)}\r\n".encode("ascii")
+                + b"Connection: close\r\n"
+                + b"\r\n"
+                + self.body
             )
 
 

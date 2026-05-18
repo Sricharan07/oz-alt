@@ -44,9 +44,13 @@ class LibraryProfile:
     preferred_urls: list[str] = field(default_factory=list)
     required_topics: list[str] = field(default_factory=list)
     expected_symbols: list[str] = field(default_factory=list)
+    source_file_patterns: list[str] = field(default_factory=list)
     min_quality_score: float = 0.35
     min_documents: int = 2
     max_junk_ratio: float = 0.25
+    needs_js: bool = False
+    include_source_files: bool = False
+    target_language: str = "en"
 
     @property
     def key(self) -> str:
@@ -85,9 +89,13 @@ def profile_from_row(row: dict[str, Any], *, vendor: str, library: str) -> Libra
         preferred_urls=list_of_strings(row.get("preferred_urls")),
         required_topics=list_of_strings(row.get("required_topics")),
         expected_symbols=list_of_strings(row.get("expected_symbols")),
+        source_file_patterns=list_of_strings(row.get("source_file_patterns")),
         min_quality_score=float(row.get("min_quality_score", 0.35)),
         min_documents=int(row.get("min_documents", 2)),
         max_junk_ratio=float(row.get("max_junk_ratio", 0.25)),
+        needs_js=bool_value(row.get("needs_js")),
+        include_source_files=bool_value(row.get("include_source_files")),
+        target_language=str(row.get("target_language") or "en").strip().lower() or "en",
     )
 
 
@@ -95,6 +103,12 @@ def list_of_strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item).strip()]
+
+
+def bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def url_allowed_by_profile(url: str, profile: LibraryProfile | None) -> bool:

@@ -9,8 +9,10 @@ from urllib.parse import urljoin, urlparse
 
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.parsers import openapi_chunks, type_definition_chunks
+from oz_crawler.parsers.source_code import source_code_chunks, source_language_for_path, source_path_allowed
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
-from oz_crawler.security import assert_public_http_url, fetch_public_url
+from oz_crawler.crawl_runtime import CrawlRunState, max_page_bytes, retry_attempts
+from oz_crawler.security import CrawlerFetchError, assert_public_http_url, fetch_public_url
 from oz_crawler.splitting import document_path, split_llms_full
 from oz_crawler.text import decode_text_response
 
@@ -30,6 +32,7 @@ def collect_source_artifacts(
     pages: list[NormalizedPage],
     *,
     profile: LibraryProfile | None = None,
+    state: CrawlRunState | None = None,
     max_documents: int = 24,
 ) -> list[SourceArtifact]:
     urls = sorted(
@@ -42,11 +45,11 @@ def collect_source_artifacts(
     )
     urls = [url for url in urls if url_allowed_by_profile(url, profile)]
     artifacts: list[SourceArtifact] = []
-    artifacts.extend(llms_artifacts(seed_url, profile=profile, limit=max_documents))
-    artifacts.extend(markdown_url_artifacts(urls, profile=profile, limit=max_documents))
-    artifacts.extend(openapi_artifacts(urls, profile=profile, limit=max_documents))
-    artifacts.extend(type_definition_artifacts(urls, profile=profile, limit=max_documents))
-    artifacts.extend(github_docs_artifacts(urls, profile=profile, limit=max_documents))
+    artifacts.extend(llms_artifacts(seed_url, profile=profile, state=state, limit=max_documents))
+    artifacts.extend(markdown_url_artifacts(urls, profile=profile, state=state, limit=max_documents))
+    artifacts.extend(openapi_artifacts(urls, profile=profile, state=state, limit=max_documents))
+    artifacts.extend(type_definition_artifacts(urls, profile=profile, state=state, limit=max_documents))
+    artifacts.extend(github_docs_artifacts(urls, profile=profile, state=state, limit=max_documents))
     return dedupe_artifacts(artifacts)[:max_documents]
 
 
@@ -63,7 +66,7 @@ def common_source_urls(seed_url: str) -> list[str]:
     ]
 
 
-def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
     parsed = urlparse(seed_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return []
@@ -73,7 +76,7 @@ def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, limit: int)
         url = base + name
         if not url_allowed_by_profile(url, profile):
             continue
-        text = fetch_text(url)
+        text = fetch_text(url, state=state)
         if not text or looks_like_html(text):
             continue
         if "llms-full" not in name:
@@ -97,6 +100,7 @@ def markdown_url_artifacts(
     urls: list[str],
     *,
     profile: LibraryProfile | None,
+    state: CrawlRunState | None,
     limit: int,
 ) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
@@ -106,7 +110,7 @@ def markdown_url_artifacts(
         path = urlparse(url).path.lower()
         if not re.search(r"\.(md|mdx)$", path):
             continue
-        text = fetch_text(url)
+        text = fetch_text(url, state=state)
         if not text or looks_like_html(text):
             continue
         title = markdown_title(text) or url
@@ -123,7 +127,7 @@ def markdown_url_artifacts(
     return output
 
 
-def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
     for url in urls:
         if not url_allowed_by_profile(url, profile):
@@ -131,7 +135,7 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit:
         path = urlparse(url).path.lower()
         if not re.search(r"(openapi|swagger).*\.(json|ya?ml)$", path):
             continue
-        text = fetch_text(url)
+        text = fetch_text(url, state=state)
         if not text or looks_like_html(text):
             continue
         structured = openapi_chunks(text, url, limit=limit - len(output))
@@ -150,7 +154,7 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit:
     return output
 
 
-def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
     for url in urls:
         if not url_allowed_by_profile(url, profile):
@@ -158,7 +162,7 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
         path = urlparse(url).path.lower()
         if not (path.endswith(".d.ts") or path.endswith(".pyi")):
             continue
-        text = fetch_text(url)
+        text = fetch_text(url, state=state)
         if not text:
             continue
         language = "typescript" if path.endswith(".d.ts") else "python"
@@ -178,16 +182,16 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
     return output
 
 
-def github_docs_artifacts(urls: list[str], *, profile: LibraryProfile | None, limit: int) -> list[SourceArtifact]:
+def github_docs_artifacts(urls: list[str], *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
     repos = sorted({repo for url in urls for repo in github_repo(url)})
     output: list[SourceArtifact] = []
     for owner, repo in repos:
-        output.extend(github_root_artifacts(owner, repo, profile=profile, limit=limit - len(output)))
+        output.extend(github_root_artifacts(owner, repo, profile=profile, state=state, limit=limit - len(output)))
         for folder in ("docs", "documentation"):
             remaining = limit - len(output)
             if remaining <= 0:
                 return output
-            output.extend(github_folder_artifacts(owner, repo, folder, profile=profile, limit=remaining))
+            output.extend(github_folder_artifacts(owner, repo, folder, profile=profile, state=state, limit=remaining))
     return output
 
 
@@ -196,6 +200,7 @@ def github_root_artifacts(
     repo: str,
     *,
     profile: LibraryProfile | None,
+    state: CrawlRunState | None,
     limit: int,
 ) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
@@ -205,7 +210,7 @@ def github_root_artifacts(
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/{name}"
         if not url_allowed_by_profile(url, profile):
             continue
-        artifact = github_file_artifact(owner, repo, name, url)
+        artifact = github_file_artifact(owner, repo, name, url, profile=profile, state=state)
         if artifact:
             output.append(artifact)
     return output
@@ -217,12 +222,13 @@ def github_folder_artifacts(
     folder: str,
     *,
     profile: LibraryProfile | None,
+    state: CrawlRunState | None,
     limit: int,
     depth: int = 0,
 ) -> list[SourceArtifact]:
     if limit <= 0 or depth > 3:
         return []
-    listing = fetch_json(f"https://api.github.com/repos/{owner}/{repo}/contents/{folder}")
+    listing = fetch_json(f"https://api.github.com/repos/{owner}/{repo}/contents/{folder}", state=state)
     if not isinstance(listing, list):
         return []
     output: list[SourceArtifact] = []
@@ -238,12 +244,13 @@ def github_folder_artifacts(
                     repo,
                     item_path,
                     profile=profile,
+                    state=state,
                     limit=limit - len(output),
                     depth=depth + 1,
                 )
             )
         else:
-            artifact = github_file_artifact(owner, repo, name, item.get("download_url"))
+            artifact = github_file_artifact(owner, repo, item_path, item.get("download_url"), profile=profile, state=state)
             if artifact:
                 output.append(artifact)
         if len(output) >= limit:
@@ -251,12 +258,25 @@ def github_folder_artifacts(
     return output
 
 
-def github_file_artifact(owner: str, repo: str, name: str, download_url: Any) -> SourceArtifact | None:
-    if not download_url or not re.search(r"\.(md|mdx|d\.ts|pyi)$", name, re.I):
+def github_file_artifact(
+    owner: str,
+    repo: str,
+    name: str,
+    download_url: Any,
+    *,
+    profile: LibraryProfile | None,
+    state: CrawlRunState | None,
+) -> SourceArtifact | None:
+    if not download_url or not github_artifact_path_allowed(name, profile):
         return None
-    text = fetch_text(str(download_url))
+    text = fetch_text(str(download_url), state=state)
     if not text:
         return None
+    if source_path_allowed(name, profile.source_file_patterns if profile else []):
+        language = source_language_for_path(name)
+        structured = source_code_chunks(text, str(download_url), language=language, limit=1)
+        if structured:
+            return SourceArtifact(**structured[0])
     return SourceArtifact(
         path=f"guides/github-{slugify(owner + '-' + repo + '-' + name)}.md",
         title=f"{owner}/{repo} {name}",
@@ -359,8 +379,8 @@ def github_repo(url: str) -> list[tuple[str, str]]:
     return []
 
 
-def fetch_json(url: str):
-    text = fetch_text(url)
+def fetch_json(url: str, *, state: CrawlRunState | None = None):
+    text = fetch_text(url, state=state)
     if not text:
         return None
     try:
@@ -369,12 +389,41 @@ def fetch_json(url: str):
         return None
 
 
-def fetch_text(url: str) -> str | None:
+def fetch_text(url: str, *, state: CrawlRunState | None = None) -> str | None:
     try:
         assert_public_http_url(url)
-        response = fetch_public_url(url, timeout=20)
+        extra_headers = state.cache.conditional_headers(url) if state else {}
+        response = fetch_public_url(
+            url,
+            timeout=20,
+            max_bytes=max_page_bytes(),
+            extra_headers=extra_headers,
+            attempts=retry_attempts(),
+        )
+        if response.status == 304 and state is not None:
+            cached = state.cache.cached_body(url)
+            if cached is not None:
+                return decode_text_response(cached, response.headers.get("content-type"))
+            return None
+        if state is not None:
+            state.cache.store(url, response.body, response.headers, response.status)
         return decode_text_response(response.body, response.headers.get("content-type"))
+    except CrawlerFetchError as exc:
+        if state is not None:
+            state.record_dead_letter(
+                url,
+                stage="source_fetch",
+                error=str(exc),
+                attempts=retry_attempts(),
+                status=exc.status,
+                retry_after=exc.retry_after,
+                transient=exc.transient,
+            )
+        LOGGER.info("optional source fetch failed for %s: %s", url, exc)
+        return None
     except Exception as exc:
+        if state is not None:
+            state.record_dead_letter(url, stage="source_fetch", error=str(exc), attempts=1)
         LOGGER.info("optional source fetch failed for %s: %s", url, exc)
         return None
 
@@ -395,3 +444,9 @@ def dedupe_artifacts(artifacts: list[SourceArtifact]) -> list[SourceArtifact]:
 def slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
     return slug[:100] or "source"
+
+
+def github_artifact_path_allowed(name: str, profile: LibraryProfile | None) -> bool:
+    if re.search(r"\.(md|mdx|d\.ts|pyi)$", name, re.I):
+        return True
+    return bool(profile and profile.include_source_files and source_path_allowed(name, profile.source_file_patterns))

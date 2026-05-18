@@ -121,6 +121,12 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
       <input id="required_topics" name="required_topics" placeholder="routing, middleware, cookies">
       <label for="expected_symbols">Expected symbols</label>
       <input id="expected_symbols" name="expected_symbols" placeholder="NextRequest, NextResponse">
+      <label for="source_file_patterns">Source file patterns</label>
+      <input id="source_file_patterns" name="source_file_patterns" placeholder="/src/, *.ts, *.py">
+      <label for="target_language">Target language</label>
+      <input id="target_language" name="target_language" value="en">
+      <label><input name="needs_js" type="checkbox" value="1"> Needs JavaScript rendering</label>
+      <label><input name="include_source_files" type="checkbox" value="1"> Include documented source files</label>
       <button class="primary" type="submit">Save profile</button>
     </form>
     <form class="panel" method="post" action="/admin/users/invite">
@@ -173,7 +179,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <h2>Freshness Policies</h2>
   <table><thead><tr><th>Library</th><th>Source</th><th>Interval</th><th>Enabled</th><th>Updated</th></tr></thead><tbody>{policy_rows}</tbody></table>
   <h2>Library Profiles</h2>
-  <table><thead><tr><th>Library</th><th>Allowed Hosts</th><th>Required Topics</th><th>Expected Symbols</th><th>Updated</th></tr></thead><tbody>{profile_rows}</tbody></table>
+  <table><thead><tr><th>Library</th><th>Allowed Hosts</th><th>Required Topics</th><th>Expected Symbols</th><th>Source Patterns</th><th>Lang</th><th>JS</th><th>Source</th><th>Updated</th></tr></thead><tbody>{profile_rows}</tbody></table>
   <h2>Promotion History</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Ref</th><th>Pack</th><th>Promoted</th></tr></thead><tbody>{promotion_rows}</tbody></table>
   <h2>Quality Runs</h2>
@@ -264,7 +270,8 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
         "library_profiles": db_rows(
             """
             select v.name as vendor, l.name as library, p.allowed_hosts, p.required_topics,
-                   p.expected_symbols, p.updated_at::text as updated_at
+                   p.expected_symbols, p.source_file_patterns, p.needs_js, p.include_source_files,
+                   p.target_language, p.updated_at::text as updated_at
             from library_profiles p
             join libraries l on l.id = p.library_id
             join vendors v on v.id = l.vendor_id
@@ -679,6 +686,10 @@ def render_profile_row(row: dict[str, Any]) -> str:
         f"<tr><td>{esc(library)}</td><td>{esc(join_json_list(row.get('allowed_hosts')))}</td>"
         f"<td>{esc(join_json_list(row.get('required_topics')))}</td>"
         f"<td>{esc(join_json_list(row.get('expected_symbols')))}</td>"
+        f"<td>{esc(join_json_list(row.get('source_file_patterns')))}</td>"
+        f"<td>{esc(row.get('target_language'))}</td>"
+        f"<td>{esc(row.get('needs_js'))}</td>"
+        f"<td>{esc(row.get('include_source_files'))}</td>"
         f"<td>{esc(row.get('updated_at'))}</td></tr>"
     )
 
