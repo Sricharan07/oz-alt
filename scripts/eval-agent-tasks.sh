@@ -14,7 +14,7 @@ oz() {
   OZ_DISABLE_KEYCHAIN=1 HOME="$tmp_home" target/debug/oz "$@"
 }
 
-oz registry build-packs >/dev/null
+oz dev registry build-packs >/dev/null
 oz init >/dev/null
 rm -rf .codo/vendors
 

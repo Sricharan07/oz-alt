@@ -4,7 +4,7 @@
 
 ```text
 registry/fixtures/<vendor>/<library>/<version>/
-    -> oz registry build-packs
+    -> oz dev registry build-packs
 registry/packs/<vendor>/<library>/<version>.ozpack
     -> oz pull / oz search auto-pull
     -> ~/.codo/objects/blobs/<prefix>/<sha256>

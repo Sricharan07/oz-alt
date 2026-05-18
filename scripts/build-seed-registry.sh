@@ -29,4 +29,4 @@ PY
     "${validation_flag[@]}"
 done
 
-cargo run -p oz -- registry build-packs
+cargo run -p oz -- dev registry build-packs

@@ -7,7 +7,7 @@ pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
         config.api_url = Some(api_url.trim_end_matches('/').to_string());
     }
     if config.api_url.is_none() {
-        config.api_url = Some("http://127.0.0.1:8765".to_string());
+        config.api_url = Some(DEFAULT_API_URL.to_string());
     }
 
     let start: DeviceStartResponse = api_post_json_without_auth(
@@ -49,6 +49,48 @@ pub(crate) fn login(api_url: Option<&str>) -> Result<()> {
         }
     );
     Ok(())
+}
+
+pub(crate) fn setup(
+    project_root: &Path,
+    api_url: Option<&str>,
+    skip_login: bool,
+    skip_install: bool,
+) -> Result<()> {
+    let mut config = read_config()?;
+    let mut changed_config = false;
+    if let Some(api_url) = api_url {
+        config.api_url = Some(api_url.trim_end_matches('/').to_string());
+        changed_config = true;
+    }
+    if config.api_url.is_none() && !skip_login {
+        config.api_url = Some(DEFAULT_API_URL.to_string());
+        changed_config = true;
+    }
+    if changed_config {
+        write_config(&config)?;
+    }
+
+    if !skip_login && auth_token(&config).is_none() && refresh_token(&config).is_none() {
+        login(None)?;
+    }
+
+    init_project(project_root)?;
+
+    if !skip_install {
+        install_skill(
+            project_root,
+            InstallTargets {
+                codex: false,
+                claude_code: false,
+                cursor: false,
+                cline: false,
+                continue_agent: false,
+            },
+        )?;
+    }
+
+    doctor(project_root)
 }
 
 fn telemetry_preference() -> Result<bool> {
@@ -333,12 +375,15 @@ pub(crate) fn suggest_libraries(project_root: &Path, query: &str, json: bool) ->
         .into_iter()
         .take(10)
         .map(|(score, library)| {
+            let scope = format!("{}/{}", library.vendor, library.library);
             serde_json::json!({
                 "vendor": library.vendor,
                 "library": library.library,
                 "version": library.version,
                 "score": score,
                 "reason": library.description,
+                "pull_command": format!("oz pull {scope}"),
+                "search_command": format!("oz search {:?} {scope}", query),
             })
         })
         .collect::<Vec<_>>();
@@ -356,6 +401,14 @@ pub(crate) fn suggest_libraries(project_root: &Path, query: &str, json: bool) ->
                 result["version"].as_str().unwrap_or_default(),
                 result["score"].as_u64().unwrap_or_default(),
                 result["reason"].as_str().unwrap_or_default()
+            );
+            println!(
+                "  pull:   {}",
+                result["pull_command"].as_str().unwrap_or_default()
+            );
+            println!(
+                "  search: {}",
+                result["search_command"].as_str().unwrap_or_default()
             );
         }
     }
@@ -416,13 +469,22 @@ fn suggest_libraries_remote(
 
     warn_stale_response(&response.stale_libraries);
     if json {
-        println!("{}", serde_json::to_string_pretty(&response)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "results": suggest_results_with_commands(query, &response.results),
+                "stale_libraries": response.stale_libraries,
+            }))?
+        );
     } else {
         for result in &response.results {
+            let scope = format!("{}/{}", result.vendor, result.library);
             println!(
                 "{}/{}@{}  score={}  {}",
                 result.vendor, result.library, result.version, result.score, result.reason
             );
+            println!("  pull:   oz pull {scope}");
+            println!("  search: oz search {:?} {scope}", query);
         }
     }
     emit_telemetry(
@@ -434,6 +496,24 @@ fn suggest_libraries_remote(
         }),
     );
     Ok(())
+}
+
+fn suggest_results_with_commands(query: &str, results: &[SuggestResult]) -> Vec<serde_json::Value> {
+    results
+        .iter()
+        .map(|result| {
+            let scope = format!("{}/{}", result.vendor, result.library);
+            serde_json::json!({
+                "vendor": result.vendor,
+                "library": result.library,
+                "version": result.version,
+                "score": result.score,
+                "reason": result.reason,
+                "pull_command": format!("oz pull {scope}"),
+                "search_command": format!("oz search {:?} {scope}", query),
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn update_libraries(project_root: &Path, scope: Option<&str>) -> Result<()> {
@@ -472,7 +552,13 @@ pub(crate) fn update_libraries(project_root: &Path, scope: Option<&str>) -> Resu
     Ok(())
 }
 
-pub(crate) fn registry_command(project_root: &Path, command: RegistryCommand) -> Result<()> {
+pub(crate) fn dev_command(project_root: &Path, command: DevCommand) -> Result<()> {
+    match command {
+        DevCommand::Registry { command } => registry_command(project_root, command),
+    }
+}
+
+fn registry_command(project_root: &Path, command: RegistryCommand) -> Result<()> {
     match command {
         RegistryCommand::Catalog => {
             let catalog = build_catalog(project_root)?;

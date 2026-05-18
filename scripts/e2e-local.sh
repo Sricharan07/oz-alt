@@ -41,7 +41,7 @@ oz() {
   OZ_DISABLE_KEYCHAIN=1 HOME="$tmp_home" target/debug/oz "$@"
 }
 
-oz registry build-packs
+oz dev registry build-packs
 oz init
 oz suggest "JWT authentication in Next.js middleware"
 oz suggest "JWT authentication in Next.js middleware" --json >/dev/null

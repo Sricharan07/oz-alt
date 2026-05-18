@@ -131,28 +131,57 @@ fn search_docs_remote(
     library_scope: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let lock = read_lock(project_root)?;
-    let response: SearchResponse = api_post_json(
-        config,
-        "/search",
-        serde_json::json!({
-            "query": query,
-            "project_fingerprint": lock.project_fingerprint,
-            "installed_libraries": installed_libraries_payload(&lock),
-            "library_scope": library_scope,
-            "max_results": 20,
-        }),
-    )?;
+    let mut selected_library = None;
+    let mut response = if library_scope.is_none() {
+        let suggestions = remote_suggestions(project_root, config, query, 5)?;
+        if let Some(suggestion) = auto_select_suggestion(&suggestions) {
+            let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+            let spec = format!("{scope}@{}", suggestion.version);
+            pull_library_impl(project_root, &spec, true)?;
+            selected_library = Some(scope.clone());
+            remote_search_with_pulls(project_root, config, query, Some(&scope), 20)?
+        } else if !suggestions.is_empty() {
+            let fallback = remote_search_with_pulls(project_root, config, query, None, 20)?;
+            if fallback.results.is_empty() {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "results": [],
+                            "suggestions": actionable_suggestions(query, &suggestions),
+                        }))?
+                    );
+                } else {
+                    eprintln!("oz: choose a library and rerun search:");
+                    print_actionable_suggestions(query, &suggestions);
+                }
+                return Ok(());
+            }
+            fallback
+        } else {
+            remote_search_with_pulls(project_root, config, query, None, 20)?
+        }
+    } else {
+        remote_search_with_pulls(project_root, config, query, library_scope, 20)?
+    };
 
-    for library in &response.libraries_to_pull {
-        let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
-        pull_library_impl(project_root, &spec, true)?;
+    if response.results.is_empty() && library_scope.is_some() {
+        let scope = library_scope.expect("checked is_some");
+        pull_library_impl(project_root, scope, true)?;
+        response = remote_search_with_pulls(project_root, config, query, Some(scope), 20)?;
     }
 
     warn_stale_response(&response.stale_libraries);
     if json {
-        println!("{}", serde_json::to_string_pretty(&response)?);
+        let mut value = serde_json::to_value(&response)?;
+        if let Some(scope) = selected_library {
+            value["selected_library"] = serde_json::Value::String(scope);
+        }
+        println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
+        if let Some(scope) = selected_library {
+            eprintln!("oz: selected {scope} from suggestions");
+        }
         for result in &response.results {
             if let Some(line) = result.line {
                 println!("{}:{}", result.path, line);
@@ -179,6 +208,39 @@ fn remote_context_hits(
     query: &str,
     library_scope: Option<&str>,
 ) -> Result<Vec<(String, usize)>> {
+    let mut response = if library_scope.is_none() {
+        let suggestions = remote_suggestions(project_root, config, query, 5)?;
+        if let Some(suggestion) = auto_select_suggestion(&suggestions) {
+            let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+            let spec = format!("{scope}@{}", suggestion.version);
+            pull_library_impl(project_root, &spec, true)?;
+            remote_search_with_pulls(project_root, config, query, Some(&scope), 20)?
+        } else {
+            remote_search_with_pulls(project_root, config, query, None, 20)?
+        }
+    } else {
+        remote_search_with_pulls(project_root, config, query, library_scope, 20)?
+    };
+    if response.results.is_empty() && library_scope.is_some() {
+        let scope = library_scope.expect("checked is_some");
+        pull_library_impl(project_root, scope, true)?;
+        response = remote_search_with_pulls(project_root, config, query, Some(scope), 20)?;
+    }
+    warn_stale_response(&response.stale_libraries);
+    Ok(response
+        .results
+        .into_iter()
+        .map(|row| (row.path, row.line.unwrap_or(1)))
+        .collect())
+}
+
+fn remote_search_with_pulls(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    library_scope: Option<&str>,
+    max_results: usize,
+) -> Result<SearchResponse> {
     let lock = read_lock(project_root)?;
     let response: SearchResponse = api_post_json(
         config,
@@ -188,19 +250,93 @@ fn remote_context_hits(
             "project_fingerprint": lock.project_fingerprint,
             "installed_libraries": installed_libraries_payload(&lock),
             "library_scope": library_scope,
-            "max_results": 20,
+            "max_results": max_results,
         }),
     )?;
     for library in &response.libraries_to_pull {
         let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
         pull_library_impl(project_root, &spec, true)?;
     }
+    Ok(response)
+}
+
+fn remote_suggestions(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<SuggestResult>> {
+    let lock = read_lock(project_root)?;
+    let response: SuggestResponse = api_post_json(
+        config,
+        "/suggest",
+        serde_json::json!({
+            "query": query,
+            "project_fingerprint": lock.project_fingerprint,
+            "installed_libraries": installed_libraries_payload(&lock),
+            "max_results": max_results,
+        }),
+    )?;
     warn_stale_response(&response.stale_libraries);
-    Ok(response
-        .results
-        .into_iter()
-        .map(|row| (row.path, row.line.unwrap_or(1)))
-        .collect())
+    Ok(response.results)
+}
+
+fn auto_select_suggestion(suggestions: &[SuggestResult]) -> Option<&SuggestResult> {
+    let first = suggestions.first()?;
+    let first_score = score_as_f64(&first.score);
+    if suggestions.len() == 1 {
+        return (first_score > 0.0).then_some(first);
+    }
+    let second_score = suggestions
+        .get(1)
+        .map(|suggestion| score_as_f64(&suggestion.score))
+        .unwrap_or(0.0);
+    let normalized_confident = first_score <= 1.0 && first_score >= 0.75;
+    let clearly_separated = first_score > 0.0 && first_score >= second_score * 1.25;
+    if normalized_confident || clearly_separated {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+fn score_as_f64(value: &serde_json::Value) -> f64 {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|item| item as f64))
+        .or_else(|| value.as_u64().map(|item| item as f64))
+        .unwrap_or(0.0)
+}
+
+fn actionable_suggestions(query: &str, suggestions: &[SuggestResult]) -> Vec<serde_json::Value> {
+    suggestions
+        .iter()
+        .take(3)
+        .map(|suggestion| {
+            let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+            serde_json::json!({
+                "vendor": suggestion.vendor,
+                "library": suggestion.library,
+                "version": suggestion.version,
+                "score": suggestion.score,
+                "reason": suggestion.reason,
+                "pull_command": format!("oz pull {scope}"),
+                "search_command": format!("oz search {:?} {scope}", query),
+            })
+        })
+        .collect()
+}
+
+fn print_actionable_suggestions(query: &str, suggestions: &[SuggestResult]) {
+    for suggestion in suggestions.iter().take(3) {
+        let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+        println!(
+            "{scope}@{}  score={}  {}",
+            suggestion.version, suggestion.score, suggestion.reason
+        );
+        println!("  pull:   oz pull {scope}");
+        println!("  search: oz search {:?} {scope}", query);
+    }
 }
 
 fn local_context_hits(
@@ -583,4 +719,49 @@ fn compact(value: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .flat_map(|ch| ch.to_lowercase())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn suggestion(library: &str, score: serde_json::Value) -> SuggestResult {
+        SuggestResult {
+            vendor: "vendor".to_string(),
+            library: library.to_string(),
+            version: "latest".to_string(),
+            score,
+            reason: "matched".to_string(),
+        }
+    }
+
+    #[test]
+    fn auto_selects_only_clear_suggestions() {
+        let strong = vec![
+            suggestion("react", serde_json::json!(10)),
+            suggestion("next", serde_json::json!(5)),
+        ];
+        assert_eq!(
+            auto_select_suggestion(&strong).map(|item| item.library.as_str()),
+            Some("react")
+        );
+
+        let ambiguous = vec![
+            suggestion("react", serde_json::json!(10)),
+            suggestion("preact", serde_json::json!(9)),
+        ];
+        assert!(auto_select_suggestion(&ambiguous).is_none());
+    }
+
+    #[test]
+    fn auto_selects_normalized_high_confidence_scores() {
+        let suggestions = vec![
+            suggestion("stripe", serde_json::json!(0.82)),
+            suggestion("next", serde_json::json!(0.7)),
+        ];
+        assert_eq!(
+            auto_select_suggestion(&suggestions).map(|item| item.library.as_str()),
+            Some("stripe")
+        );
+    }
 }

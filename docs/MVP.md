@@ -9,7 +9,7 @@ Implemented:
 - Keychain-backed login with file fallback.
 - Agent skill install for Codex, Claude Code, Cursor, Cline, and Continue.
 - Local content-addressed object store at `~/.codo/objects`.
-- Pack-backed `oz pull`, hardlink materialization, update, status, doctor, config, and machine-wide GC tracking initialized projects.
+- Pack-backed `oz pull`, hardlink materialization, update, status, doctor, config, user-facing prune, and machine-wide object cleanup tracking initialized projects.
 - Catalog-backed local `oz suggest` fallback.
 - API-backed semantic `oz suggest` and `oz search`, with pgvector/FTS chunk retrieval, optional rerank, and auto-pull for returned coordinates.
 - Local and S3-backed pack/catalog storage. Admin/product state is in Postgres.

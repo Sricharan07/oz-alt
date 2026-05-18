@@ -71,6 +71,92 @@ pub(crate) fn gc(project_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn prune_libraries(
+    project_root: &Path,
+    scope: Option<&str>,
+    all: bool,
+    stale: bool,
+) -> Result<()> {
+    let selector_count = usize::from(scope.is_some()) + usize::from(all) + usize::from(stale);
+    if selector_count == 0 {
+        bail!("specify a library, --stale, or --all");
+    }
+    if selector_count > 1 {
+        bail!("use only one prune selector: library, --stale, or --all");
+    }
+
+    let parsed_scope = scope.map(parse_scope).transpose()?;
+    let config = read_config().unwrap_or_default();
+    let mut lock = read_lock(project_root)?;
+    let original_pulls = lock.pulls.clone();
+    let mut kept = Vec::new();
+    let mut pruned = Vec::new();
+
+    for pull in original_pulls {
+        let matches_scope = parsed_scope
+            .as_ref()
+            .map(|(vendor, library)| pull.vendor == *vendor && pull.library == *library)
+            .unwrap_or(false);
+        let matches_stale = if stale {
+            latest_version_for(project_root, &config, &pull.vendor, &pull.library)?
+                .map(|latest| latest != pull.version)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let should_prune = all || matches_scope || matches_stale;
+        if should_prune {
+            remove_pull_tree(project_root, &pull)?;
+            pruned.push(pull);
+        } else {
+            kept.push(pull);
+        }
+    }
+
+    if pruned.is_empty() {
+        bail!("no pulled libraries matched prune selector");
+    }
+
+    lock.pulls = kept;
+    lock.generated_at = Utc::now().to_rfc3339();
+    write_lock(project_root, &lock)?;
+    gc(project_root)?;
+
+    for pull in &pruned {
+        println!("pruned {}/{}@{}", pull.vendor, pull.library, pull.version);
+    }
+    emit_telemetry(
+        &config,
+        "prune_run",
+        serde_json::json!({
+            "count": pruned.len(),
+            "scope": scope,
+            "all": all,
+            "stale": stale,
+        }),
+    );
+    Ok(())
+}
+
+fn remove_pull_tree(project_root: &Path, pull: &PulledLibrary) -> Result<()> {
+    let path = project_root.join(&pull.path);
+    let vendors_root = project_root.join(VENDORS_DIR);
+    if !path.starts_with(&vendors_root) {
+        bail!("refusing to prune non-vendor path {}", path.display());
+    }
+    if path.exists() {
+        fs::remove_dir_all(&path)
+            .with_context(|| format!("failed to remove {}", path.display()))?;
+    }
+    if let Some(parent) = path.parent() {
+        if parent != vendors_root && parent.exists() && fs::read_dir(parent)?.next().is_none() {
+            fs::remove_dir(parent)
+                .with_context(|| format!("failed to remove {}", parent.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn referenced_object_shas(project_root: &Path) -> Result<BTreeSet<String>> {
     let mut referenced = BTreeSet::new();
     let mut roots = registered_projects().unwrap_or_default();

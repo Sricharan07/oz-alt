@@ -40,6 +40,7 @@ const REGISTRY_DIR: &str = "registry";
 const FIXTURES_DIR: &str = "registry/fixtures";
 const PACKS_DIR: &str = "registry/packs";
 const CATALOG_FILE: &str = "registry/catalog.json";
+const DEFAULT_API_URL: &str = "https://api.tryoz.dev";
 const SKILL_START: &str = "<!-- oz-skill:start -->";
 const SKILL_END: &str = "<!-- oz-skill:end -->";
 const KEYCHAIN_SERVICE: &str = "dev.oz.auth-token";
@@ -56,9 +57,24 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Set up Oz in this project: login, init, install agent instructions, and run doctor.
+    Setup {
+        /// Registry API URL. Defaults to https://api.tryoz.dev.
+        #[arg(long)]
+        api_url: Option<String>,
+
+        /// Do not start browser/device login.
+        #[arg(long)]
+        skip_login: bool,
+
+        /// Do not install agent instructions.
+        #[arg(long)]
+        skip_install: bool,
+    },
+
     /// Log in to an Oz registry API and store a local token.
     Login {
-        /// Registry API URL, for example http://127.0.0.1:8765.
+        /// Registry API URL. Defaults to https://api.tryoz.dev.
         #[arg(long)]
         api_url: Option<String>,
     },
@@ -66,7 +82,7 @@ enum Command {
     /// Initialize Oz metadata in the current project.
     Init,
 
-    /// Pull docs for a library from the local development registry.
+    /// Pull docs for a library.
     Pull {
         /// Library specs, for example vercel/next.js@15.
         libraries: Vec<String>,
@@ -82,7 +98,7 @@ enum Command {
         json: bool,
     },
 
-    /// Search already-pulled docs with local metadata-aware ranking.
+    /// Search docs, auto-pulling missing libraries when possible.
     Search {
         /// Query text.
         query: String,
@@ -121,8 +137,19 @@ enum Command {
         library: Option<String>,
     },
 
-    /// Remove temporary files and report object-store state.
-    Gc,
+    /// Remove pulled local docs and clean unused object-store blobs.
+    Prune {
+        /// Optional library scope, for example vercel/next.js.
+        library: Option<String>,
+
+        /// Remove every pulled library from this project.
+        #[arg(long)]
+        all: bool,
+
+        /// Remove pulled libraries that have newer versions available.
+        #[arg(long)]
+        stale: bool,
+    },
 
     /// Read or write local Oz configuration.
     Config {
@@ -130,10 +157,11 @@ enum Command {
         command: ConfigCommand,
     },
 
-    /// Local registry maintenance commands.
-    Registry {
+    /// Developer/operator maintenance commands.
+    #[command(hide = true)]
+    Dev {
         #[command(subcommand)]
-        command: RegistryCommand,
+        command: DevCommand,
     },
 
     /// Validate the local Oz project and object store.
@@ -160,6 +188,15 @@ enum ConfigCommand {
     Get { key: String },
     Set { key: String, value: String },
     Unset { key: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum DevCommand {
+    /// Local registry maintenance commands.
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -350,6 +387,11 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Command::Setup {
+            api_url,
+            skip_login,
+            skip_install,
+        } => setup(&project_root, api_url.as_deref(), skip_login, skip_install)?,
         Command::Login { api_url } => login(api_url.as_deref())?,
         Command::Init => init_project(&project_root)?,
         Command::Pull { libraries } => {
@@ -374,9 +416,13 @@ fn main() -> Result<()> {
         } => context_docs(&project_root, &query, library.as_deref(), max_tokens, json)?,
         Command::Status => print_status(&project_root)?,
         Command::Update { library } => update_libraries(&project_root, library.as_deref())?,
-        Command::Gc => gc(&project_root)?,
+        Command::Prune {
+            library,
+            all,
+            stale,
+        } => prune_libraries(&project_root, library.as_deref(), all, stale)?,
         Command::Config { command } => config(command)?,
-        Command::Registry { command } => registry_command(&project_root, command)?,
+        Command::Dev { command } => dev_command(&project_root, command)?,
         Command::Doctor => doctor(&project_root)?,
         Command::Install {
             codex,
@@ -402,12 +448,19 @@ fn main() -> Result<()> {
 fn should_check_freshness(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Login { .. } | Command::Config { .. } | Command::Registry { .. } | Command::Init
+        Command::Setup { .. }
+            | Command::Login { .. }
+            | Command::Config { .. }
+            | Command::Dev { .. }
+            | Command::Init
     )
 }
 
 fn should_sync_skill(command: &Command) -> bool {
-    !matches!(command, Command::Install { .. } | Command::Registry { .. })
+    !matches!(
+        command,
+        Command::Setup { .. } | Command::Install { .. } | Command::Dev { .. }
+    )
 }
 
 fn normalize_query(query: &str) -> Vec<String> {
@@ -499,5 +552,38 @@ mod tests {
                 "client"
             ]
         );
+    }
+
+    #[test]
+    fn parses_setup_command() {
+        let cli = Cli::try_parse_from(["oz", "setup", "--skip-login", "--skip-install"]).unwrap();
+        match cli.command {
+            Command::Setup {
+                skip_login,
+                skip_install,
+                ..
+            } => {
+                assert!(skip_login);
+                assert!(skip_install);
+            }
+            _ => panic!("expected setup command"),
+        }
+    }
+
+    #[test]
+    fn parses_prune_command() {
+        let cli = Cli::try_parse_from(["oz", "prune", "vercel/next.js"]).unwrap();
+        match cli.command {
+            Command::Prune {
+                library,
+                all,
+                stale,
+            } => {
+                assert_eq!(library.as_deref(), Some("vercel/next.js"));
+                assert!(!all);
+                assert!(!stale);
+            }
+            _ => panic!("expected prune command"),
+        }
     }
 }

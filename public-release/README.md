@@ -17,13 +17,14 @@ npm install -g @hiringbae/oz
 ## Connect
 
 ```bash
-oz login --api-url https://api.tryoz.dev
+oz setup
 ```
 
 ## Use
 
 ```bash
-oz pull facebook/react@19
 oz search "useEffect cleanup dependencies" facebook/react
+oz pull facebook/react@19
 oz context "useEffect cleanup dependencies" facebook/react --max-tokens 1200
+oz prune facebook/react
 ```

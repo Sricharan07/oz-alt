@@ -6,7 +6,7 @@ This repository contains the end-to-end beta product:
 
 1. 15 launch libraries crawled into `registry/fixtures`.
 2. Immutable `.ozpack` bundles in `registry/packs`.
-3. A Rust CLI with `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `gc`, `doctor`, and `config`.
+3. A Rust CLI with `setup`, `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `prune`, `doctor`, and `config`.
 4. A Docker-first Python API that serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, user dashboard, and admin routes.
 5. A crawler wired to D4Vinci/Scrapling's Spider/session APIs, with stdlib fallback, chunking, symbol extraction, and optional OpenAI embedding generation.
 6. Docker Compose production services for Postgres/pgvector, Redis, S3-compatible pack storage, API, worker, scheduler, and Caddy.
@@ -41,11 +41,11 @@ bash scripts/eval-agent-tasks.sh
 ## Use The CLI Locally
 
 ```bash
-cargo run -p oz -- registry build-packs
-cargo run -p oz -- init
-cargo run -p oz -- install --codex
+cargo run -p oz -- dev registry build-packs
+cargo run -p oz -- setup --skip-login
 cargo run -p oz -- suggest "JWT authentication in Next.js middleware"
 cargo run -p oz -- search "middleware jwt cookies" vercel/next.js
+cargo run -p oz -- prune --stale
 cargo run -p oz -- status
 ```
 
