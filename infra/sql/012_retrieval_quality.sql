@@ -40,7 +40,7 @@ create index if not exists chunks_parent_idx on chunks(parent_chunk_id);
 create index if not exists chunks_chunk_key_idx on chunks(version_id, chunk_key);
 create index if not exists chunks_parent_key_idx on chunks(version_id, parent_chunk_key);
 create index if not exists chunks_token_count_idx on chunks(version_id, token_count);
-create index if not exists chunks_source_anchor_idx on chunks(version_id, source_anchor);
+create index if not exists chunks_source_anchor_hash_idx on chunks(version_id, md5(coalesce(source_anchor, '')));
 create index if not exists chunks_dedupe_canonical_idx on chunks(version_id, dedupe_canonical);
 create index if not exists chunks_content_api_reference_idx on chunks(version_id, path) where content_type = 'api_reference';
 create index if not exists chunks_content_code_example_idx on chunks(version_id, path) where content_type = 'code_example';
