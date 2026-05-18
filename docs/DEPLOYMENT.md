@@ -180,7 +180,7 @@ Load the generated catalog and chunk index into Postgres after migrations:
 OZ_DATABASE_URL='postgres://...' VOYAGE_API_KEY='...' python3 scripts/index-registry-to-db.py
 ```
 
-The importer writes vendors, libraries, latest refs, trust scores, chunk rows, parent-child links, dedupe clusters, token counts, source anchors, and embeddings. The production default is `voyage-code-3` at 1024 dimensions; set `OZ_EMBEDDING_PROVIDER=openai` only as an explicit fallback. Without embeddings, the same rows remain searchable through Postgres full-text search.
+The importer writes vendors, libraries, latest refs, trust scores, chunk rows, parent-child links, dedupe clusters, token counts, and source anchors. Embeddings are applied by the indexing job layer after chunk rows are durable. The production default is `voyage-code-3` at 1024 dimensions; set `OZ_EMBEDDING_PROVIDER=openai` or `jina` only as an explicit fallback. Without embeddings, the same rows remain searchable through Postgres full-text search.
 
 Recommended hosted quality setup:
 
@@ -188,7 +188,17 @@ Recommended hosted quality setup:
 OZ_EMBEDDING_PROVIDER=voyage
 OZ_EMBEDDING_MODEL=voyage-code-3
 OZ_EMBEDDING_DIMENSIONS=1024
-OZ_EMBEDDING_BATCH_SIZE=64
+OZ_EMBEDDING_BATCH_SIZE=128
+OZ_EMBEDDING_INDEX_MODE=auto
+OZ_EMBEDDING_SYNC_THRESHOLD=500
+OZ_EMBEDDING_SYNC_RPM_LIMIT=1500
+OZ_EMBEDDING_SYNC_TPM_LIMIT=2500000
+OZ_EMBEDDING_BATCH_TIMEOUT_HOURS=18
+OZ_EMBEDDING_CACHE_SCHEMA_VERSION=v1
+OZ_MAX_CHUNKS_PER_LIBRARY=10000
+OZ_MAX_TOKENS_PER_LIBRARY=2000000
+OZ_VOYAGE_BATCH_MAX_INPUTS=100000
+OZ_VOYAGE_BATCH_MAX_BYTES=1000000000
 OZ_REQUIRE_EMBEDDINGS=1
 VOYAGE_API_KEY='...'
 
@@ -200,6 +210,16 @@ ZEROENTROPY_API_KEY='...'
 OZ_TRUST_FETCH_GITHUB=1
 GITHUB_TOKEN='...' # optional but recommended for stable GitHub trust enrichment
 ```
+
+Indexing uses three embedding lanes:
+
+```text
+large Voyage jobs      -> Voyage Batch API, custom_id = chunk_sha, document input_type
+small changed chunks   -> sync embedding API, batched at 128, document input_type
+live search queries    -> sync embedding API, query input_type
+```
+
+`OZ_EMBEDDING_INDEX_MODE=auto` sends libraries with at least `OZ_EMBEDDING_SYNC_THRESHOLD` uncached chunks to the Batch API and embeds smaller changes synchronously. Batch jobs are split at `OZ_VOYAGE_BATCH_MAX_INPUTS` and `OZ_VOYAGE_BATCH_MAX_BYTES`, and a watchdog retries stuck jobs through the sync path after `OZ_EMBEDDING_BATCH_TIMEOUT_HOURS`. Library cost caps abort before embedding when a profile accidentally crawls more than `OZ_MAX_CHUNKS_PER_LIBRARY` chunks or `OZ_MAX_TOKENS_PER_LIBRARY` tokens.
 
 ## Auth
 

@@ -9,6 +9,7 @@ from typing import Any
 from oz_api.admin_ops import (
     get_library_profile,
     mark_crawler_job_completed,
+    mark_crawler_job_embedding_waiting,
     mark_crawler_job_failed,
     mark_crawler_job_started,
     record_crawler_job_log,
@@ -16,6 +17,7 @@ from oz_api.admin_ops import (
     record_quality_run,
     record_catalog_promotion,
 )
+from oz_api.embedding_jobs import poll_pending_embedding_jobs
 from oz_api.auth_store import AuthStore
 from oz_api.indexer import PostgresWriter, write_catalog_and_chunks
 from oz_api.jury import judge_search_check, jury_required, jury_requested
@@ -126,9 +128,34 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         fixture_path=target,
         pack_key=pack_key,
         ref_sha=str(manifest["tree_sha256"]),
+        crawler_job_id=job.get("db_job_id"),
     )
-    index_catalog_entry(storage, catalog_entry)
-    record_crawler_job_log(job, "info", "catalog indexed", {"ref_sha": catalog_entry["ref_sha"]})
+    embedding_results = index_catalog_entry(storage, catalog_entry)
+    record_crawler_job_log(
+        job,
+        "info",
+        "catalog indexed",
+        {
+            "ref_sha": catalog_entry["ref_sha"],
+            "embedding_results": [result.__dict__ for result in embedding_results],
+        },
+    )
+    incomplete = [result for result in embedding_results if not result.complete]
+    if incomplete:
+        waiting = incomplete[0]
+        record_crawler_job_log(
+            job,
+            "info",
+            "promotion waiting for embeddings",
+            {"embedding_status": waiting.status, "embedding_job_id": waiting.job_id, "pending_chunks": waiting.pending_chunks},
+        )
+        mark_crawler_job_embedding_waiting(
+            job,
+            pack_key=pack_key,
+            ref_sha=str(manifest["tree_sha256"]),
+            status=waiting.status,
+        )
+        return
     upsert_catalog_entry(storage, catalog_entry)
     record_eval_run(catalog_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
     record_catalog_promotion(catalog_entry, job, quality)
@@ -145,8 +172,10 @@ def catalog_entry_for_job(
     fixture_path: Path,
     pack_key: str,
     ref_sha: str,
+    crawler_job_id: Any | None = None,
 ) -> dict[str, Any]:
     description = f"Documentation crawled from {source_url}."
+    fixture_value = str(fixture_path) if str(fixture_path) not in {"", "."} else f"registry/fixtures/{vendor}/{library}/{version}"
     return {
         "vendor": vendor,
         "library": library,
@@ -154,10 +183,11 @@ def catalog_entry_for_job(
         "description": description,
         "source_urls": [source_url],
         "keywords": sorted(set(normalize_query(description))),
-        "fixture_path": str(fixture_path),
+        "fixture_path": fixture_value,
         "pack_path": pack_key,
         "ref_sha": ref_sha,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
+        "crawler_job_id": crawler_job_id,
     }
 
 
@@ -180,13 +210,111 @@ def upsert_catalog_entry(storage: RegistryStorage, entry: dict[str, Any]) -> Non
     storage.put_catalog_document(document)
 
 
-def index_catalog_entry(storage: RegistryStorage, entry: dict[str, Any]) -> None:
+def index_catalog_entry(storage: RegistryStorage, entry: dict[str, Any]) -> list[Any]:
     ctx = RetrievalContext.from_env(storage)
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         raise RuntimeError("Postgres connection is required to index crawled docs")
     with connection:
-        write_catalog_and_chunks(PostgresWriter(connection), storage, [entry])
+        return write_catalog_and_chunks(PostgresWriter(connection), storage, [entry])
+
+
+def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
+    ctx = RetrievalContext.from_env(storage)
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return 0
+    ready: list[dict[str, Any]] = []
+    with connection:
+        results = poll_pending_embedding_jobs(connection)
+        writer = PostgresWriter(connection)
+        for result in results:
+            if not result.complete or result.version_id is None or result.job_id is None:
+                continue
+            writer.resolve_parent_chunks(result.version_id)
+            writer.rebuild_dedupe_clusters(result.version_id)
+        ready = ready_embedding_promotion_rows(connection)
+    count = 0
+    for row in ready:
+        if promote_embedding_ready_job(storage, row):
+            count += 1
+    return count
+
+
+def ready_embedding_promotion_rows(connection: Any) -> list[dict[str, Any]]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select ej.id as embedding_job_id,
+                   j.id as db_job_id,
+                   v.name as vendor,
+                   l.name as library,
+                   coalesce(nullif(j.version, ''), lv.version) as version,
+                   j.source_url,
+                   j.pack_key,
+                   j.ref_sha
+            from embedding_jobs ej
+            join library_versions lv on lv.id = ej.version_id
+            join libraries l on l.id = lv.library_id
+            join vendors v on v.id = l.vendor_id
+            left join crawler_jobs j on j.id = ej.crawler_job_id
+            where ej.status in ('embeddings_applied', 'dedupe_done')
+              and j.status = 'batch_running'
+              and j.pack_key is not null
+              and j.ref_sha is not null
+            order by ej.updated_at asc
+            limit 20
+            """,
+        )
+        columns = [getattr(column, "name", column[0]) for column in cursor.description]
+        return [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
+
+
+def promote_embedding_ready_job(storage: RegistryStorage, row: dict[str, Any]) -> bool:
+    entry = catalog_entry_for_job(
+        vendor=str(row["vendor"]),
+        library=str(row["library"]),
+        version=str(row["version"]),
+        source_url=str(row.get("source_url") or ""),
+        fixture_path=Path(""),
+        pack_key=str(row.get("pack_key") or ""),
+        ref_sha=str(row.get("ref_sha") or ""),
+        crawler_job_id=row.get("db_job_id"),
+    )
+    job = {"db_job_id": str(row["db_job_id"])}
+    quality = latest_quality_for_job(row.get("db_job_id"))
+    upsert_catalog_entry(storage, entry)
+    record_catalog_promotion(entry, job, quality)
+    record_crawler_job_log(job, "info", "catalog promoted after embedding batch", {"embedding_job_id": row["embedding_job_id"]})
+    mark_crawler_job_completed(job, pack_key=str(row.get("pack_key") or ""), ref_sha=str(row.get("ref_sha") or ""))
+    store = AuthStore.from_env()
+    if store is not None:
+        store.execute("update embedding_jobs set status = 'promoted', updated_at = now() where id = :id", {"id": row["embedding_job_id"]})
+    return True
+
+
+def latest_quality_for_job(job_id: Any) -> dict[str, Any]:
+    store = AuthStore.from_env()
+    if store is None or not job_id:
+        return {}
+    row = store.one(
+        """
+        select passed, metrics, errors, warnings
+        from quality_runs
+        where job_id = cast(:job_id as bigint)
+        order by created_at desc
+        limit 1
+        """,
+        {"job_id": str(job_id)},
+    )
+    if not row:
+        return {}
+    return {
+        "passed": bool(row.get("passed")),
+        "metrics": row.get("metrics") or {},
+        "errors": row.get("errors") or [],
+        "warnings": row.get("warnings") or [],
+    }
 
 
 def write_job_profile(registry_root: Path, vendor: str, library: str, job: dict[str, Any]) -> None:

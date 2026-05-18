@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 
 from oz_api.admin_ops import mark_crawler_job_failed  # noqa: E402
-from oz_api.crawler_jobs import process_job  # noqa: E402
+from oz_api.crawler_jobs import process_job, process_pending_embedding_promotions  # noqa: E402
 from oz_api.redis_store import redis_client, redis_key  # noqa: E402
 from oz_api.storage import RegistryStorage  # noqa: E402
 
@@ -38,6 +38,10 @@ def main() -> int:
     storage = RegistryStorage.from_env(args.repo_root.resolve())
     queue_name = redis_key("OZ_CRAWLER_REDIS_QUEUE", "oz:crawler:jobs")
     while RUNNING:
+        try:
+            process_pending_embedding_promotions(storage)
+        except Exception as exc:
+            print(f"embedding promotion poll failed: {exc}", file=sys.stderr)
         item = client.blpop(queue_name, timeout=5)
         if item is None:
             if args.once:

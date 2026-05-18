@@ -34,6 +34,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
     eval_rows = "\n".join(render_eval_row(row) for row in snapshot["eval_runs"][:50])
     search_quality_rows = "\n".join(render_search_quality_row(row) for row in snapshot["search_quality_runs"][:50])
     pack_rows = "\n".join(render_pack_row(row) for row in snapshot["pack_builds"][:50])
+    embedding_job_rows = "\n".join(render_embedding_job_row(row, csrf) for row in snapshot["embedding_jobs"][:50])
     backup_rows = "\n".join(render_backup_row(row) for row in snapshot["backup_runs"][:50])
     crawl_log_rows = "\n".join(render_crawl_log_row(row) for row in snapshot["crawl_job_logs"][:80])
     system_check_rows = "\n".join(render_system_check_row(row) for row in snapshot["system_checks"][:50])
@@ -70,6 +71,7 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <div class="metric">Usage events: {len(snapshot["usage_events"])}</div>
   <div class="metric">Users: {len(snapshot["users"])}</div>
   <div class="metric">Crawler jobs: {len(crawler_jobs)}</div>
+  <div class="metric">Embedding jobs: {len(snapshot["embedding_jobs"])}</div>
   <div class="metric">Quality runs: {len(snapshot["quality_runs"])}</div>
   <div class="metric">Eval runs: {len(snapshot["eval_runs"])}</div>
   <div class="metric">Search quality: {len(snapshot["search_quality_runs"])}</div>
@@ -160,6 +162,8 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
   <table><thead><tr><th>Library</th><th>Version</th><th>Passed</th><th>P@1</th><th>P@5</th><th>MRR</th><th>Materialized</th><th>Zero</th><th>Junk</th><th>Created</th></tr></thead><tbody>{search_quality_rows}</tbody></table>
   <h2>Pack Builds</h2>
   <table><thead><tr><th>Library</th><th>Version</th><th>Pack SHA</th><th>Key</th><th>Bytes</th><th>Created</th></tr></thead><tbody>{pack_rows}</tbody></table>
+  <h2>Embedding Jobs</h2>
+  <table><thead><tr><th>Library</th><th>Status</th><th>Mode</th><th>Pending</th><th>Cached</th><th>Embedded</th><th>Failed</th><th>Tokens</th><th>Batch</th><th>Updated</th><th>Error</th><th>Action</th></tr></thead><tbody>{embedding_job_rows}</tbody></table>
   <h2>Backup Runs</h2>
   <table><thead><tr><th>Status</th><th>Key</th><th>Bytes</th><th>SHA256</th><th>Started</th><th>Verified</th><th>Error</th></tr></thead><tbody>{backup_rows}</tbody></table>
   <h2>Zero-result Suggest Queries</h2>
@@ -259,12 +263,25 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
         "crawler_jobs": db_rows(
             """
             select j.id, v.name as vendor, l.name as library_name, j.version, j.source_url, j.status,
-                   j.last_error, j.pack_key, j.ref_sha, j.queued_at::text as queued_at,
+                   j.embedding_status, j.last_error, j.pack_key, j.ref_sha, j.queued_at::text as queued_at,
                    j.finished_at::text as finished_at
             from crawler_jobs j
             left join libraries l on l.id = j.library_id
             left join vendors v on v.id = l.vendor_id
             order by j.queued_at desc
+            limit 200
+            """
+        ),
+        "embedding_jobs": db_rows(
+            """
+            select e.id, v.name as vendor, l.name as library, lv.version, e.status, e.mode,
+                   e.pending_chunks, e.cached_chunks, e.embedded_chunks, e.failed_chunks,
+                   e.total_tokens, e.voyage_batch_id, e.updated_at::text as updated_at, e.error
+            from embedding_jobs e
+            left join library_versions lv on lv.id = e.version_id
+            left join libraries l on l.id = lv.library_id
+            left join vendors v on v.id = l.vendor_id
+            order by e.updated_at desc
             limit 200
             """
         ),
@@ -509,12 +526,41 @@ def render_catalog_health_row(
 
 def render_crawler_job_row(job: dict[str, Any]) -> str:
     library = job.get("library_name") or job.get("library") or ""
+    status = job.get("status")
+    if job.get("embedding_status"):
+        status = f"{status} / {job.get('embedding_status')}"
     return (
         f"<tr><td>{esc(job.get('vendor'))}/{esc(library)}</td>"
-        f"<td>{esc(job.get('status'))}</td><td>{esc(job.get('version'))}</td>"
+        f"<td>{esc(status)}</td><td>{esc(job.get('version'))}</td>"
         f"<td>{esc(job.get('source_url'))}</td><td>{esc(job.get('queued_at'))}</td>"
         f"<td>{esc(job.get('finished_at'))}</td>"
         f"<td>{esc(job.get('error') or job.get('last_error') or '')}</td></tr>"
+    )
+
+
+def render_embedding_job_row(row: dict[str, Any], csrf: str) -> str:
+    library = f"{row.get('vendor')}/{row.get('library')}@{row.get('version')}"
+    batch = str(row.get("voyage_batch_id") or "")
+    action = embedding_job_action(row, csrf)
+    return (
+        f"<tr><td>{esc(library)}</td><td>{esc(row.get('status'))}</td>"
+        f"<td>{esc(row.get('mode'))}</td><td>{esc(row.get('pending_chunks'))}</td>"
+        f"<td>{esc(row.get('cached_chunks'))}</td><td>{esc(row.get('embedded_chunks'))}</td>"
+        f"<td>{esc(row.get('failed_chunks'))}</td><td>{esc(row.get('total_tokens'))}</td>"
+        f"<td>{esc(batch[:24])}</td><td>{esc(row.get('updated_at'))}</td>"
+        f"<td>{esc(row.get('error') or '')}</td><td>{action}</td></tr>"
+    )
+
+
+def embedding_job_action(row: dict[str, Any], csrf: str) -> str:
+    if row.get("status") not in {"batch_submitted", "batch_running", "batch_partial", "sync_embedding"}:
+        return ""
+    return (
+        '<form method="post" action="/admin/embedding-jobs/cancel">'
+        f'<input type="hidden" name="csrf" value="{esc(csrf)}">'
+        f'<input type="hidden" name="embedding_job_id" value="{esc(row.get("id"))}">'
+        '<button type="submit">Cancel</button>'
+        "</form>"
     )
 
 

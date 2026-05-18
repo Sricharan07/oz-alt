@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
-from pathlib import Path
+import time
 from typing import Any
 from urllib import request
+
+from oz_crawler.token_counting import token_count
 
 _OPENAI_API_KEY_CACHE: str | None = None
 LOGGER = logging.getLogger(__name__)
@@ -15,55 +16,35 @@ DEFAULT_VOYAGE_MODEL = "voyage-code-3"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-large"
 DEFAULT_JINA_MODEL = "jina-code-v2"
 DEFAULT_DIMENSIONS = 1024
-
-
-def chunk_sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def embedding_cache_key(text: str) -> str:
-    payload = "\0".join([embedding_provider(), embedding_model(), str(embedding_dimensions()), text])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def embedding_for_text(text: str) -> list[float] | None:
-    embeddings = embeddings_for_texts([text])
-    return embeddings[0] if embeddings else None
+_REQUEST_TIMESTAMPS: list[float] = []
+_TOKEN_TIMESTAMPS: list[tuple[float, int]] = []
 
 
 def embeddings_for_texts(texts: list[str]) -> list[list[float] | None]:
     results: list[list[float] | None] = [None] * len(texts)
-    pending: list[tuple[int, str, str]] = []
+    pending: list[tuple[int, str]] = []
     for index, text in enumerate(texts):
-        sha = embedding_cache_key(text)
-        cached = read_cached_embedding(sha)
-        if cached is not None:
-            results[index] = cached
-        elif text.strip():
-            pending.append((index, sha, text))
+        if text.strip():
+            pending.append((index, text))
 
     batch_size = embedding_batch_size()
     for offset in range(0, len(pending), batch_size):
         batch = pending[offset : offset + batch_size]
-        embeddings = request_embeddings_for_provider([text for _, _, text in batch])
-        for (index, sha, _), embedding in zip(batch, embeddings, strict=False):
+        batch_texts = [text for _, text in batch]
+        throttle_sync_batch(sum(token_count(text) for text in batch_texts))
+        embeddings = request_embeddings_for_provider(batch_texts)
+        for (index, _), embedding in zip(batch, embeddings, strict=False):
             if embedding is None:
                 continue
             results[index] = embedding
-            write_cached_embedding(sha, embedding)
     return results
 
 
 def embedding_batch_size() -> int:
     try:
-        return max(1, min(int(os.environ.get("OZ_EMBEDDING_BATCH_SIZE", "64")), 128))
+        return max(1, min(int(os.environ.get("OZ_EMBEDDING_BATCH_SIZE", "128")), 128))
     except ValueError:
-        return 64
-
-
-def request_embedding_for_provider(text: str) -> list[float] | None:
-    embeddings = request_embeddings_for_provider([text])
-    return embeddings[0] if embeddings else None
+        return 128
 
 
 def request_embeddings_for_provider(texts: list[str]) -> list[list[float] | None]:
@@ -75,11 +56,6 @@ def request_embeddings_for_provider(texts: list[str]) -> list[list[float] | None
     if provider == "jina":
         return request_jina_embeddings(jina_api_key_from_env(), texts)
     return [None] * len(texts)
-
-
-def request_voyage_embedding(api_key: str | None, text: str) -> list[float] | None:
-    embeddings = request_voyage_embeddings(api_key, [text])
-    return embeddings[0] if embeddings else None
 
 
 def request_voyage_embeddings(api_key: str | None, texts: list[str]) -> list[list[float] | None]:
@@ -99,11 +75,6 @@ def request_voyage_embeddings(api_key: str | None, texts: list[str]) -> list[lis
     )
 
 
-def request_openai_embedding(api_key: str | None, text: str) -> list[float] | None:
-    embeddings = request_openai_embeddings(api_key, [text])
-    return embeddings[0] if embeddings else None
-
-
 def request_openai_embeddings(api_key: str | None, texts: list[str]) -> list[list[float] | None]:
     if not api_key:
         return [None] * len(texts)
@@ -118,11 +89,6 @@ def request_openai_embeddings(api_key: str | None, texts: list[str]) -> list[lis
     )
 
 
-def request_jina_embedding(api_key: str | None, text: str) -> list[float] | None:
-    embeddings = request_jina_embeddings(api_key, [text])
-    return embeddings[0] if embeddings else None
-
-
 def request_jina_embeddings(api_key: str | None, texts: list[str]) -> list[list[float] | None]:
     endpoint = os.environ.get("OZ_JINA_EMBEDDING_URL", "https://api.jina.ai/v1/embeddings")
     headers = {"Content-Type": "application/json"}
@@ -134,17 +100,6 @@ def request_jina_embeddings(api_key: str | None, texts: list[str]) -> list[list[
         headers,
         expected_count=len(texts),
     )
-
-
-def request_embedding(
-    endpoint: str,
-    payload: dict[str, Any],
-    headers: dict[str, str],
-    *,
-    result_path: tuple[Any, ...],
-) -> list[float] | None:
-    embeddings = request_embeddings(endpoint, payload, headers, expected_count=1)
-    return embeddings[0] if embeddings else None
 
 
 def request_embeddings(
@@ -182,51 +137,6 @@ def request_embeddings(
     return output
 
 
-def nested_value(value: Any, path: tuple[Any, ...]) -> Any:
-    current = value
-    for key in path:
-        if isinstance(key, int):
-            if not isinstance(current, list) or key >= len(current):
-                return None
-            current = current[key]
-        else:
-            if not isinstance(current, dict):
-                return None
-            current = current.get(key)
-    return current
-
-
-def read_cached_embedding(sha: str) -> list[float] | None:
-    path = cache_path(sha)
-    if not path.exists():
-        return None
-    try:
-        return [float(value) for value in json.loads(path.read_text(encoding="utf-8"))]
-    except Exception:
-        return None
-
-
-def write_cached_embedding(sha: str, embedding: list[float]) -> None:
-    path = cache_path(sha)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(embedding, separators=(",", ":")), encoding="utf-8")
-
-
-def cache_path(sha: str) -> Path:
-    root = Path(os.environ.get("OZ_EMBEDDING_CACHE", Path.home() / ".codo" / "embedding-cache"))
-    return root / sha[:2] / f"{sha}.json"
-
-
-def row_with_embedding(row: dict[str, Any], text: str) -> dict[str, Any]:
-    row["chunk_sha"] = chunk_sha(text)
-    embedding = embedding_for_text(text)
-    if embedding is not None:
-        row["embedding"] = embedding
-        row["embedding_model"] = embedding_model()
-        row["embedding_dimensions"] = embedding_dimensions()
-    return row
-
-
 def embedding_provider() -> str:
     provider = os.environ.get("OZ_EMBEDDING_PROVIDER", DEFAULT_PROVIDER).strip().lower()
     return provider if provider in {"voyage", "openai", "jina", "none"} else DEFAULT_PROVIDER
@@ -252,6 +162,52 @@ def embedding_dimensions() -> int:
     except ValueError:
         LOGGER.warning("invalid OZ_EMBEDDING_DIMENSIONS=%r", os.environ.get("OZ_EMBEDDING_DIMENSIONS"))
     return DEFAULT_DIMENSIONS
+
+
+def throttle_sync_batch(tokens: int) -> None:
+    rpm_limit = int_env("OZ_EMBEDDING_SYNC_RPM_LIMIT", 1500)
+    tpm_limit = int_env("OZ_EMBEDDING_SYNC_TPM_LIMIT", 2500000)
+    if rpm_limit <= 0 and tpm_limit <= 0:
+        return
+    while True:
+        now = time.monotonic()
+        prune_rate_windows(now)
+        projected_requests = len(_REQUEST_TIMESTAMPS) + 1
+        projected_tokens = sum(value for _, value in _TOKEN_TIMESTAMPS) + max(tokens, 0)
+        if (rpm_limit <= 0 or projected_requests <= rpm_limit) and (tpm_limit <= 0 or projected_tokens <= tpm_limit):
+            _REQUEST_TIMESTAMPS.append(now)
+            _TOKEN_TIMESTAMPS.append((now, max(tokens, 0)))
+            return
+        sleep_for = min_sleep_until_window_moves(now)
+        LOGGER.info("embedding throttle sleeping %.2fs for rpm/tpm headroom", sleep_for)
+        time.sleep(sleep_for)
+
+
+def prune_rate_windows(now: float) -> None:
+    cutoff = now - 60
+    while _REQUEST_TIMESTAMPS and _REQUEST_TIMESTAMPS[0] <= cutoff:
+        del _REQUEST_TIMESTAMPS[0]
+    while _TOKEN_TIMESTAMPS and _TOKEN_TIMESTAMPS[0][0] <= cutoff:
+        del _TOKEN_TIMESTAMPS[0]
+
+
+def min_sleep_until_window_moves(now: float) -> float:
+    oldest = []
+    if _REQUEST_TIMESTAMPS:
+        oldest.append(_REQUEST_TIMESTAMPS[0])
+    if _TOKEN_TIMESTAMPS:
+        oldest.append(_TOKEN_TIMESTAMPS[0][0])
+    if not oldest:
+        return 1.0
+    return max(1.0, 60.0 - (now - min(oldest)) + 0.05)
+
+
+def int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        LOGGER.warning("invalid %s=%r", name, os.environ.get(name))
+        return default
 
 
 def voyage_api_key_from_env() -> str | None:

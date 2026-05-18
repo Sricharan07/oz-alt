@@ -76,14 +76,14 @@ It discovers `/llms-full.txt`, `/llms.txt`, `/sitemap.xml`, and same-site links,
 - `api-reference/`
 - `examples/`
 - `_symbols/*.md`
-- `_chunks.jsonl` with `chunk_sha`, content type, token count, parent chunk key, source anchor, and optional embeddings
+- `_chunks.jsonl` with `chunk_sha`, content type, token count, parent chunk key, and source anchor
 - `_meta.json`
 
-Embeddings are SHA-cached by provider/model/dimension/text. Production defaults to `voyage-code-3` at 1024 dimensions. Jina or OpenAI can be selected explicitly through `OZ_EMBEDDING_PROVIDER`.
+Embeddings are applied after chunks are durable in Postgres. The indexing job layer first checks a schema-versioned cache keyed by provider, model, dimensions, input type, and `chunk_sha`, then sends large uncached Voyage jobs through the Batch API and small changes through the synchronous embeddings API. Production defaults to `voyage-code-3` at 1024 dimensions. Jina or OpenAI can be selected explicitly through `OZ_EMBEDDING_PROVIDER`.
 
 Each chunk has a deterministic `chunk_sha` derived from vendor, library, version, path, ordinal, and text. The indexer also computes the same value for older chunk files that do not contain it, resolves parent-child chunks, computes trust scores, and marks duplicate chunks so retrieval serves canonical paths.
 
-In the worker, each successful crawl is packed, uploaded to S3-compatible object storage, upserted into `catalog.json`, recorded as a promotion, and indexed into Postgres. Scheduled recrawls use freshness policies first and fall back to seed libraries only when explicitly enabled. Production crawls require a library profile and fail before promotion when quality gates fail. Crawler fetches pass a network safety gate before any HTTP request; unless `OZ_CRAWLER_ALLOW_PRIVATE_NETWORKS=1` is set for a local test, URLs resolving to loopback, private, link-local, multicast, reserved, or unspecified addresses are rejected to prevent SSRF against instance metadata or internal services. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against `OZ_DATABASE_URL` or `DATABASE_URL`.
+In the worker, each successful crawl is packed, uploaded to S3-compatible object storage, indexed into Postgres, embedded, deduped, and then promoted into `catalog.json`. Large embedding jobs can pause promotion while the Voyage Batch API runs; the worker polls those jobs, retries partial or timed-out batches through the sync path, and only promotes after embeddings are applied. Scheduled recrawls use freshness policies first and fall back to seed libraries only when explicitly enabled. Production crawls require a library profile and fail before promotion when quality gates fail. Crawler fetches pass a network safety gate before any HTTP request; unless `OZ_CRAWLER_ALLOW_PRIVATE_NETWORKS=1` is set for a local test, URLs resolving to loopback, private, link-local, multicast, reserved, or unspecified addresses are rejected to prevent SSRF against instance metadata or internal services. For local seed rebuilds, `scripts/index-registry-to-db.py` performs the same catalog/chunk import against `OZ_DATABASE_URL` or `DATABASE_URL`.
 
 ## Agent Contract
 

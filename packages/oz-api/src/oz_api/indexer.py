@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urldefrag
 
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
-from oz_api.embeddings import embedding_model as configured_embedding_model
+from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
@@ -25,6 +25,7 @@ class IndexStats:
     versions: int = 0
     chunks: int = 0
     embedded_chunks: int = 0
+    pending_embedding_chunks: int = 0
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -32,6 +33,7 @@ class IndexStats:
             "versions": self.versions,
             "chunks": self.chunks,
             "embedded_chunks": self.embedded_chunks,
+            "pending_embedding_chunks": self.pending_embedding_chunks,
         }
 
 
@@ -48,7 +50,7 @@ def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
         raise RuntimeError("No database connection configured. Set OZ_DATABASE_URL or DATABASE_URL.")
     with connection:
         writer = PostgresWriter(connection)
-        write_catalog_and_chunks(writer, storage, catalog)
+        results = write_catalog_and_chunks(writer, storage, catalog)
         embedded_chunks = writer.count_embedded_chunks()
         if require_embeddings() and embedded_chunks < stats.chunks:
             raise RuntimeError(f"embedding requirement failed: {embedded_chunks}/{stats.chunks} chunks have embeddings")
@@ -57,6 +59,7 @@ def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
             versions=stats.versions,
             chunks=stats.chunks,
             embedded_chunks=embedded_chunks,
+            pending_embedding_chunks=sum(result.pending_chunks for result in results if not result.complete),
         )
 
 
@@ -71,7 +74,12 @@ def count_registry(storage: RegistryStorage, catalog: list[dict[str, Any]]) -> I
     return IndexStats(libraries=len(catalog), versions=len(catalog), chunks=chunks, embedded_chunks=embedded)
 
 
-def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, catalog: list[dict[str, Any]]) -> None:
+def write_catalog_and_chunks(
+    writer: "IndexWriter",
+    storage: RegistryStorage,
+    catalog: list[dict[str, Any]],
+) -> list[EmbeddingEnsureResult]:
+    embedding_results: list[EmbeddingEnsureResult] = []
     for entry in catalog:
         vendor_id = writer.upsert_vendor(str(entry["vendor"]))
         library_id = writer.upsert_library(vendor_id, entry)
@@ -83,11 +91,12 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
         line_cache: dict[str, str] = {}
         current_chunk_shas: list[str] = []
         rows = chunk_rows(storage, entry)
-        row_embeddings = embeddings_for_chunk_rows(rows)
-        for row, (embedding, generated_model, generated_dimensions) in zip(rows, row_embeddings, strict=True):
+        for row in rows:
             chunk_sha = chunk_sha_for_row(entry, row)
             current_chunk_shas.append(chunk_sha)
             start_line, end_line = row_line_span(row) or line_span(fixture, row, line_cache)
+            existing_embedding = row.get("embedding")
+            embedding = [float(value) for value in existing_embedding] if valid_embedding(existing_embedding) else None
             writer.upsert_chunk(
                 version_id,
                 path=str(row.get("path") or "README.md"),
@@ -104,15 +113,20 @@ def write_catalog_and_chunks(writer: "IndexWriter", storage: RegistryStorage, ca
                 quality_score=float(row.get("quality_score") or 1.0),
                 token_count=int(row.get("token_count") or token_count(str(row.get("text") or ""))),
                 source_anchor=nullable_string(row.get("source_anchor")),
-                embedding_model=nullable_string(row.get("embedding_model")) or generated_model,
-                embedding_dimensions=int(row.get("embedding_dimensions") or 0) or generated_dimensions,
+                embedding_model=nullable_string(row.get("embedding_model")) if embedding else None,
+                embedding_dimensions=(int(row.get("embedding_dimensions") or 0) or None) if embedding else None,
                 content=str(row.get("text") or ""),
                 embedding=embedding,
             )
         writer.delete_stale_chunks(version_id, current_chunk_shas)
         writer.resolve_parent_chunks(version_id)
-        writer.rebuild_dedupe_clusters(version_id)
-        writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
+        result = writer.ensure_embeddings(version_id, crawler_job_id=optional_int(entry.get("crawler_job_id")))
+        embedding_results.append(result)
+        if result.complete:
+            writer.resolve_parent_chunks(version_id)
+            writer.rebuild_dedupe_clusters(version_id)
+            writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
+    return embedding_results
 
 
 def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -370,6 +384,15 @@ def nullable_string(value: Any) -> str | None:
     return text or None
 
 
+def optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
     return slug[:120] or "snippet"
@@ -435,36 +458,6 @@ def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def embeddings_for_chunk_rows(rows: list[dict[str, Any]]) -> list[tuple[list[float] | None, str | None, int | None]]:
-    output: list[tuple[list[float] | None, str | None, int | None]] = []
-    pending_indices: list[int] = []
-    pending_texts: list[str] = []
-    for row in rows:
-        existing = row.get("embedding")
-        if valid_embedding(existing):
-            output.append(([float(value) for value in existing], nullable_string(row.get("embedding_model")), int(row.get("embedding_dimensions") or 0) or None))
-            continue
-        text = str(row.get("text") or "")
-        output.append((None, None, None))
-        if text.strip():
-            pending_indices.append(len(output) - 1)
-            pending_texts.append(text)
-    if not pending_texts:
-        return output
-    try:
-        from oz_crawler.embeddings import embeddings_for_texts  # type: ignore
-    except ImportError:
-        return output
-
-    generated_embeddings = embeddings_for_texts(pending_texts)
-    model = configured_embedding_model()
-    dimensions = configured_embedding_dimensions()
-    for index, generated in zip(pending_indices, generated_embeddings, strict=False):
-        if valid_embedding(generated):
-            output[index] = (generated, model, dimensions)
-    return output
-
-
 class IndexWriter:
     def upsert_vendor(self, vendor: str) -> int:
         raise NotImplementedError
@@ -494,6 +487,9 @@ class IndexWriter:
         raise NotImplementedError
 
     def set_benchmark_score(self, version_id: int, score: float) -> None:
+        raise NotImplementedError
+
+    def ensure_embeddings(self, version_id: int, *, crawler_job_id: int | None) -> EmbeddingEnsureResult:
         raise NotImplementedError
 
     def upsert_chunk(
@@ -751,6 +747,9 @@ class PostgresWriter(IndexWriter):
             "update library_versions set benchmark_score = %s where id = %s",
             (clamp_score(score), version_id),
         )
+
+    def ensure_embeddings(self, version_id: int, *, crawler_job_id: int | None) -> EmbeddingEnsureResult:
+        return ensure_version_embeddings(self.connection, version_id, crawler_job_id=crawler_job_id)
 
     def upsert_chunk(
         self,

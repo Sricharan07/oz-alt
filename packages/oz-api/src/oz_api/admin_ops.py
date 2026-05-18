@@ -226,6 +226,10 @@ def mark_crawler_job_completed(job: dict[str, Any], *, pack_key: str, ref_sha: s
     update_crawler_job(job, "completed", finished=True, pack_key=pack_key, ref_sha=ref_sha)
 
 
+def mark_crawler_job_embedding_waiting(job: dict[str, Any], *, pack_key: str, ref_sha: str, status: str) -> None:
+    update_crawler_job(job, "batch_running", pack_key=pack_key, ref_sha=ref_sha, embedding_status=status)
+
+
 def mark_crawler_job_failed(job: dict[str, Any], error: str) -> None:
     update_crawler_job(job, "failed", finished=True, error=error[:2000])
 
@@ -238,6 +242,7 @@ def update_crawler_job(
     finished: bool = False,
     pack_key: str | None = None,
     ref_sha: str | None = None,
+    embedding_status: str | None = None,
     error: str | None = None,
 ) -> None:
     job_id = clean(job.get("db_job_id"))
@@ -259,6 +264,9 @@ def update_crawler_job(
     if ref_sha is not None:
         fields.append("ref_sha = :ref_sha")
         params["ref_sha"] = ref_sha
+    if embedding_status is not None:
+        fields.append("embedding_status = :embedding_status")
+        params["embedding_status"] = embedding_status
     if error is not None:
         fields.append("last_error = :last_error")
         params["last_error"] = error

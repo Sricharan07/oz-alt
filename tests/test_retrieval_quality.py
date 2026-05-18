@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import json
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,10 +12,12 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from oz_api.intent import classify_query
+from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.rerank import boost_named_suggestions, boost_query_matches, parse_rerank_results, strip_private_fields, zeroentropy_scores
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
-from oz_crawler.chunks import chunk_markdown
+from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
+from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.token_counting import token_count
 
@@ -56,6 +60,44 @@ class RetrievalQualityTests(unittest.TestCase):
 
     def test_token_counter_uses_tiktoken_encoding(self) -> None:
         self.assertEqual(token_count("hello world"), 2)
+
+    def test_write_chunks_does_not_embed_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            page = NormalizedPage(title="Doc", markdown="# Doc\n\nUse it.", source_url="https://docs.example/doc", path="guides/doc.md")
+            write_chunks(target, [page])
+            row = next(json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip())
+
+        self.assertIn("chunk_sha", row)
+        self.assertNotIn("embedding", row)
+        self.assertNotIn("embedding_model", row)
+
+    def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
+        with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):
+            first = embedding_cache_key("abc")
+        with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v2"}, clear=False):
+            second = embedding_cache_key("abc")
+
+        self.assertNotEqual(first, second)
+
+    def test_embedding_mode_auto_uses_batch_only_for_large_voyage_jobs(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"OZ_EMBEDDING_PROVIDER": "voyage", "OZ_EMBEDDING_INDEX_MODE": "auto", "OZ_EMBEDDING_SYNC_THRESHOLD": "500"},
+            clear=False,
+        ):
+            self.assertEqual(selected_embedding_mode(499, force_sync=False), "sync")
+            self.assertEqual(selected_embedding_mode(500, force_sync=False), "batch")
+            self.assertEqual(selected_embedding_mode(500, force_sync=True), "sync")
+
+    def test_voyage_batch_rows_split_by_input_limit_and_use_chunk_sha_custom_ids(self) -> None:
+        rows = [{"chunk_sha": f"sha-{index}", "content": f"content {index}"} for index in range(3)]
+        with patch.dict("os.environ", {"OZ_VOYAGE_BATCH_MAX_INPUTS": "2", "OZ_VOYAGE_BATCH_MAX_BYTES": "1000000"}, clear=False):
+            batches = split_batch_rows(rows)
+
+        self.assertEqual([len(batch) for batch in batches], [2, 1])
+        self.assertEqual(batch_line(rows[0])["custom_id"], "sha-0")
+        self.assertEqual(batch_line(rows[0])["body"]["input"], ["content 0"])
 
     def test_baseline_profile_excludes_legacy_noise(self) -> None:
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])

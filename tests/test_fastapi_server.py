@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
+sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from oz_api.http_context import ServerState  # noqa: E402
 from oz_api.server import create_app  # noqa: E402

@@ -13,6 +13,8 @@ from oz_api.auth import (
     set_user_disabled,
     verify_csrf,
 )
+from oz_api.auth_store import AuthStore, postgres_connection
+from oz_api.embedding_jobs import cancel_embedding_job
 from oz_api.http_context import first_form_value, principal_for_request, read_form_payload, session_cookie, state_from_request
 from oz_api.queue import crawler_job_event, missing_required_crawler_fields
 from oz_api.server_helpers import first_form_values
@@ -129,6 +131,26 @@ async def set_disabled(request: Request) -> HTMLResponse:
         )
     except (AuthError, RuntimeError) as exc:
         return HTMLResponse(admin_result_page("User update failed", str(exc)), status_code=400)
+    return HTMLResponse('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status_code=202)
+
+
+@router.post("/admin/embedding-jobs/cancel")
+async def cancel_admin_embedding_job(request: Request) -> HTMLResponse:
+    form = await read_form_payload(request)
+    principal = principal_for_request(request)
+    if not verify_csrf(session_cookie(request), first_form_value(form, "csrf")):
+        return HTMLResponse("<!doctype html><p>Invalid CSRF token.</p>", status_code=403)
+    embedding_job_id = first_form_value(form, "embedding_job_id")
+    store = AuthStore.from_env()
+    connection = postgres_connection(store.database_url if store else None)
+    if connection is None:
+        return HTMLResponse(admin_result_page("Cancel failed", "Postgres connection is unavailable."), status_code=500)
+    try:
+        with connection:
+            cancel_embedding_job(connection, int(embedding_job_id))
+        log_admin_action(principal, "embedding_job_cancelled", target_type="embedding_job", target=embedding_job_id)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return HTMLResponse(admin_result_page("Cancel failed", str(exc)), status_code=400)
     return HTMLResponse('<!doctype html><meta http-equiv="refresh" content="0; url=/admin">', status_code=202)
 
 

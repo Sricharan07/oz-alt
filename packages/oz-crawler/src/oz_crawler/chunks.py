@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import urldefrag
 
 from oz_crawler.content_types import block_content_type
-from oz_crawler.embeddings import row_with_embedding
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.token_counting import token_count
 
@@ -38,7 +37,7 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
             if chunk_sha in seen_chunk_shas:
                 continue
             seen_chunk_shas.add(chunk_sha)
-            row = row_with_embedding(
+            rows.append(
                 {
                     "id": chunk_key,
                     "path": source_path,
@@ -47,6 +46,7 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                     "ordinal": idx,
                     "chunk_key": chunk_key,
                     "parent_chunk_key": parent_chunk_key,
+                    "chunk_sha": chunk_sha,
                     "start_line": chunk.start_line + 4,
                     "end_line": chunk.end_line + 4,
                     "heading_path": chunk.heading_path,
@@ -55,11 +55,8 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                     "quality_score": page.quality_score,
                     "token_count": token_count(chunk.text),
                     "text": chunk.text,
-                },
-                chunk.text,
+                }
             )
-            row["chunk_sha"] = chunk_sha
-            rows.append(row)
     (target / "_chunks.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
