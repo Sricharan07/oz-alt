@@ -7,8 +7,10 @@
       "query": "NextRequest middleware cookies redirect matcher",
       "patterns": ["NextRequest", "middleware|proxy", "cookies|cookie", "redirect"],
       "expected_files": [
+        "guides/app/building-your-application/routing/middleware.md",
         "api-reference/app/api-reference/functions/next-request.md",
         "api-reference/pages/api-reference/functions/next-request.md",
+        "api-reference/app/api-reference/functions/cookies.md",
         "_symbols/NextRequest.md"
       ],
       "must_include": ["NextRequest", "cookies"],
