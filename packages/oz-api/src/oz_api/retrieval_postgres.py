@@ -128,7 +128,7 @@ def suggest_from_postgres(
         with observe_duration("oz_db_query_duration_seconds", {"operation": "suggest", "mode": "vector" if vector else "fts"}):
             with connection:
                 with connection.cursor() as cursor:
-                    cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
+                    cursor.execute(f"set local statement_timeout = {retrieval_statement_timeout_ms()}")
                     cursor.execute(sql, tuple(params))
                     rows = cursor.fetchall()
         return [
@@ -247,7 +247,7 @@ def search_from_postgres(
         with observe_duration("oz_db_query_duration_seconds", {"operation": "search", "mode": "vector" if vector else "fts_symbol"}):
             with connection:
                 with connection.cursor() as cursor:
-                    cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
+                    cursor.execute(f"set local statement_timeout = {retrieval_statement_timeout_ms()}")
                     cursor.execute(sql, tuple(params))
                     rows = cursor.fetchall()
                     mark_search_versions_requested(cursor, rows)
