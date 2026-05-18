@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from oz_api.http_context import state_from_request
-from oz_api.metrics import metrics_authorized, render_prometheus_metrics
+from oz_api.metrics import collect_metric_values, metrics_authorized, render_prometheus_metrics
 from oz_api.web_pages import public_markdown_html, render_home_page, render_login_page, render_signup_page, status_page
 
 router = APIRouter()
@@ -34,6 +36,32 @@ async def public_document(request: Request) -> HTMLResponse:
 @router.get("/status", response_class=HTMLResponse)
 async def status() -> HTMLResponse:
     return HTMLResponse(status_page())
+
+
+@router.get("/status.json")
+async def status_json() -> dict[str, object]:
+    metrics = collect_metric_values()
+    postgres_up = bool(metrics.get("oz_postgres_up"))
+    redis_up = bool(metrics.get("oz_redis_up"))
+    open_alerts = int(metrics.get("oz_open_alerts") or 0)
+    status_value = "degraded" if open_alerts or not postgres_up or not redis_up else "operational"
+    return {
+        "status": status_value,
+        "service": "oz",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "components": {
+            "api": {"status": "up"},
+            "postgres": {"status": "up" if postgres_up else "down"},
+            "redis": {"status": "up" if redis_up else "down"},
+            "catalog": {"libraries": int(metrics.get("oz_libraries_total") or 0)},
+            "crawler": {
+                "queued": int(metrics.get("oz_crawler_jobs_queued") or 0),
+                "running": int(metrics.get("oz_crawler_jobs_running") or 0),
+            },
+            "alerts": {"open": open_alerts},
+            "backups": {"fresh_verified": bool(metrics.get("oz_fresh_verified_backups"))},
+        },
+    }
 
 
 @router.get("/metrics")

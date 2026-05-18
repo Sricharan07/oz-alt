@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from collections.abc import AsyncIterator
@@ -22,6 +23,15 @@ from oz_api.http_context import (
     is_authorized_request,
     request_rate_limit_allowed,
     unauthorized_is_html,
+)
+from oz_api.observability import (
+    configure_logging,
+    log_extra,
+    new_request_id,
+    observe_histogram,
+    reset_trace_context,
+    set_trace_context,
+    should_sample,
 )
 from oz_api.routes_admin import router as admin_router
 from oz_api.routes_api import router as api_router
@@ -66,30 +76,68 @@ def install_middleware(app: FastAPI) -> None:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        started = time.perf_counter()
+        request_id = request.headers.get("x-request-id") or new_request_id()
+        sampled = should_sample(request_id, explicit=request.headers.get("x-oz-debug") == "1")
+        tokens = set_trace_context(request_id, sampled=sampled)
         state: ServerState = request.app.state.oz_state
+        response: Response | None = None
         try:
             if request.method in {"POST", "PUT", "PATCH"}:
                 if content_length_too_large(request):
-                    return JSONResponse({"error": "request_body_too_large"}, status_code=413)
+                    response = JSONResponse({"error": "request_body_too_large"}, status_code=413)
+                    return response
                 install_body_limit(request)
             if request.method == "POST" and not request_rate_limit_allowed(request):
-                return JSONResponse(
+                response = JSONResponse(
                     {"error": "rate_limited"},
                     status_code=429,
                     headers={"Retry-After": "60", "RateLimit-Limit": "60", "RateLimit-Remaining": "0", "RateLimit-Reset": "60"},
                 )
+                return response
             if not is_authorized_request(request, state):
                 if unauthorized_is_html(request):
-                    return HTMLResponse(render_login_page(), status_code=401)
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
-            return await call_next(request)
+                    response = HTMLResponse(render_login_page(), status_code=401)
+                    return response
+                response = JSONResponse({"error": "unauthorized"}, status_code=401)
+                return response
+            response = await call_next(request)
+            return response
         except Exception as exc:  # pragma: no cover - ASGI server boundary
             if isinstance(exc, BodyTooLarge):
-                return JSONResponse({"error": "request_body_too_large"}, status_code=413)
+                response = JSONResponse({"error": "request_body_too_large"}, status_code=413)
+                return response
             if isinstance(exc, HTTPException):
-                return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
-            LOGGER.exception("unhandled request error path=%s", request.url.path)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+                response = JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+                return response
+            LOGGER.exception("unhandled request error", extra=log_extra(path=request.url.path, method=request.method))
+            response = JSONResponse({"error": str(exc)}, status_code=500)
+            return response
+        finally:
+            elapsed = time.perf_counter() - started
+            status_code = getattr(response, "status_code", 500)
+            observe_histogram(
+                "oz_http_request_duration_seconds",
+                elapsed,
+                {
+                    "method": request.method,
+                    "path": route_label(request.url.path),
+                    "status": str(status_code),
+                },
+            )
+            if response is not None:
+                response.headers["x-request-id"] = request_id
+            LOGGER.info(
+                "request completed",
+                extra=log_extra(
+                    method=request.method,
+                    path=request.url.path,
+                    status=status_code,
+                    elapsed_ms=round(elapsed * 1000, 3),
+                    sampled=sampled,
+                ),
+            )
+            reset_trace_context(tokens)
 
 
 def build_state(args: argparse.Namespace) -> ServerState:
@@ -114,10 +162,22 @@ def main() -> None:
     parser.add_argument("--bearer-token", default=os.environ.get("OZ_BEARER_TOKEN", ""))
     args = parser.parse_args()
 
-    logging.basicConfig(level=os.environ.get("OZ_LOG_LEVEL", "INFO").upper())
+    configure_logging()
     app = create_app(build_state(args))
     print(f"oz-api listening on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level=os.environ.get("OZ_UVICORN_LOG_LEVEL", "info"))
+
+
+def route_label(path: str) -> str:
+    if path.startswith("/pack/"):
+        return "/pack/:vendor/:library"
+    if path.startswith("/refs/"):
+        return "/refs/:vendor/:library"
+    if path.startswith("/admin"):
+        return "/admin"
+    if path in {"/suggest", "/search", "/context", "/telemetry", "/health", "/catalog", "/metrics", "/status", "/status.json"}:
+        return path
+    return "other"
 
 
 if __name__ == "__main__":

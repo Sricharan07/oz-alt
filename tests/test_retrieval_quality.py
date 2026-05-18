@@ -350,7 +350,7 @@ class RetrievalQualityTests(unittest.TestCase):
     def test_zeroentropy_rerank_payload_uses_zerank_2(self) -> None:
         captured: dict[str, object] = {}
 
-        def fake_request(url: str, payload: dict[str, object], headers: dict[str, str]):
+        def fake_request(url: str, payload: dict[str, object], headers: dict[str, str], **_kwargs: object):
             captured["url"] = url
             captured["payload"] = payload
             captured["headers"] = headers
@@ -411,6 +411,21 @@ class RetrievalQualityTests(unittest.TestCase):
         )
 
         self.assertGreater(score, 0.35)
+
+    def test_markdown_chunking_handles_malformed_inputs_without_crashing(self) -> None:
+        samples = [
+            "---\ntitle: Broken",
+            "# Heading\n\n```ts\nunterminated fence\nconst value = 1",
+            "- item\n  ```json\n  {bad json\n  ```\n\n<table><tr><td>cell",
+            "\x00\x01# Binary-ish\n\n" + ("word " * 400),
+            "# Long paragraph\n\n" + ("configuration middleware cookies response headers " * 500),
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample[:24]):
+                chunks = chunk_markdown(clean_markdown(sample), source_url="https://docs.example/fuzz", max_tokens=300)
+                self.assertTrue(all(chunk.text.strip() for chunk in chunks))
+                self.assertTrue(all(token_count(chunk.text) <= 1200 for chunk in chunks))
 
 
 if __name__ == "__main__":

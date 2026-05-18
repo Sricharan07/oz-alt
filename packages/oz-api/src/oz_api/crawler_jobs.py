@@ -21,6 +21,7 @@ from oz_api.embedding_jobs import poll_pending_embedding_jobs
 from oz_api.auth_store import AuthStore
 from oz_api.indexer import PostgresWriter, write_catalog_and_chunks
 from oz_api.jury import judge_search_check, jury_required, jury_requested
+from oz_api.observability import observe_duration
 from oz_api.queue import enqueue_crawler_job
 from oz_api.retrieval import RetrievalContext, postgres_connection
 from oz_api.retrieval_local import search_from_fixtures
@@ -50,28 +51,29 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
     )
     mark_crawler_job_started(job)
     record_crawler_job_log(job, "info", "crawl started", {"max_pages": int(job.get("max_pages") or 0)})
-    target = crawl_single_page(
-        url=source_url,
-        registry_root=registry_root,
-        vendor=vendor,
-        library=library,
-        version=version,
-        max_pages=int(job.get("max_pages") or os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
-        options=CrawlOptions(
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "crawl", "library": f"{vendor}/{library}"}):
+        target = crawl_single_page(
+            url=source_url,
+            registry_root=registry_root,
+            vendor=vendor,
+            library=library,
+            version=version,
             max_pages=int(job.get("max_pages") or os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
-            fetcher=str(job.get("fetcher") or os.environ.get("OZ_CRAWLER_FETCHER", "auto")),
-            concurrent_requests=int(job.get("concurrent_requests") or os.environ.get("OZ_CRAWLER_CONCURRENCY", "6")),
-            download_delay=float(job.get("download_delay") or os.environ.get("OZ_CRAWLER_DELAY", "0")),
-            robots_txt=str(job.get("robots_txt", os.environ.get("OZ_CRAWLER_ROBOTS", "1"))).lower()
-            not in {"0", "false", "no"},
-            crawldir=crawler_checkpoint_dir(job, vendor, library, version),
-            headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
-            network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
-            require_profile=os.environ.get("OZ_CRAWLER_REQUIRE_PROFILE", "1").lower() not in {"0", "false", "no"},
-            fail_on_validation=os.environ.get("OZ_CRAWLER_FAIL_ON_VALIDATION", "1").lower() not in {"0", "false", "no"},
-            progress_callback=lambda progress: update_crawler_job_progress(job, progress),
-        ),
-    )
+            options=CrawlOptions(
+                max_pages=int(job.get("max_pages") or os.environ.get("OZ_CRAWLER_MAX_PAGES", "16")),
+                fetcher=str(job.get("fetcher") or os.environ.get("OZ_CRAWLER_FETCHER", "auto")),
+                concurrent_requests=int(job.get("concurrent_requests") or os.environ.get("OZ_CRAWLER_CONCURRENCY", "6")),
+                download_delay=float(job.get("download_delay") or os.environ.get("OZ_CRAWLER_DELAY", "0")),
+                robots_txt=str(job.get("robots_txt", os.environ.get("OZ_CRAWLER_ROBOTS", "1"))).lower()
+                not in {"0", "false", "no"},
+                crawldir=crawler_checkpoint_dir(job, vendor, library, version),
+                headless=os.environ.get("OZ_CRAWLER_HEADLESS", "1").lower() not in {"0", "false", "no"},
+                network_idle=os.environ.get("OZ_CRAWLER_NETWORK_IDLE", "1").lower() not in {"0", "false", "no"},
+                require_profile=os.environ.get("OZ_CRAWLER_REQUIRE_PROFILE", "1").lower() not in {"0", "false", "no"},
+                fail_on_validation=os.environ.get("OZ_CRAWLER_FAIL_ON_VALIDATION", "1").lower() not in {"0", "false", "no"},
+                progress_callback=lambda progress: update_crawler_job_progress(job, progress),
+            ),
+        )
     record_crawler_job_log(job, "info", "crawl finished", {"fixture_path": str(target)})
     quality = load_quality_report(target)
     if not quality_gate_passed(quality):
@@ -98,7 +100,8 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         ref_sha="",
     )
     record_quality_run(quality_entry, job, quality)
-    pack_body, manifest = build_pack_bytes(target, vendor, library, version)
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "pack_build", "library": f"{vendor}/{library}"}):
+        pack_body, manifest = build_pack_bytes(target, vendor, library, version)
     pack_eval = pack_eval_report(manifest)
     if not pack_eval["passed"]:
         record_eval_run(catalog_entry_for_job(
@@ -123,14 +126,16 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         ref_sha=str(manifest["tree_sha256"]),
     )
     record_eval_run(eval_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
-    search_eval = search_eval_report(storage, f"{vendor}/{library}", version)
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "search_eval", "library": f"{vendor}/{library}"}):
+        search_eval = search_eval_report(storage, f"{vendor}/{library}", version)
     if search_eval is not None:
         record_eval_run(eval_entry, eval_type="semantic_search", passed=bool(search_eval["passed"]), metrics=search_eval)
         if not search_eval["passed"]:
             record_crawler_job_log(job, "error", "semantic search eval failed", search_eval)
             raise RuntimeError("semantic search eval failed; pack was not promoted")
         record_crawler_job_log(job, "info", "semantic search eval passed", search_eval)
-    pack_key = storage.put_pack_bytes(vendor, library, version, pack_body)
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "pack_upload", "library": f"{vendor}/{library}"}):
+        pack_key = storage.put_pack_bytes(vendor, library, version, pack_body)
     record_crawler_job_log(job, "info", "pack uploaded", {"pack_key": pack_key, "bytes": len(pack_body)})
     catalog_entry = catalog_entry_for_job(
         vendor=vendor,
@@ -142,7 +147,8 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         ref_sha=str(manifest["tree_sha256"]),
         crawler_job_id=job.get("db_job_id"),
     )
-    embedding_results = index_catalog_entry(storage, catalog_entry)
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "index", "library": f"{vendor}/{library}"}):
+        embedding_results = index_catalog_entry(storage, catalog_entry)
     record_crawler_job_log(
         job,
         "info",
@@ -235,12 +241,15 @@ def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
     ctx = RetrievalContext.from_env(storage)
     if not ctx.database_url:
         return 0
-    ready = embedding_ready_rows(ctx.database_url)
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "embedding_promotion_scan", "library": "system"}):
+        ready = embedding_ready_rows(ctx.database_url)
     if not ready:
-        completed = poll_and_apply_embedding_jobs(ctx.database_url)
+        with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "embedding_poll_apply", "library": "system"}):
+            completed = poll_and_apply_embedding_jobs(ctx.database_url)
         for result in completed:
             finalize_embedding_index(ctx.database_url, result.version_id, result.job_id)
-        ready = embedding_ready_rows(ctx.database_url)
+        with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "embedding_promotion_scan", "library": "system"}):
+            ready = embedding_ready_rows(ctx.database_url)
     count = 0
     for row in ready:
         if promote_embedding_ready_job(storage, row):

@@ -207,7 +207,8 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
         ),
         "ops_alerts": db_rows(
             """
-            select severity, status, title, delivery_status, delivery_error,
+            select severity, status, title, body, metadata_json,
+                   delivery_status, delivery_error,
                    created_at::text as created_at, resolved_at::text as resolved_at
             from ops_alerts
             order by status asc, created_at desc

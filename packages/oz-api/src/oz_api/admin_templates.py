@@ -51,7 +51,7 @@ ADMIN_TEMPLATE = r"""<!doctype html>
   <div class="metric">Backups: {{ snapshot.backup_runs|length }}</div>
 
   {{ table("System Checks", ["Check", "Status", "Message", "Metadata", "Created"], snapshot.system_checks, ["check_name", "status", "message", "metadata_json", "created_at"]) }}
-  {{ table("Operations Alerts", ["Severity", "Status", "Title", "Delivery", "Created", "Resolved"], snapshot.ops_alerts, ["severity", "status", "title", "delivery", "created_at", "resolved_at"]) }}
+  {{ table("Operations Alerts", ["Severity", "Status", "Title", "Body", "Metadata", "Delivery", "Delivery Error", "Created", "Resolved"], snapshot.ops_alerts, ["severity", "status", "title", "body", "metadata_json", "delivery_status", "delivery_error", "created_at", "resolved_at"]) }}
   {{ table("SLO Reports", ["Passed", "API health", "Search quality", "Crawler success", "Pack signatures", "Backup fresh", "Window", "Created"], snapshot.slo_reports, ["passed", "api_health_ok_rate", "search_quality_pass_rate", "crawler_success_rate", "pack_signature_coverage", "backup_fresh", "window", "created_at"]) }}
 
   <h2>Operations</h2>

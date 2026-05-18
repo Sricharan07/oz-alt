@@ -50,6 +50,16 @@ class FastApiServerTests(unittest.TestCase):
         self.assertEqual(catalog.status_code, 200)
         self.assertIn("libraries", catalog.json())
 
+    def test_request_id_is_returned_and_status_json_is_public(self) -> None:
+        with self.client(require_auth=True) as client:
+            health = client.get("/health", headers={"x-request-id": "test-request-id"})
+            status = client.get("/status.json")
+
+        self.assertEqual(health.headers.get("x-request-id"), "test-request-id")
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["service"], "oz")
+        self.assertIn("components", status.json())
+
     def test_protected_refs_require_auth_when_enabled(self) -> None:
         with self.client(require_auth=True) as client:
             unauthorized = client.get("/refs/openai/openai-node")

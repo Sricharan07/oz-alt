@@ -10,6 +10,7 @@ from urllib import request
 from uuid import uuid4
 
 from oz_api.embeddings import embedding_dimensions, embedding_model, embedding_provider, voyage_api_key
+from oz_api.observability import observe_duration
 from oz_api.retrieval import vector_literal
 from oz_crawler.embeddings import embeddings_for_texts
 from oz_crawler.token_counting import token_count
@@ -44,7 +45,8 @@ def ensure_version_embeddings(
     crawler_job_id: int | None = None,
     force_sync: bool = False,
 ) -> EmbeddingEnsureResult:
-    chunks = version_chunks(connection, version_id)
+    with observe_duration("oz_embedding_job_duration_seconds", {"phase": "load_chunks"}):
+        chunks = version_chunks(connection, version_id)
     enforce_library_caps(chunks)
     job_id = open_embedding_job(connection, version_id, crawler_job_id, chunks)
     active_job = embedding_job_row(connection, job_id)
@@ -72,8 +74,9 @@ def ensure_version_embeddings(
         update_crawler_embedding_status(connection, crawler_job_id, job_id, sync.status)
         return sync
     update_embedding_job(connection, job_id, "cache_lookup")
-    cache_hits = apply_cache_hits(connection, version_id, chunks)
-    pending = missing_embedding_chunks(connection, version_id)
+    with observe_duration("oz_embedding_job_duration_seconds", {"phase": "cache_lookup"}):
+        cache_hits = apply_cache_hits(connection, version_id, chunks)
+        pending = missing_embedding_chunks(connection, version_id)
     if not pending:
         update_embedding_job(connection, job_id, "embeddings_applied", cached_chunks=cache_hits, pending_chunks=0)
         update_crawler_embedding_status(connection, crawler_job_id, job_id, "embeddings_applied")
@@ -105,7 +108,8 @@ def poll_pending_embedding_jobs(connection: Any) -> list[EmbeddingEnsureResult]:
             output.append(embed_sync(connection, job_id, version_id, missing_embedding_chunks(connection, version_id), 0))
             update_crawler_embedding_status(connection, crawler_job_id, job_id, output[-1].status)
             continue
-        statuses = voyage_batch_statuses(connection, job_id, batch_ids_for_job(job))
+        with observe_duration("oz_embedding_job_duration_seconds", {"phase": "batch_poll"}):
+            statuses = voyage_batch_statuses(connection, job_id, batch_ids_for_job(job))
         if not statuses:
             continue
         remote_states = {str(status.get("status") or "") for status in statuses}
@@ -120,13 +124,15 @@ def poll_pending_embedding_jobs(connection: Any) -> list[EmbeddingEnsureResult]:
         if "failed" in remote_states:
             for status in statuses:
                 if str(status.get("status") or "") in BATCH_DONE_STATUSES:
-                    apply_voyage_batch_outputs(connection, job_id, version_id, status)
+                    with observe_duration("oz_embedding_job_duration_seconds", {"phase": "batch_apply"}):
+                        apply_voyage_batch_outputs(connection, job_id, version_id, status)
             mark_batch_partial(connection, job_id, "voyage_batch_failed")
             output.append(embed_sync(connection, job_id, version_id, missing_embedding_chunks(connection, version_id), 0))
             update_crawler_embedding_status(connection, crawler_job_id, job_id, output[-1].status)
             continue
         if remote_states <= BATCH_DONE_STATUSES:
-            applied = sum(apply_voyage_batch_outputs(connection, job_id, version_id, status) for status in statuses)
+            with observe_duration("oz_embedding_job_duration_seconds", {"phase": "batch_apply"}):
+                applied = sum(apply_voyage_batch_outputs(connection, job_id, version_id, status) for status in statuses)
             pending = missing_embedding_chunks(connection, version_id)
             if pending:
                 mark_batch_partial(connection, job_id, f"{len(pending)} rows missing after batch")
@@ -304,7 +310,8 @@ def embed_sync(
 ) -> EmbeddingEnsureResult:
     update_embedding_job(connection, job_id, "sync_embedding", pending_chunks=len(pending), cached_chunks=cache_hits)
     texts = [str(row.get("content") or "") for row in pending]
-    embeddings = embeddings_for_texts(texts)
+    with observe_duration("oz_embedding_job_duration_seconds", {"phase": "sync_embed"}):
+        embeddings = embeddings_for_texts(texts)
     embedded = 0
     failed = 0
     for row, embedding in zip(pending, embeddings, strict=False):
@@ -343,16 +350,17 @@ def submit_voyage_batch(
     batch_ids: list[str] = []
     input_file_ids: list[str] = []
     batch_objects: list[dict[str, Any]] = []
-    for batch_rows in split_batch_rows(pending):
-        body = batch_jsonl(batch_rows)
-        input_file_id = voyage_upload_file(api_key, body)
-        batch = voyage_create_batch(api_key, input_file_id, version_id=version_id, job_id=job_id)
-        batch_id = str(batch.get("id") or "")
-        if not batch_id:
-            raise RuntimeError("Voyage batch response did not include id")
-        batch_ids.append(batch_id)
-        input_file_ids.append(input_file_id)
-        batch_objects.append(batch)
+    with observe_duration("oz_embedding_job_duration_seconds", {"phase": "batch_submit"}):
+        for batch_rows in split_batch_rows(pending):
+            body = batch_jsonl(batch_rows)
+            input_file_id = voyage_upload_file(api_key, body)
+            batch = voyage_create_batch(api_key, input_file_id, version_id=version_id, job_id=job_id)
+            batch_id = str(batch.get("id") or "")
+            if not batch_id:
+                raise RuntimeError("Voyage batch response did not include id")
+            batch_ids.append(batch_id)
+            input_file_ids.append(input_file_id)
+            batch_objects.append(batch)
     for row in pending:
         upsert_embedding_item(connection, job_id, row, "pending", None)
     execute(

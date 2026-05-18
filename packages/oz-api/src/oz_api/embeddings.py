@@ -6,6 +6,8 @@ import os
 from typing import Any
 from urllib import request
 
+from oz_api.observability import observe_duration
+
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_EMBEDDING_PROVIDER = "voyage"
@@ -122,8 +124,16 @@ def request_embedding(
         method="POST",
     )
     try:
-        with request.urlopen(req, timeout=float(os.environ.get("OZ_EMBEDDING_TIMEOUT_SECONDS", "20"))) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        with observe_duration(
+            "oz_embedding_request_duration_seconds",
+            {
+                "provider": embedding_provider(),
+                "model": embedding_model(),
+                "input_type": str(payload.get("input_type") or "document"),
+            },
+        ):
+            with request.urlopen(req, timeout=float(os.environ.get("OZ_EMBEDDING_TIMEOUT_SECONDS", "20"))) as response:
+                body = json.loads(response.read().decode("utf-8"))
         embedding = nested_value(body, result_path)
         if isinstance(embedding, list):
             values = [float(value) for value in embedding]

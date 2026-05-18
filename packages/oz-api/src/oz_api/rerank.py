@@ -9,6 +9,7 @@ from typing import Any
 from urllib import request
 
 from oz_api.intent import classify_query
+from oz_api.observability import observe_duration
 from oz_api.redis_store import redis_client
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
@@ -162,7 +163,7 @@ def jina_scores(api_key: str | None, query: str, documents: list[str]) -> list[t
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if not api_key:
         headers.pop("Authorization", None)
-    return request_scores(url, payload, headers)
+    return request_scores(url, payload, headers, provider="jina")
 
 
 def cohere_scores(api_key: str | None, query: str, documents: list[str]) -> list[tuple[int, float]] | None:
@@ -175,7 +176,7 @@ def cohere_scores(api_key: str | None, query: str, documents: list[str]) -> list
         "top_n": len(documents),
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    return request_scores("https://api.cohere.com/v2/rerank", payload, headers)
+    return request_scores("https://api.cohere.com/v2/rerank", payload, headers, provider="cohere")
 
 
 def zeroentropy_scores(api_key: str | None, query: str, documents: list[str]) -> list[tuple[int, float]] | None:
@@ -190,14 +191,21 @@ def zeroentropy_scores(api_key: str | None, query: str, documents: list[str]) ->
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     url = os.environ.get("OZ_ZEROENTROPY_RERANK_URL", "https://api.zeroentropy.dev/v1/models/rerank")
-    return request_scores(url, payload, headers)
+    return request_scores(url, payload, headers, provider="zeroentropy")
 
 
-def request_scores(url: str, payload: dict[str, Any], headers: dict[str, str]) -> list[tuple[int, float]] | None:
+def request_scores(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    provider: str,
+) -> list[tuple[int, float]] | None:
     req = request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        with request.urlopen(req, timeout=rerank_timeout_seconds()) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        with observe_duration("oz_rerank_request_duration_seconds", {"provider": provider}):
+            with request.urlopen(req, timeout=rerank_timeout_seconds()) as response:
+                body = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
         LOGGER.info("rerank request failed: %s", exc)
         return None

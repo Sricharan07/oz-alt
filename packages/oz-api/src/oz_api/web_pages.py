@@ -354,6 +354,7 @@ def status_page() -> str:
       <h2>Public endpoints</h2>
       <p>API health: <code>https://api.tryoz.dev/health</code></p>
       <p>Catalog: <code>https://api.tryoz.dev/catalog</code></p>
+      <p>Status JSON: <code>https://api.tryoz.dev/status.json</code></p>
     </section>
     <section>
       <h2>Incident policy</h2>

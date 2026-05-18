@@ -28,6 +28,7 @@ PUBLIC_PATHS = {
     "/privacy",
     "/terms",
     "/status",
+    "/status.json",
     "/metrics",
     "/login",
     "/login/",

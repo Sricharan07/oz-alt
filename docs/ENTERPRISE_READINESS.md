@@ -54,6 +54,30 @@ Read protected Prometheus-style metrics:
 curl -H "Authorization: Bearer $OZ_METRICS_TOKEN" https://api.tryoz.dev/metrics
 ```
 
+Read customer-visible status JSON:
+
+```bash
+curl https://api.tryoz.dev/status.json
+```
+
+Enable production JSON logs and request sampling:
+
+```bash
+OZ_LOG_FORMAT=json
+OZ_TRACE_SAMPLE_RATE=0.01
+```
+
+Load-test deployed retrieval before broad beta:
+
+```bash
+python3 scripts/load-test-retrieval.py \
+  --url https://api.tryoz.dev/search \
+  --library vercel/next.js \
+  --query 'middleware cookies authentication' \
+  --requests 100 \
+  --concurrency 10
+```
+
 Install operational timers on the Docker host:
 
 ```bash

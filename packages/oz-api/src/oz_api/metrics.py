@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from oz_api.auth_store import AuthStore
+from oz_api.observability import histogram_metric_values
 from oz_api.redis_store import redis_client, redis_key
 from oz_api.retrieval_metrics import retrieval_latency_metric_values
 
@@ -28,12 +29,27 @@ def render_prometheus_metrics() -> str:
         lines.append(metric_line(name, value))
     emitted_types = set()
     for (name, labels), value in retrieval_latency_metric_values().items():
-        metric_type = "histogram" if name.startswith("oz_retrieval_latency_seconds") else "counter"
-        if name not in emitted_types:
-            lines.append(f"# TYPE {name} {metric_type}")
-            emitted_types.add(name)
+        type_name, metric_type = prometheus_type(name)
+        if type_name not in emitted_types:
+            lines.append(f"# TYPE {type_name} {metric_type}")
+            emitted_types.add(type_name)
+        lines.append(metric_line(name, value, dict(labels)))
+    for (name, labels), value in histogram_metric_values().items():
+        type_name, metric_type = prometheus_type(name)
+        if type_name not in emitted_types:
+            lines.append(f"# TYPE {type_name} {metric_type}")
+            emitted_types.add(type_name)
         lines.append(metric_line(name, value, dict(labels)))
     return "\n".join(lines) + "\n"
+
+
+def prometheus_type(name: str) -> tuple[str, str]:
+    for suffix in ("_bucket", "_sum", "_count"):
+        if name.endswith(suffix):
+            return name.removesuffix(suffix), "histogram"
+    if name.endswith("_total"):
+        return name, "counter"
+    return name, "gauge"
 
 
 def collect_metric_values() -> dict[str, float]:

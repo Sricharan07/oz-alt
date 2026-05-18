@@ -12,6 +12,7 @@ from urllib.parse import urldefrag
 
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
+from oz_api.observability import observe_duration
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
@@ -541,14 +542,16 @@ class PostgresWriter(IndexWriter):
         self.connection = connection
 
     def scalar(self, sql: str, params: tuple[Any, ...]) -> int:
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, params)
-            row = cursor.fetchone()
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "indexer_scalar", "mode": sql_operation(sql)}):
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
         return int(row[0])
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, params)
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "indexer_execute", "mode": sql_operation(sql)}):
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql, params)
 
     def upsert_vendor(self, vendor: str) -> int:
         return self.scalar(
@@ -876,6 +879,11 @@ class PostgresWriter(IndexWriter):
                 vector,
             ),
         )
+
+
+def sql_operation(sql: str) -> str:
+    first = (sql.strip().split(None, 1) or ["unknown"])[0].lower()
+    return first if first in {"select", "insert", "update", "delete", "with"} else "other"
 
 
 def main(argv: list[str] | None = None) -> int:

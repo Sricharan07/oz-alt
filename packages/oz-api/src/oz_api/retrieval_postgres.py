@@ -7,6 +7,7 @@ from typing import Any
 from oz_api.embeddings import embedding_for_query
 from oz_api.db import postgres_connection
 from oz_api.intent import classify_query, intent_name
+from oz_api.observability import observe_duration
 from oz_api.ranking import local_chunk_score
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_metrics import retrieval_statement_timeout_ms
@@ -124,11 +125,12 @@ def suggest_from_postgres(
         """
         params = [terms, terms, terms, terms, max_results]
     try:
-        with connection:
-            with connection.cursor() as cursor:
-                cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
-                cursor.execute(sql, tuple(params))
-                rows = cursor.fetchall()
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "suggest", "mode": "vector" if vector else "fts"}):
+            with connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
+                    cursor.execute(sql, tuple(params))
+                    rows = cursor.fetchall()
         return [
             {"vendor": row[0], "library": row[1], "version": row[2], "score": float(row[3]), "reason": row[4]}
             for row in rows
@@ -242,12 +244,13 @@ def search_from_postgres(
         limit %s
     """
     try:
-        with connection:
-            with connection.cursor() as cursor:
-                cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
-                cursor.execute(sql, tuple(params))
-                rows = cursor.fetchall()
-                mark_search_versions_requested(cursor, rows)
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "search", "mode": "vector" if vector else "fts_symbol"}):
+            with connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
+                    cursor.execute(sql, tuple(params))
+                    rows = cursor.fetchall()
+                    mark_search_versions_requested(cursor, rows)
         return score_postgres_rows(rows, query)
     except VersionResolutionError:
         raise
@@ -407,31 +410,32 @@ def mark_search_versions_requested(cursor: Any, rows: list[Any]) -> None:
 
 
 def resolve_db_version_id(connection: Any, vendor: str, library: str, requested_version: str | None) -> int:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            select l.id as library_id,
-                   l.redirected_to_library_id,
-                   rl.name as redirected_library,
-                   rv.name as redirected_vendor,
-                   l.default_version_id,
-                   r.version_id as latest_version_id,
-                   lv.id as version_id,
-                   lv.version,
-                   lv.archived_at
-            from libraries l
-            join vendors v on v.id = l.vendor_id
-            left join libraries rl on rl.id = l.redirected_to_library_id
-            left join vendors rv on rv.id = rl.vendor_id
-            left join refs r on r.library_id = l.id and r.channel = 'latest'
-            left join library_versions lv on lv.library_id = l.id
-            where v.name = %s and l.name = %s
-            order by lv.created_at desc nulls last
-            """,
-            (vendor, library),
-        )
-        columns = [getattr(column, "name", column[0]) for column in cursor.description]
-        rows = [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
+    with observe_duration("oz_db_query_duration_seconds", {"operation": "resolve_version", "mode": "scope"}):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select l.id as library_id,
+                       l.redirected_to_library_id,
+                       rl.name as redirected_library,
+                       rv.name as redirected_vendor,
+                       l.default_version_id,
+                       r.version_id as latest_version_id,
+                       lv.id as version_id,
+                       lv.version,
+                       lv.archived_at
+                from libraries l
+                join vendors v on v.id = l.vendor_id
+                left join libraries rl on rl.id = l.redirected_to_library_id
+                left join vendors rv on rv.id = rl.vendor_id
+                left join refs r on r.library_id = l.id and r.channel = 'latest'
+                left join library_versions lv on lv.library_id = l.id
+                where v.name = %s and l.name = %s
+                order by lv.created_at desc nulls last
+                """,
+                (vendor, library),
+            )
+            columns = [getattr(column, "name", column[0]) for column in cursor.description]
+            rows = [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
 
     if not rows:
         raise VersionResolutionError(

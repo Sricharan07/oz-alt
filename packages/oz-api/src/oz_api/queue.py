@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from oz_api.auth_store import AuthStore
+from oz_api.observability import get_request_id
 from oz_api.redis_store import redis_client, redis_key
 from oz_api.storage import RegistryStorage
 
@@ -18,6 +19,9 @@ def enqueue_crawler_job(
     principal: "AuthPrincipal | None" = None,
 ) -> dict[str, Any]:
     event = crawler_job_event(payload)
+    request_id = get_request_id()
+    if request_id:
+        event["request_id"] = request_id
     missing = missing_required_crawler_fields(event)
     if missing:
         raise ValueError(f"missing crawler job fields: {', '.join(missing)}")
@@ -98,6 +102,7 @@ def queued_crawler_job_event(row: dict[str, Any]) -> dict[str, Any]:
         "concurrent_requests": row.get("concurrent_requests"),
         "download_delay": row.get("download_delay"),
         "robots_txt": row.get("robots_txt"),
+        "request_id": get_request_id(),
     }
     profile = profile_from_row(row)
     if profile:
@@ -142,6 +147,7 @@ def crawler_job_event(payload: dict[str, Any]) -> dict[str, Any]:
         "include_source_files": payload.get("include_source_files"),
         "target_language": payload.get("target_language"),
         "profile": payload.get("profile"),
+        "request_id": payload.get("request_id") or get_request_id(),
     }
 
 
