@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from scripts.worker import queue_has_items
+from oz_api import admin_ops
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.queue import queued_crawler_job_event
@@ -175,6 +176,28 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(event["db_job_id"], "49")
         self.assertEqual(event["profile"]["allowed_hosts"], ["docs.djangoproject.com"])
         self.assertEqual(event["profile"]["allowed_paths"], ["/en/stable/"])
+
+    def test_catalog_promotion_does_not_record_empty_quality_failure(self) -> None:
+        class FakeStore:
+            def execute(self, *_args, **_kwargs) -> list[dict[str, object]]:
+                return []
+
+        entry = {
+            "vendor": "vercel",
+            "library": "next.js",
+            "version": "15",
+            "ref_sha": "abc",
+            "pack_path": "packs/next.ozpack",
+            "source_urls": ["https://nextjs.org/docs"],
+        }
+        job = {"db_job_id": "34"}
+        with patch.object(admin_ops.AuthStore, "from_env", return_value=FakeStore()), patch.object(
+            admin_ops, "record_pack_build"
+        ), patch.object(admin_ops, "record_quality_run") as record_quality:
+            admin_ops.record_catalog_promotion(entry, job, {})
+            record_quality.assert_not_called()
+            admin_ops.record_catalog_promotion(entry, job, {"passed": True})
+            record_quality.assert_called_once()
 
     def test_baseline_profile_excludes_legacy_noise(self) -> None:
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])

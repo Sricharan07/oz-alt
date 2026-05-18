@@ -117,15 +117,61 @@ def check_latest_crawls() -> dict[str, Any]:
 def check_quality_and_evals() -> dict[str, Any]:
     data = counts(
         """
+        with latest as (
+          select id, library_id, version, queued_at
+          from (
+            select j.*,
+                   row_number() over (partition by j.library_id order by j.queued_at desc, j.id desc) rn
+            from crawler_jobs j
+            where j.status = 'completed'
+          ) ranked
+          where rn = 1
+        )
         select
-          (select count(*) from quality_runs where passed) as quality_passed,
-          (select count(*) from quality_runs where not passed) as quality_failed,
-          (select count(*) from eval_runs where passed) as eval_passed,
-          (select count(*) from eval_runs where not passed) as eval_failed
+          count(*) as latest_completed_jobs,
+          count(*) filter (
+            where exists (
+              select 1 from quality_runs q
+              where q.job_id = latest.id and q.passed
+            )
+          ) as latest_quality_passed,
+          count(*) filter (
+            where not exists (
+              select 1 from quality_runs q
+              where q.job_id = latest.id and q.passed
+            )
+          ) as latest_quality_missing,
+          count(*) filter (
+            where not exists (
+              select 1 from eval_runs e
+              where e.library_id = latest.library_id
+                and e.version = latest.version
+                and e.eval_type = 'pack_materialization'
+                and e.passed
+                and e.created_at >= latest.queued_at
+            )
+          ) as missing_pack_eval,
+          count(*) filter (
+            where exists (
+              select 1 from eval_runs e
+              where e.library_id = latest.library_id
+                and e.version = latest.version
+                and not e.passed
+                and e.created_at >= latest.queued_at
+            )
+          ) as latest_eval_failed
+        from latest
         """
     )
-    status = "ok" if data.get("quality_failed", 1) == 0 and data.get("eval_failed", 1) == 0 else "fail"
-    return row("quality_evals", status, "Quality and eval gates should have no failing promoted runs", data)
+    status = (
+        "ok"
+        if data.get("latest_completed_jobs", 0) > 0
+        and data.get("latest_quality_missing", 1) == 0
+        and data.get("missing_pack_eval", 1) == 0
+        and data.get("latest_eval_failed", 1) == 0
+        else "fail"
+    )
+    return row("quality_evals", status, "Latest completed crawls should have passing quality and eval gates", data)
 
 
 def check_pack_signatures() -> dict[str, Any]:

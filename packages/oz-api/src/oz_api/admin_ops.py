@@ -179,7 +179,8 @@ def record_catalog_promotion(entry: dict[str, Any], job: dict[str, Any], quality
             "quality_json": json.dumps(quality or {}, sort_keys=True),
         },
     )
-    record_quality_run(entry, job, quality or {})
+    if quality and "passed" in quality:
+        record_quality_run(entry, job, quality)
     record_pack_build(entry, job)
 
 

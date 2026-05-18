@@ -87,6 +87,16 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         record_crawler_job_log(job, "error", "quality gate failed", quality_summary(quality))
         raise RuntimeError("quality gate failed; pack was not promoted")
     record_crawler_job_log(job, "info", "quality gate passed", quality_summary(quality))
+    quality_entry = catalog_entry_for_job(
+        vendor=vendor,
+        library=library,
+        version=version,
+        source_url=source_url,
+        fixture_path=target,
+        pack_key="",
+        ref_sha="",
+    )
+    record_quality_run(quality_entry, job, quality)
     pack_body, manifest = build_pack_bytes(target, vendor, library, version)
     pack_eval = pack_eval_report(manifest)
     if not pack_eval["passed"]:
