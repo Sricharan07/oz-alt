@@ -251,32 +251,32 @@ def open_embedding_job(connection: Any, version_id: int, crawler_job_id: int | N
 
 
 def apply_cache_hits(connection: Any, version_id: int, chunks: list[dict[str, Any]]) -> int:
-    missing = [row for row in chunks if not row.get("embedded")]
-    if not missing:
+    if not any(not row.get("embedded") for row in chunks):
         return 0
-    cache_keys = [embedding_cache_key(str(row["chunk_sha"])) for row in missing]
-    cache_rows = rows(
+    row = one(
         connection,
-        "select cache_key, embedding, model, dimensions from embedding_cache where cache_key = any(%s)",
-        (cache_keys,),
-    )
-    by_key = {str(row["cache_key"]): row for row in cache_rows}
-    hits = 0
-    for row in missing:
-        cache = by_key.get(embedding_cache_key(str(row["chunk_sha"])))
-        if not cache:
-            continue
-        execute(
-            connection,
-            """
-            update chunks
-            set embedding = %s::vector, embedding_model = %s, embedding_dimensions = %s
-            where version_id = %s and id = %s and embedding is null
-            """,
-            (str(cache["embedding"]), cache["model"], int(cache["dimensions"]), version_id, int(row["id"])),
+        """
+        with updated as (
+          update chunks c
+          set embedding = ec.embedding,
+              embedding_model = ec.model,
+              embedding_dimensions = ec.dimensions
+          from embedding_cache ec
+          where c.version_id = %s
+            and c.embedding is null
+            and ec.chunk_sha = c.chunk_sha
+            and ec.provider = %s
+            and ec.model = %s
+            and ec.dimensions = %s
+            and ec.input_type = 'document'
+            and ec.schema_version = %s
+          returning c.id
         )
-        hits += 1
-    return hits
+        select count(*) as count from updated
+        """,
+        (version_id, embedding_provider(), embedding_model(), embedding_dimensions(), cache_schema_version()),
+    )
+    return int(row.get("count") or 0) if row else 0
 
 
 def embed_sync(
