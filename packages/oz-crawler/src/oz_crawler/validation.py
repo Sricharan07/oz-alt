@@ -9,6 +9,8 @@ from typing import Any
 
 from oz_crawler.profiles import LibraryProfile
 
+USEFUL_CONTENT_TYPES = {"api_reference", "code_example", "prose", "config", "cli", "error_ref", "types", "example"}
+
 
 @dataclass(frozen=True)
 class ValidationResult:
@@ -57,8 +59,8 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     if duplicate_ratio > 0.05:
         errors.append(f"duplicate chunk ratio {duplicate_ratio:.2f} exceeds 0.05")
     content_types = content_type_counts(chunks)
-    if chunks and not any(content_types.get(kind, 0) for kind in ("api_reference", "code_example", "prose")):
-        errors.append("chunks do not include useful api_reference, code_example, or prose content")
+    if chunks and not any(content_types.get(kind, 0) for kind in USEFUL_CONTENT_TYPES):
+        errors.append("chunks do not include useful documentation content")
     missing_anchors = sum(1 for row in chunks if not row.get("source_anchor"))
     if chunks and missing_anchors:
         errors.append(f"{missing_anchors} chunks are missing source anchors")

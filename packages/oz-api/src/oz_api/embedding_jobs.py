@@ -198,8 +198,8 @@ def missing_embedding_chunks(connection: Any, version_id: int) -> list[dict[str,
 
 
 def enforce_library_caps(chunks: list[dict[str, Any]]) -> None:
-    max_chunks = int_env("OZ_MAX_CHUNKS_PER_LIBRARY", 10000)
-    max_tokens = int_env("OZ_MAX_TOKENS_PER_LIBRARY", 2000000)
+    max_chunks = int_env("OZ_MAX_CHUNKS_PER_LIBRARY", 25000)
+    max_tokens = int_env("OZ_MAX_TOKENS_PER_LIBRARY", 10000000)
     total_tokens = sum(int(row.get("token_count") or token_count(str(row.get("content") or ""))) for row in chunks)
     if max_chunks > 0 and len(chunks) > max_chunks:
         raise RuntimeError(f"library chunk cap exceeded: {len(chunks)}/{max_chunks}")

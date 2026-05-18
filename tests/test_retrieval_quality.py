@@ -21,7 +21,7 @@ from oz_crawler.crawl import prepare_pages
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.token_counting import token_count
-from oz_crawler.validation import true_junk_rejections
+from oz_crawler.validation import USEFUL_CONTENT_TYPES, true_junk_rejections
 
 
 class RetrievalQualityTests(unittest.TestCase):
@@ -110,6 +110,11 @@ class RetrievalQualityTests(unittest.TestCase):
         ]
 
         self.assertEqual(len(true_junk_rejections(rows)), 1)
+
+    def test_validation_treats_all_retrieval_content_types_as_useful(self) -> None:
+        self.assertIn("config", USEFUL_CONTENT_TYPES)
+        self.assertIn("cli", USEFUL_CONTENT_TYPES)
+        self.assertIn("error_ref", USEFUL_CONTENT_TYPES)
 
     def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
         with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):
