@@ -227,15 +227,16 @@ def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
         return 0
     ready: list[dict[str, Any]] = []
     with connection:
-        results = poll_pending_embedding_jobs(connection)
-        writer = PostgresWriter(connection)
-        for result in results:
-            if not result.complete or result.version_id is None or result.job_id is None:
-                continue
-            writer.resolve_parent_chunks(result.version_id)
-            writer.rebuild_dedupe_clusters(result.version_id)
-        ready = ready_embedding_promotion_rows(connection)
-        ready.extend(reused_embedding_ready_rows(connection))
+        ready = reused_embedding_ready_rows(connection)
+        if not ready:
+            results = poll_pending_embedding_jobs(connection)
+            writer = PostgresWriter(connection)
+            for result in results:
+                if not result.complete or result.version_id is None or result.job_id is None:
+                    continue
+                writer.resolve_parent_chunks(result.version_id)
+                writer.rebuild_dedupe_clusters(result.version_id)
+            ready = ready_embedding_promotion_rows(connection)
     count = 0
     for row in ready:
         if promote_embedding_ready_job(storage, row):

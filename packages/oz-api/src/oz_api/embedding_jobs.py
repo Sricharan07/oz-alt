@@ -445,13 +445,25 @@ def voyage_get_batch(batch_id: str) -> dict[str, Any] | None:
     api_key = voyage_api_key()
     if not api_key or not batch_id:
         return None
-    return voyage_json_request(
+    timeout = float_env("OZ_VOYAGE_STATUS_TIMEOUT_SECONDS", 3.0)
+    try:
+        import httpx
+    except ImportError:
+        return voyage_json_request(
+            f"https://api.voyageai.com/v1/batches/{batch_id}",
+            api_key,
+            None,
+            method="GET",
+            timeout=timeout,
+        )
+    response = httpx.get(
         f"https://api.voyageai.com/v1/batches/{batch_id}",
-        api_key,
-        None,
-        method="GET",
-        timeout=float_env("OZ_VOYAGE_STATUS_TIMEOUT_SECONDS", 3.0),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        timeout=timeout,
     )
+    response.raise_for_status()
+    parsed = response.json()
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def voyage_batch_statuses(connection: Any, job_id: int, batch_ids: list[str]) -> list[dict[str, Any]]:
