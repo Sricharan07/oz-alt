@@ -223,7 +223,14 @@ def mark_crawler_job_started(job: dict[str, Any]) -> None:
 
 
 def mark_crawler_job_completed(job: dict[str, Any], *, pack_key: str, ref_sha: str) -> None:
-    update_crawler_job(job, "completed", finished=True, pack_key=pack_key, ref_sha=ref_sha)
+    update_crawler_job(
+        job,
+        "completed",
+        finished=True,
+        pack_key=pack_key,
+        ref_sha=ref_sha,
+        embedding_status="embeddings_applied",
+    )
 
 
 def mark_crawler_job_embedding_waiting(

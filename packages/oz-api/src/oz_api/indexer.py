@@ -441,6 +441,13 @@ def require_embeddings() -> bool:
     return os.environ.get("OZ_REQUIRE_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes"}
 
 
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
 def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
     existing = str(row.get("chunk_sha") or "")
     if len(existing) == 64 and all(char in "0123456789abcdef" for char in existing.lower()):
@@ -642,6 +649,7 @@ class PostgresWriter(IndexWriter):
         )
 
     def rebuild_dedupe_clusters(self, version_id: int) -> None:
+        chunk_count = self.scalar_int("select count(*) from chunks where version_id = %s", (version_id,))
         self.execute("delete from dedupe_clusters where version_id = %s", (version_id,))
         self.execute(
             """
@@ -679,6 +687,9 @@ class PostgresWriter(IndexWriter):
             """,
             (version_id, version_id),
         )
+        max_vector_chunks = env_int("OZ_DEDUPE_VECTOR_MAX_CHUNKS", 10000)
+        if max_vector_chunks > 0 and chunk_count > max_vector_chunks:
+            return
         self.execute(
             """
             with pairs as (
@@ -741,6 +752,12 @@ class PostgresWriter(IndexWriter):
             """,
             (version_id, version_id, version_id),
         )
+
+    def scalar_int(self, sql: str, params: tuple[Any, ...]) -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
 
     def set_benchmark_score(self, version_id: int, score: float) -> None:
         self.execute(

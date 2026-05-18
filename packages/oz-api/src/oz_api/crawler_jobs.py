@@ -222,26 +222,70 @@ def index_catalog_entry(storage: RegistryStorage, entry: dict[str, Any]) -> list
 
 def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
     ctx = RetrievalContext.from_env(storage)
-    connection = postgres_connection(ctx.database_url)
-    if connection is None:
+    if postgres_connection(ctx.database_url) is None:
         return 0
-    ready: list[dict[str, Any]] = []
-    with connection:
-        ready = reused_embedding_ready_rows(connection)
-        if not ready:
-            results = poll_pending_embedding_jobs(connection)
-            writer = PostgresWriter(connection)
-            for result in results:
-                if not result.complete or result.version_id is None or result.job_id is None:
-                    continue
-                writer.resolve_parent_chunks(result.version_id)
-                writer.rebuild_dedupe_clusters(result.version_id)
-            ready = ready_embedding_promotion_rows(connection)
+    ready = embedding_ready_rows(ctx.database_url)
+    if not ready:
+        completed = poll_and_apply_embedding_jobs(ctx.database_url)
+        for result in completed:
+            finalize_embedding_index(ctx.database_url, result.version_id, result.job_id)
+        ready = embedding_ready_rows(ctx.database_url)
     count = 0
     for row in ready:
         if promote_embedding_ready_job(storage, row):
             count += 1
     return count
+
+
+def embedding_ready_rows(database_url: str | None) -> list[dict[str, Any]]:
+    connection = postgres_connection(database_url)
+    if connection is None:
+        return []
+    with connection:
+        ready = reused_embedding_ready_rows(connection)
+        ready.extend(ready_embedding_promotion_rows(connection))
+        return dedupe_ready_rows(ready)
+
+
+def poll_and_apply_embedding_jobs(database_url: str | None) -> list[Any]:
+    connection = postgres_connection(database_url)
+    if connection is None:
+        return []
+    with connection:
+        return [
+            result
+            for result in poll_pending_embedding_jobs(connection)
+            if result.complete and result.version_id is not None and result.job_id is not None
+        ]
+
+
+def finalize_embedding_index(database_url: str | None, version_id: int | None, embedding_job_id: int | None) -> None:
+    if version_id is None or embedding_job_id is None:
+        return
+    connection = postgres_connection(database_url)
+    if connection is None:
+        return
+    with connection:
+        writer = PostgresWriter(connection)
+        writer.resolve_parent_chunks(version_id)
+        writer.rebuild_dedupe_clusters(version_id)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update embedding_jobs set status = 'dedupe_done', updated_at = now() where id = %s and status = 'embeddings_applied'",
+                (embedding_job_id,),
+            )
+
+
+def dedupe_ready_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[int] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        job_id = int(row["db_job_id"])
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        output.append(row)
+    return output
 
 
 def ready_embedding_promotion_rows(connection: Any) -> list[dict[str, Any]]:
