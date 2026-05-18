@@ -17,7 +17,14 @@ from oz_api import admin_ops
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.queue import queued_crawler_job_event
-from oz_api.rerank import boost_named_suggestions, boost_query_matches, parse_rerank_results, strip_private_fields, zeroentropy_scores
+from oz_api.rerank import (
+    boost_named_suggestions,
+    boost_query_matches,
+    parse_rerank_results,
+    rerank_cache_key,
+    strip_private_fields,
+    zeroentropy_scores,
+)
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
 from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
@@ -209,6 +216,12 @@ class RetrievalQualityTests(unittest.TestCase):
         boosted = boost_named_suggestions("next.js", rows)
         self.assertGreater(boosted[0]["score"], 1)
         self.assertNotIn("_rerank_text", strip_private_fields(boosted)[0])
+
+    def test_rerank_cache_key_changes_when_candidate_paths_change(self) -> None:
+        first = rerank_cache_key("search:facebook/react", "hooks", "project", [{"path": "old.md"}])
+        second = rerank_cache_key("search:facebook/react", "hooks", "project", [{"path": "new.md"}])
+
+        self.assertNotEqual(first, second)
 
     def test_query_match_boost_keeps_exact_symbols_competitive_after_rerank(self) -> None:
         rows = [

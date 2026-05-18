@@ -14,7 +14,7 @@ from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
 
 LOGGER = logging.getLogger(__name__)
-RERANK_CACHE_VERSION = "search-rank-v6"
+RERANK_CACHE_VERSION = "search-rank-v7"
 
 
 def maybe_rerank(
@@ -27,7 +27,7 @@ def maybe_rerank(
     if len(rows) < 2 or clear_winner(rows):
         return strip_private_fields(boost_query_matches(query, rows))
 
-    cache_key = rerank_cache_key(route, query, fingerprint)
+    cache_key = rerank_cache_key(route, query, fingerprint, rows)
     cached = get_rerank_cache(cache_key)
     if cached is not None:
         return cached
@@ -245,14 +245,30 @@ def strip_private_fields(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{key: value for key, value in row.items() if not key.startswith("_")} for row in rows]
 
 
-def rerank_cache_key(route: str, query: str, fingerprint: str) -> str:
+def rerank_cache_key(route: str, query: str, fingerprint: str, rows: list[dict[str, Any]] | None = None) -> str:
     provider = os.environ.get("OZ_RERANK_PROVIDER", "jina").strip().lower()
     model = os.environ.get("OZ_RERANK_MODEL", "").strip()
     latency = os.environ.get("OZ_ZEROENTROPY_LATENCY", "").strip()
+    corpus = rerank_candidate_digest(rows or [])
     digest = hashlib.sha256(
-        f"{RERANK_CACHE_VERSION}\0{provider}\0{model}\0{latency}\0{route}\0{query}\0{fingerprint}".encode("utf-8")
+        f"{RERANK_CACHE_VERSION}\0{provider}\0{model}\0{latency}\0{route}\0{query}\0{fingerprint}\0{corpus}".encode(
+            "utf-8"
+        )
     ).hexdigest()
     return f"rerank:{digest}"
+
+
+def rerank_candidate_digest(rows: list[dict[str, Any]]) -> str:
+    payload = [
+        [
+            str(row.get("path") or ""),
+            str(row.get("source_anchor") or ""),
+            str(row.get("content_type") or ""),
+            str(row.get("token_count") or ""),
+        ]
+        for row in rows[: int(os.environ.get("OZ_RERANK_CANDIDATES", "50"))]
+    ]
+    return hashlib.sha256(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def get_rerank_cache(cache_key: str) -> list[dict[str, Any]] | None:
