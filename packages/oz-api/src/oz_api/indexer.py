@@ -687,7 +687,7 @@ class PostgresWriter(IndexWriter):
             """,
             (version_id, version_id),
         )
-        max_vector_chunks = env_int("OZ_DEDUPE_VECTOR_MAX_CHUNKS", 10000)
+        max_vector_chunks = env_int("OZ_DEDUPE_VECTOR_MAX_CHUNKS", 5000)
         if max_vector_chunks > 0 and chunk_count > max_vector_chunks:
             return
         self.execute(
