@@ -19,6 +19,10 @@ SQL
 
 for migration in infra/sql/*.sql; do
   filename="$(basename "$migration")"
+  if [[ ! "$filename" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "unsafe migration filename: ${filename}" >&2
+    exit 2
+  fi
   checksum="$(python3 - "$migration" <<'PY'
 from __future__ import annotations
 
@@ -29,15 +33,15 @@ from pathlib import Path
 print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
-  if [[ "$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v filename="$filename" -tAc "select 1 from schema_migrations where filename = :'filename'")" == "1" ]]; then
+  if [[ "$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tAc "select 1 from schema_migrations where filename = '$filename'")" == "1" ]]; then
     echo "skipping ${migration}"
     continue
   fi
   echo "applying ${migration}"
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v filename="$filename" -v checksum="$checksum" <<'SQL'
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<SQL
 insert into schema_migrations(filename, checksum)
-values (:'filename', :'checksum')
+values ('$filename', '$checksum')
 on conflict (filename) do update set
   checksum = excluded.checksum,
   applied_at = now();
