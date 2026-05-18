@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Sricharan07/oz/.github/actions/setup-oz@v0.1.4
+      - uses: Sricharan07/oz/.github/actions/setup-oz@v0.1.5
         with:
           auth-token: ${{ secrets.OZ_AUTH_TOKEN }}
           pull: vercel/next.js facebook/react

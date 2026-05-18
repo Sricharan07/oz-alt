@@ -4,6 +4,8 @@ All notable Oz product and release changes are tracked here.
 
 ## Unreleased
 
+## 0.1.5
+
 - Add monorepo-aware `oz init` dependency discovery.
 - Add path-first `oz mcp` server for agent clients that speak MCP without returning large snippet blobs by default.
 - Add public library browser and pack detail pages.
