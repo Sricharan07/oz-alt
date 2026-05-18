@@ -51,6 +51,7 @@ def ensure_version_embeddings(
     active_job = embedding_job_row(connection, job_id)
     if active_job and str(active_job.get("status") or "") in {"batch_submitted", "batch_running"}:
         pending = missing_embedding_chunks(connection, version_id)
+        update_crawler_embedding_status(connection, crawler_job_id, job_id, str(active_job["status"]))
         return result(
             str(active_job["status"]),
             "batch",

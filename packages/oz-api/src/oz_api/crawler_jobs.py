@@ -154,6 +154,7 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             pack_key=pack_key,
             ref_sha=str(manifest["tree_sha256"]),
             status=waiting.status,
+            embedding_job_id=waiting.job_id,
         )
         return
     upsert_catalog_entry(storage, catalog_entry)
@@ -234,6 +235,7 @@ def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
             writer.resolve_parent_chunks(result.version_id)
             writer.rebuild_dedupe_clusters(result.version_id)
         ready = ready_embedding_promotion_rows(connection)
+        ready.extend(reused_embedding_ready_rows(connection))
     count = 0
     for row in ready:
         if promote_embedding_ready_job(storage, row):
@@ -263,6 +265,42 @@ def ready_embedding_promotion_rows(connection: Any) -> list[dict[str, Any]]:
               and j.pack_key is not null
               and j.ref_sha is not null
             order by ej.updated_at asc
+            limit 20
+            """,
+        )
+        columns = [getattr(column, "name", column[0]) for column in cursor.description]
+        return [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
+
+
+def reused_embedding_ready_rows(connection: Any) -> list[dict[str, Any]]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            select distinct on (j.id)
+                   ej.id as embedding_job_id,
+                   j.id as db_job_id,
+                   v.name as vendor,
+                   l.name as library,
+                   coalesce(nullif(j.version, ''), lv.version) as version,
+                   j.source_url,
+                   j.pack_key,
+                   j.ref_sha
+            from crawler_jobs j
+            join libraries l on l.id = j.library_id
+            join vendors v on v.id = l.vendor_id
+            join library_versions lv on lv.library_id = l.id
+                 and lv.version = coalesce(nullif(j.version, ''), lv.version)
+            join embedding_jobs ej on ej.version_id = lv.id
+            where j.status = 'batch_running'
+              and j.pack_key is not null
+              and j.ref_sha is not null
+              and ej.status in ('embeddings_applied', 'dedupe_done', 'promoted')
+              and (ej.crawler_job_id is null or ej.crawler_job_id <> j.id)
+              and not exists (
+                select 1 from chunks c
+                where c.version_id = lv.id and c.embedding is null
+              )
+            order by j.id, ej.updated_at desc
             limit 20
             """,
         )
