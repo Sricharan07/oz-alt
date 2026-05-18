@@ -444,7 +444,13 @@ def voyage_get_batch(batch_id: str) -> dict[str, Any] | None:
     api_key = voyage_api_key()
     if not api_key or not batch_id:
         return None
-    return voyage_json_request(f"https://api.voyageai.com/v1/batches/{batch_id}", api_key, None, method="GET")
+    return voyage_json_request(
+        f"https://api.voyageai.com/v1/batches/{batch_id}",
+        api_key,
+        None,
+        method="GET",
+        timeout=float_env("OZ_VOYAGE_STATUS_TIMEOUT_SECONDS", 10.0),
+    )
 
 
 def batch_ids_for_job(job: dict[str, Any]) -> list[str]:
@@ -470,7 +476,14 @@ def voyage_cancel_batch(batch_id: str) -> None:
         voyage_json_request(f"https://api.voyageai.com/v1/batches/{batch_id}/cancel", api_key, None, method="POST")
 
 
-def voyage_json_request(url: str, api_key: str, payload: dict[str, Any] | None, *, method: str) -> dict[str, Any]:
+def voyage_json_request(
+    url: str,
+    api_key: str,
+    payload: dict[str, Any] | None,
+    *,
+    method: str,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = request.Request(
         url,
@@ -478,7 +491,7 @@ def voyage_json_request(url: str, api_key: str, payload: dict[str, Any] | None, 
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method=method,
     )
-    with request.urlopen(req, timeout=60) as response:
+    with request.urlopen(req, timeout=timeout) as response:
         parsed = json.loads(response.read().decode("utf-8"))
     return parsed if isinstance(parsed, dict) else {}
 
@@ -633,6 +646,7 @@ def update_crawler_embedding_status(connection: Any, crawler_job_id: int | None,
 
 
 def pending_batch_jobs(connection: Any) -> list[dict[str, Any]]:
+    limit = int_env("OZ_EMBEDDING_BATCH_POLL_LIMIT", 5)
     return rows(
         connection,
         """
@@ -640,9 +654,9 @@ def pending_batch_jobs(connection: Any) -> list[dict[str, Any]]:
         from embedding_jobs
         where status in ('batch_submitted', 'batch_running', 'batch_partial')
         order by updated_at asc
-        limit 20
+        limit %s
         """,
-        (),
+        (limit,),
     )
 
 

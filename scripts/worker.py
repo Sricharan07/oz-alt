@@ -38,22 +38,22 @@ def main() -> int:
     storage = RegistryStorage.from_env(args.repo_root.resolve())
     queue_name = redis_key("OZ_CRAWLER_REDIS_QUEUE", "oz:crawler:jobs")
     while RUNNING:
+        item = client.blpop(queue_name, timeout=5)
+        if item is not None:
+            _queue, body = item
+            job = parse_job(body)
+            try:
+                process_job(storage, job)
+            except Exception as exc:
+                mark_crawler_job_failed(job, str(exc))
+                print(f"crawler job failed: {exc}", file=sys.stderr)
+            if args.once:
+                break
+            continue
         try:
             process_pending_embedding_promotions(storage)
         except Exception as exc:
             print(f"embedding promotion poll failed: {exc}", file=sys.stderr)
-        item = client.blpop(queue_name, timeout=5)
-        if item is None:
-            if args.once:
-                break
-            continue
-        _queue, body = item
-        job = parse_job(body)
-        try:
-            process_job(storage, job)
-        except Exception as exc:
-            mark_crawler_job_failed(job, str(exc))
-            print(f"crawler job failed: {exc}", file=sys.stderr)
         if args.once:
             break
     return 0
