@@ -113,7 +113,7 @@ def is_authorized_request(request: Request, state: ServerState) -> bool:
     if not state.require_auth:
         return True
     path = request.url.path
-    if path in PUBLIC_PATHS:
+    if path in PUBLIC_PATHS or path.startswith("/libraries") or path.startswith("/api/libraries/"):
         return True
     token = bearer_token(request.headers)
     if path.startswith("/admin"):

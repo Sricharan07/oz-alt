@@ -7,7 +7,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from oz_api.http_context import state_from_request
 from oz_api.metrics import collect_metric_values, metrics_authorized, render_prometheus_metrics
-from oz_api.web_pages import public_markdown_html, render_home_page, render_login_page, render_signup_page, status_page
+from oz_api.public_catalog import public_library_detail, public_library_rows
+from oz_api.web_pages import (
+    public_markdown_html,
+    render_home_page,
+    render_libraries_page,
+    render_library_detail_page,
+    render_login_page,
+    render_signup_page,
+    status_page,
+)
 
 router = APIRouter()
 
@@ -25,6 +34,45 @@ async def health() -> dict[str, str | bool]:
 @router.get("/catalog")
 async def catalog(request: Request):
     return state_from_request(request).storage.load_catalog_document()
+
+
+@router.get("/libraries", response_class=HTMLResponse)
+@router.get("/libraries/", response_class=HTMLResponse)
+async def libraries_page(request: Request) -> HTMLResponse:
+    rows = public_library_rows(state_from_request(request).storage)
+    return HTMLResponse(render_libraries_page(rows))
+
+
+@router.get("/libraries.json")
+async def libraries_json(request: Request) -> dict[str, object]:
+    rows = public_library_rows(state_from_request(request).storage)
+    return {"libraries": rows}
+
+
+@router.get("/libraries/{vendor}/{library:path}", response_class=HTMLResponse)
+async def library_page(request: Request, vendor: str, library: str):
+    detail = public_library_detail(
+        state_from_request(request).storage,
+        vendor,
+        library,
+        request.query_params.get("version"),
+    )
+    if detail is None:
+        return JSONResponse({"error": "library_not_found", "vendor": vendor, "library": library}, status_code=404)
+    return HTMLResponse(render_library_detail_page(detail))
+
+
+@router.get("/api/libraries/{vendor}/{library:path}")
+async def library_json(request: Request, vendor: str, library: str):
+    detail = public_library_detail(
+        state_from_request(request).storage,
+        vendor,
+        library,
+        request.query_params.get("version"),
+    )
+    if detail is None:
+        return JSONResponse({"error": "library_not_found", "vendor": vendor, "library": library}, status_code=404)
+    return detail
 
 
 @router.get("/privacy", response_class=HTMLResponse)

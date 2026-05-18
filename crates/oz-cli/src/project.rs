@@ -10,15 +10,22 @@ pub(crate) fn init_project(project_root: &Path) -> Result<()> {
     ensure_global_objects_root()?;
 
     let existing = read_lock(project_root).unwrap_or_default();
-    let mut dependencies = detect_dependencies(project_root)?;
+    let (mut dependencies, mut workspaces) = detect_project_dependencies(project_root)?;
     dependencies.sort_by(|a, b| {
         (&a.ecosystem, &a.name, &a.requirement).cmp(&(&b.ecosystem, &b.name, &b.requirement))
     });
+    dependencies.dedup_by(|left, right| {
+        left.ecosystem == right.ecosystem
+            && left.name == right.name
+            && left.requirement == right.requirement
+    });
+    workspaces.sort_by(|a, b| a.path.cmp(&b.path));
 
     let lock = ProjectLock {
         schema_version: 1,
         generated_at: Utc::now().to_rfc3339(),
         project_fingerprint: fingerprint_dependencies(&dependencies)?,
+        workspaces,
         dependencies,
         pulls: existing.pulls,
     };
@@ -309,13 +316,286 @@ fn append_unique_line(path: &Path, line: &str) -> Result<()> {
     fs::write(path, content).with_context(|| format!("failed to update {}", path.display()))
 }
 
-fn detect_dependencies(project_root: &Path) -> Result<Vec<Dependency>> {
-    let mut dependencies = Vec::new();
-    read_package_json(project_root, &mut dependencies)?;
-    read_requirements(project_root, &mut dependencies)?;
-    read_go_mod(project_root, &mut dependencies)?;
-    read_cargo_toml(project_root, &mut dependencies)?;
-    Ok(dependencies)
+fn detect_project_dependencies(
+    project_root: &Path,
+) -> Result<(Vec<Dependency>, Vec<WorkspaceDependencies>)> {
+    let roots = workspace_roots(project_root)?;
+    let mut all_dependencies = Vec::new();
+    let mut workspaces = Vec::new();
+    for root in roots {
+        let mut dependencies = Vec::new();
+        read_package_json(&root, &mut dependencies)?;
+        read_requirements(&root, &mut dependencies)?;
+        read_go_mod(&root, &mut dependencies)?;
+        read_cargo_toml(&root, &mut dependencies)?;
+        dependencies.sort_by(|a, b| {
+            (&a.ecosystem, &a.name, &a.requirement).cmp(&(&b.ecosystem, &b.name, &b.requirement))
+        });
+        dependencies.dedup();
+        if !dependencies.is_empty() {
+            all_dependencies.extend(dependencies.clone());
+        }
+        workspaces.push(WorkspaceDependencies {
+            path: workspace_path(project_root, &root),
+            dependencies,
+        });
+    }
+    Ok((all_dependencies, workspaces))
+}
+
+fn workspace_roots(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = BTreeSet::new();
+    roots.insert(project_root.to_path_buf());
+    for pattern in package_json_workspace_patterns(project_root)? {
+        roots.extend(expand_workspace_pattern(project_root, &pattern)?);
+    }
+    for pattern in pnpm_workspace_patterns(project_root)? {
+        roots.extend(expand_workspace_pattern(project_root, &pattern)?);
+    }
+    for pattern in cargo_workspace_patterns(project_root)? {
+        roots.extend(expand_workspace_pattern(project_root, &pattern)?);
+    }
+    for root in go_work_roots(project_root)? {
+        roots.insert(root);
+    }
+    Ok(roots
+        .into_iter()
+        .filter(|path| !is_ignored_workspace_path(project_root, path))
+        .collect())
+}
+
+fn package_json_workspace_patterns(project_root: &Path) -> Result<Vec<String>> {
+    let path = project_root.join("package.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let mut patterns = Vec::new();
+    match value.get("workspaces") {
+        Some(serde_json::Value::Array(items)) => {
+            patterns.extend(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToString::to_string)),
+            );
+        }
+        Some(serde_json::Value::Object(map)) => {
+            if let Some(serde_json::Value::Array(items)) = map.get("packages") {
+                patterns.extend(
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(ToString::to_string)),
+                );
+            }
+        }
+        _ => {}
+    }
+    Ok(patterns)
+}
+
+fn pnpm_workspace_patterns(project_root: &Path) -> Result<Vec<String>> {
+    let path = project_root.join("pnpm-workspace.yaml");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut patterns = Vec::new();
+    let mut in_packages = false;
+    for raw in fs::read_to_string(&path)?.lines() {
+        let line = raw.trim();
+        if line.starts_with("packages:") {
+            in_packages = true;
+            continue;
+        }
+        if in_packages && line.starts_with('-') {
+            let value = line
+                .trim_start_matches('-')
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if !value.is_empty() && !value.starts_with('!') {
+                patterns.push(value.to_string());
+            }
+            continue;
+        }
+        if in_packages && !line.is_empty() && !line.starts_with('#') {
+            in_packages = false;
+        }
+    }
+    Ok(patterns)
+}
+
+fn cargo_workspace_patterns(project_root: &Path) -> Result<Vec<String>> {
+    let path = project_root.join("Cargo.toml");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&path)?;
+    if !content.contains("[workspace]") {
+        return Ok(Vec::new());
+    }
+    let mut patterns = Vec::new();
+    let mut in_workspace = false;
+    let mut collecting_members = false;
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            in_workspace = line == "[workspace]";
+            collecting_members = false;
+            continue;
+        }
+        if !in_workspace {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("members") {
+            if let Some((_, value)) = rest.split_once('=') {
+                patterns.extend(quoted_values(value));
+                collecting_members = value.contains('[') && !value.contains(']');
+            }
+            continue;
+        }
+        if collecting_members {
+            patterns.extend(quoted_values(line));
+            if line.contains(']') {
+                collecting_members = false;
+            }
+        }
+    }
+    Ok(patterns)
+}
+
+fn go_work_roots(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let path = project_root.join("go.work");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut roots = Vec::new();
+    let mut in_use_block = false;
+    for raw in fs::read_to_string(&path)?.lines() {
+        let line = raw.trim();
+        if line == "use (" {
+            in_use_block = true;
+            continue;
+        }
+        if in_use_block && line == ")" {
+            in_use_block = false;
+            continue;
+        }
+        let candidate = if let Some(rest) = line.strip_prefix("use ") {
+            rest.trim()
+        } else if in_use_block {
+            line
+        } else {
+            ""
+        };
+        let candidate = candidate.trim_matches('"');
+        if candidate.starts_with('.') {
+            let root = normalized_workspace_root(project_root, candidate);
+            if root.exists() {
+                roots.push(root);
+            }
+        }
+    }
+    Ok(roots)
+}
+
+fn expand_workspace_pattern(project_root: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
+    let cleaned = pattern
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches('/');
+    if cleaned.is_empty() || cleaned.starts_with('!') {
+        return Ok(Vec::new());
+    }
+    if !cleaned.contains('*') {
+        let root = normalized_workspace_root(project_root, cleaned);
+        return Ok(root.exists().then_some(root).into_iter().collect());
+    }
+
+    let wildcard = cleaned.find('*').unwrap_or(cleaned.len());
+    let base_pattern = cleaned[..wildcard].trim_end_matches('/');
+    let base = normalized_workspace_root(project_root, base_pattern);
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+
+    let recursive = cleaned.contains("**");
+    let mut roots = Vec::new();
+    if recursive {
+        for entry in WalkDir::new(&base)
+            .min_depth(1)
+            .max_depth(5)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_dir())
+        {
+            let path = entry.path();
+            if has_dependency_manifest(path) {
+                roots.push(path.to_path_buf());
+            }
+        }
+    } else {
+        for entry in
+            fs::read_dir(&base).with_context(|| format!("failed to read {}", base.display()))?
+        {
+            let entry = entry?;
+            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+                && has_dependency_manifest(&entry.path())
+            {
+                roots.push(entry.path());
+            }
+        }
+    }
+    Ok(roots)
+}
+
+fn quoted_values(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .filter_map(|part| {
+            let cleaned = part
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            (!cleaned.is_empty()).then_some(cleaned.to_string())
+        })
+        .collect()
+}
+
+fn normalized_workspace_root(project_root: &Path, value: &str) -> PathBuf {
+    let raw = Path::new(value);
+    if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        project_root.join(raw)
+    }
+}
+
+fn has_dependency_manifest(path: &Path) -> bool {
+    ["package.json", "requirements.txt", "go.mod", "Cargo.toml"]
+        .iter()
+        .any(|name| path.join(name).exists())
+}
+
+fn is_ignored_workspace_path(project_root: &Path, path: &Path) -> bool {
+    let relative = path.strip_prefix(project_root).unwrap_or(path);
+    relative.components().any(|component| {
+        matches!(
+            component.as_os_str().to_string_lossy().as_ref(),
+            "node_modules" | ".git" | ".codo" | "target"
+        )
+    })
+}
+
+fn workspace_path(project_root: &Path, path: &Path) -> String {
+    if path == project_root {
+        return ".".to_string();
+    }
+    to_project_path(project_root, path)
 }
 
 fn read_package_json(project_root: &Path, dependencies: &mut Vec<Dependency>) -> Result<()> {
@@ -471,4 +751,65 @@ pub(crate) fn upsert_pull(lock: &mut ProjectLock, pull: PulledLibrary) {
     }
     lock.pulls
         .sort_by(|a, b| (&a.vendor, &a.library).cmp(&(&b.vendor, &b.library)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_project(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "oz-cli-{name}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn detects_package_json_workspaces() {
+        let root = temp_project("npm-workspaces");
+        fs::write(
+            root.join("package.json"),
+            r#"{"workspaces":["apps/*"],"dependencies":{"react":"^19.0.0"}}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("apps/web")).unwrap();
+        fs::write(
+            root.join("apps/web/package.json"),
+            r#"{"dependencies":{"next":"^15.0.0"}}"#,
+        )
+        .unwrap();
+
+        let (dependencies, workspaces) = detect_project_dependencies(&root).unwrap();
+        assert!(dependencies.iter().any(|item| item.name == "react"));
+        assert!(dependencies.iter().any(|item| item.name == "next"));
+        assert!(workspaces.iter().any(|item| item.path == "."));
+        assert!(workspaces.iter().any(|item| item.path == "apps/web"));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn detects_pnpm_workspace_patterns() {
+        let root = temp_project("pnpm-workspaces");
+        fs::write(
+            root.join("pnpm-workspace.yaml"),
+            "packages:\n  - 'packages/*'\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("packages/api")).unwrap();
+        fs::write(
+            root.join("packages/api/package.json"),
+            r#"{"dependencies":{"@hiringbae/oz":"^0.1.0"}}"#,
+        )
+        .unwrap();
+
+        let (dependencies, workspaces) = detect_project_dependencies(&root).unwrap();
+        assert!(dependencies.iter().any(|item| item.name == "@hiringbae/oz"));
+        assert!(workspaces.iter().any(|item| item.path == "packages/api"));
+
+        fs::remove_dir_all(root).ok();
+    }
 }

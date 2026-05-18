@@ -45,10 +45,25 @@ class FastApiServerTests(unittest.TestCase):
         with self.client(require_auth=True) as client:
             health = client.get("/health")
             catalog = client.get("/catalog")
+            libraries = client.get("/libraries")
+            libraries_json = client.get("/libraries.json")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["service"], "oz-api")
         self.assertEqual(catalog.status_code, 200)
         self.assertIn("libraries", catalog.json())
+        self.assertEqual(libraries.status_code, 200)
+        self.assertIn("Libraries", libraries.text)
+        self.assertEqual(libraries_json.status_code, 200)
+        self.assertIn("libraries", libraries_json.json())
+
+    def test_library_detail_page_is_public(self) -> None:
+        with self.client(require_auth=True) as client:
+            response = client.get("/libraries/facebook/react")
+            payload = client.get("/api/libraries/facebook/react")
+        self.assertIn(response.status_code, {200, 404})
+        self.assertIn(payload.status_code, {200, 404})
+        if response.status_code == 200:
+            self.assertIn("oz pull facebook/react", response.text)
 
     def test_request_id_is_returned_and_status_json_is_public(self) -> None:
         with self.client(require_auth=True) as client:

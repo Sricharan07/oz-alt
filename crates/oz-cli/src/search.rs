@@ -124,6 +124,30 @@ pub(crate) fn context_docs(
     Ok(())
 }
 
+pub(crate) fn search_docs_response(
+    project_root: &Path,
+    query: &str,
+    library_scope: Option<&str>,
+    max_results: usize,
+) -> Result<SearchResponse> {
+    ensure_project(project_root)?;
+    let terms = normalize_query(query);
+    if terms.is_empty() {
+        bail!("search query must contain at least one alphanumeric term");
+    }
+    let config = read_config()?;
+    if configured_api_url(&config).is_some() {
+        return search_docs_remote_response(
+            project_root,
+            &config,
+            query,
+            library_scope,
+            max_results,
+        );
+    }
+    local_search_response(project_root, &terms, library_scope, max_results)
+}
+
 fn search_docs_remote(
     project_root: &Path,
     config: &OzConfig,
@@ -167,8 +191,13 @@ fn search_docs_remote(
 
     if response.results.is_empty() && library_scope.is_some() {
         let scope = library_scope.expect("checked is_some");
-        pull_library_impl(project_root, scope, true)?;
-        response = remote_search_with_pulls(project_root, config, query, Some(scope), 20)?;
+        if let Some(resolved_scope) = pull_scope_or_suggest(project_root, config, query, scope)? {
+            if resolved_scope != scope {
+                selected_library = Some(resolved_scope.clone());
+            }
+            response =
+                remote_search_with_pulls(project_root, config, query, Some(&resolved_scope), 20)?;
+        }
     }
 
     warn_stale_response(&response.stale_libraries);
@@ -202,6 +231,43 @@ fn search_docs_remote(
     Ok(())
 }
 
+fn search_docs_remote_response(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    library_scope: Option<&str>,
+    max_results: usize,
+) -> Result<SearchResponse> {
+    let mut response = if library_scope.is_none() {
+        let suggestions = remote_suggestions(project_root, config, query, 5)?;
+        if let Some(suggestion) = auto_select_suggestion(&suggestions) {
+            let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+            let spec = format!("{scope}@{}", suggestion.version);
+            pull_library_impl(project_root, &spec, true)?;
+            remote_search_with_pulls(project_root, config, query, Some(&scope), max_results)?
+        } else {
+            remote_search_with_pulls(project_root, config, query, None, max_results)?
+        }
+    } else {
+        remote_search_with_pulls(project_root, config, query, library_scope, max_results)?
+    };
+
+    if response.results.is_empty() && library_scope.is_some() {
+        let scope = library_scope.expect("checked is_some");
+        if let Some(resolved_scope) = pull_scope_or_suggest(project_root, config, query, scope)? {
+            response = remote_search_with_pulls(
+                project_root,
+                config,
+                query,
+                Some(&resolved_scope),
+                max_results,
+            )?;
+        }
+    }
+    warn_stale_response(&response.stale_libraries);
+    Ok(response)
+}
+
 fn remote_context_hits(
     project_root: &Path,
     config: &OzConfig,
@@ -223,8 +289,10 @@ fn remote_context_hits(
     };
     if response.results.is_empty() && library_scope.is_some() {
         let scope = library_scope.expect("checked is_some");
-        pull_library_impl(project_root, scope, true)?;
-        response = remote_search_with_pulls(project_root, config, query, Some(scope), 20)?;
+        if let Some(resolved_scope) = pull_scope_or_suggest(project_root, config, query, scope)? {
+            response =
+                remote_search_with_pulls(project_root, config, query, Some(&resolved_scope), 20)?;
+        }
     }
     warn_stale_response(&response.stale_libraries);
     Ok(response
@@ -234,7 +302,7 @@ fn remote_context_hits(
         .collect())
 }
 
-fn remote_search_with_pulls(
+pub(crate) fn remote_search_with_pulls(
     project_root: &Path,
     config: &OzConfig,
     query: &str,
@@ -270,7 +338,7 @@ fn remote_search_with_pulls(
     Ok(response)
 }
 
-fn remote_suggestions(
+pub(crate) fn remote_suggestions(
     project_root: &Path,
     config: &OzConfig,
     query: &str,
@@ -347,6 +415,93 @@ fn print_actionable_suggestions(query: &str, suggestions: &[SuggestResult]) {
         println!("  pull:   oz pull {scope}");
         println!("  search: oz search {:?} {scope}", query);
     }
+}
+
+fn pull_scope_or_suggest(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    scope: &str,
+) -> Result<Option<String>> {
+    match pull_library_impl(project_root, scope, true) {
+        Ok(()) => Ok(Some(scope.to_string())),
+        Err(original_error) => {
+            let suggested_query = format!("{query} {scope}");
+            let suggestions =
+                remote_suggestions(project_root, config, &suggested_query, 5).unwrap_or_default();
+            if let Some(suggestion) = auto_select_suggestion(&suggestions) {
+                let resolved_scope = format!("{}/{}", suggestion.vendor, suggestion.library);
+                let spec = format!("{resolved_scope}@{}", suggestion.version);
+                pull_library_impl(project_root, &spec, true)?;
+                Ok(Some(resolved_scope))
+            } else if suggestions.is_empty() {
+                Err(original_error)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn local_search_response(
+    project_root: &Path,
+    terms: &[String],
+    library_scope: Option<&str>,
+    max_results: usize,
+) -> Result<SearchResponse> {
+    let scope = library_scope.map(parse_library_scope).transpose()?;
+    let mut hits =
+        search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
+    if hits.is_empty() {
+        if let Some(spec) = best_registry_match(project_root, terms, &scope)? {
+            pull_library_impl(project_root, &spec, true)?;
+            hits =
+                search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
+        }
+    }
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then(a.line.cmp(&b.line))
+    });
+    let mut seen_paths = HashSet::new();
+    let results = hits
+        .into_iter()
+        .filter(|hit| seen_paths.insert(hit.path.clone()))
+        .take(max_results)
+        .map(|hit| {
+            let (library, version) = library_from_path(project_root, &hit.path);
+            SearchResult {
+                path: to_project_path(project_root, &hit.path),
+                line: Some(hit.line),
+                score: serde_json::json!(hit.score),
+                library,
+                version,
+            }
+        })
+        .collect();
+    Ok(SearchResponse {
+        results,
+        libraries_to_pull: Vec::new(),
+        stale_libraries: Vec::new(),
+    })
+}
+
+fn library_from_path(project_root: &Path, path: &Path) -> (String, String) {
+    let relative = path
+        .strip_prefix(project_root.join(VENDORS_DIR))
+        .unwrap_or(path);
+    let parts = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if parts.len() >= 2 {
+        if let Some((library, version)) = parts[1].rsplit_once('@') {
+            return (format!("{}/{}", parts[0], library), version.to_string());
+        }
+    }
+    (String::new(), String::new())
 }
 
 fn local_context_hits(

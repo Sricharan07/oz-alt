@@ -19,6 +19,7 @@ mod api;
 mod commands;
 mod freshness;
 mod install;
+mod mcp;
 mod project;
 mod registry;
 mod search;
@@ -28,6 +29,7 @@ use api::*;
 use commands::*;
 use freshness::*;
 use install::*;
+use mcp::*;
 use project::*;
 use registry::*;
 use search::*;
@@ -131,6 +133,9 @@ enum Command {
     /// Show pulled libraries for this project.
     Status,
 
+    /// Run the path-first Oz MCP server over stdio.
+    Mcp,
+
     /// Re-pull one library or every pulled library.
     Update {
         /// Optional library scope, for example vercel/next.js.
@@ -213,7 +218,11 @@ struct ProjectLock {
     schema_version: u32,
     generated_at: String,
     project_fingerprint: String,
+    #[serde(default)]
+    workspaces: Vec<WorkspaceDependencies>,
+    #[serde(default)]
     dependencies: Vec<Dependency>,
+    #[serde(default)]
     pulls: Vec<PulledLibrary>,
 }
 
@@ -222,6 +231,12 @@ struct Dependency {
     ecosystem: String,
     name: String,
     requirement: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WorkspaceDependencies {
+    path: String,
+    dependencies: Vec<Dependency>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -417,6 +432,7 @@ fn main() -> Result<()> {
             json,
         } => context_docs(&project_root, &query, library.as_deref(), max_tokens, json)?,
         Command::Status => print_status(&project_root)?,
+        Command::Mcp => run_mcp_server(&project_root)?,
         Command::Update { library } => update_libraries(&project_root, library.as_deref())?,
         Command::Prune {
             library,
@@ -455,13 +471,14 @@ fn should_check_freshness(command: &Command) -> bool {
             | Command::Config { .. }
             | Command::Dev { .. }
             | Command::Init
+            | Command::Mcp
     )
 }
 
 fn should_sync_skill(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Setup { .. } | Command::Install { .. } | Command::Dev { .. }
+        Command::Setup { .. } | Command::Install { .. } | Command::Dev { .. } | Command::Mcp
     )
 }
 
@@ -605,5 +622,11 @@ mod tests {
             }
             _ => panic!("expected prune command"),
         }
+    }
+
+    #[test]
+    fn parses_mcp_command() {
+        let cli = Cli::try_parse_from(["oz", "mcp"]).unwrap();
+        assert!(matches!(cli.command, Command::Mcp));
     }
 }

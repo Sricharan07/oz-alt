@@ -6,7 +6,7 @@ This repository contains the end-to-end beta product:
 
 1. 15 launch libraries crawled into `registry/fixtures`.
 2. Immutable `.ozpack` bundles in `registry/packs`.
-3. A Rust CLI with `setup`, `login`, `install`, `init`, `suggest`, `search`, `pull`, `update`, `prune`, `doctor`, and `config`.
+3. A Rust CLI with `setup`, `login`, `install`, `init`, `suggest`, `search`, `context`, `pull`, `update`, `prune`, `mcp`, `doctor`, and `config`.
 4. A Docker-first Python API that serves semantic `/suggest`, `/search`, `/refs`, `/pack`, auth, telemetry, user dashboard, and admin routes.
 5. A crawler wired to D4Vinci/Scrapling's Spider/session APIs, with chunking, symbol extraction, and durable Postgres-backed indexing jobs.
 6. Docker Compose production services for Postgres/pgvector, Redis, S3-compatible pack storage, API, worker, scheduler, and Caddy.
@@ -65,6 +65,14 @@ target/debug/oz suggest "JWT authentication in Next.js middleware"
 target/debug/oz search "middleware jwt cookies" vercel/next.js
 target/debug/oz context "middleware jwt cookies" vercel/next.js --max-tokens 1200
 ```
+
+Run the path-first MCP server for clients that support MCP:
+
+```bash
+target/debug/oz mcp
+```
+
+Browse indexed libraries and pack metadata at `/libraries` when the API is running.
 
 ## Seed Registry
 

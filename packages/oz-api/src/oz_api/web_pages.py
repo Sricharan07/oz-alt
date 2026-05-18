@@ -33,6 +33,7 @@ def render_home_page() -> str:
     <p>Version-pinned documentation packs for coding agents. Pull docs into <code>.codo/vendors</code>, then use normal local search and read tools.</p>
     <nav>
       <a class="button primary" href="/signup">Create account</a>
+      <a class="button" href="/libraries">Libraries</a>
       <a class="button" href="/login">Sign in</a>
       <a class="button" href="/status">Status</a>
     </nav>
@@ -47,6 +48,177 @@ oz login --api-url {esc(api_url)}</pre>
   </main>
 </body>
 </html>"""
+
+
+def render_libraries_page(rows: list[dict[str, Any]]) -> str:
+    items = "\n".join(
+        f"""
+        <tr>
+          <td><a href="/libraries/{esc(row.get('vendor'))}/{esc(row.get('library'))}">{esc(row.get('vendor'))}/{esc(row.get('library'))}</a></td>
+          <td>{esc(row.get('version'))}</td>
+          <td>{esc(compact_count(row.get('chunk_count')))}</td>
+          <td>{esc(compact_count(row.get('token_count')))}</td>
+          <td>{esc(row.get('last_crawled_at') or row.get('indexed_at') or '')}</td>
+          <td>{esc(row.get('description') or '')}</td>
+        </tr>
+        """
+        for row in rows
+    )
+    if not items:
+        items = '<tr><td colspan="6">No libraries are indexed yet.</td></tr>'
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Oz Libraries</title>
+  <style>{public_catalog_css()}</style>
+</head>
+<body>
+  <main>
+    <header>
+      <p><a href="/">Oz</a></p>
+      <h1>Libraries</h1>
+      <p>Browse indexed documentation packs, freshness, corpus size, and pull commands.</p>
+    </header>
+    <table>
+      <thead><tr><th>Library</th><th>Version</th><th>Chunks</th><th>Tokens</th><th>Updated</th><th>Description</th></tr></thead>
+      <tbody>{items}</tbody>
+    </table>
+  </main>
+</body>
+</html>"""
+
+
+def render_library_detail_page(detail: dict[str, Any]) -> str:
+    label = f"{detail.get('vendor')}/{detail.get('library')}"
+    version = str(detail.get("version") or "latest")
+    sources = list_rows(
+        detail.get("sources") or [],
+        lambda row: f'<a href="{esc(row.get("source_url"))}">{esc(row.get("source_url"))}</a> <span>{esc(row.get("source_type") or "")}</span>',
+    )
+    versions = list_rows(
+        detail.get("versions") or [],
+        lambda row: f'{esc(row.get("version"))} <span>{esc(row.get("chunk_count") or "")} chunks</span>',
+    )
+    content_types = list_rows(
+        detail.get("content_types") or [],
+        lambda row: f'{esc(row.get("content_type"))} <span>{esc(compact_count(row.get("chunk_count")))} chunks · {esc(compact_count(row.get("token_count")))} tokens</span>',
+    )
+    top_files = list_rows(
+        detail.get("top_files") or [],
+        lambda row: f'<code>{esc(row.get("path"))}</code> <span>{esc(compact_count(row.get("chunk_count")))} chunks</span>',
+    )
+    quality = list_rows(
+        detail.get("quality") or [],
+        lambda row: f'{status_label(row.get("passed"))} <span>{esc(row.get("created_at"))}</span>',
+    )
+    evals = list_rows(
+        detail.get("evals") or [],
+        lambda row: f'{status_label(row.get("passed"))} {esc(row.get("eval_type"))} <span>{esc(row.get("created_at"))}</span>',
+    )
+    pack_url = f"/pack/{detail.get('vendor')}/{detail.get('library')}/{version}"
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{esc(label)} - Oz</title>
+  <style>{public_catalog_css()}</style>
+</head>
+<body>
+  <main>
+    <header>
+      <p><a href="/libraries">Libraries</a></p>
+      <h1>{esc(label)}</h1>
+      <p>{esc(detail.get("description") or "")}</p>
+    </header>
+    <section class="command">
+      <pre>oz pull {esc(label)}@{esc(version)}
+oz search "how do I use this?" {esc(label)}</pre>
+    </section>
+    <section class="grid">
+      {metric("Version", version)}
+      {metric("Files", compact_count(detail.get("file_count")))}
+      {metric("Chunks", compact_count(detail.get("chunk_count")))}
+      {metric("Tokens", compact_count(detail.get("token_count")))}
+      {metric("Benchmark", f'{float(detail.get("benchmark_score") or 0):.2f}')}
+      {metric("Trust", f'{float(detail.get("trust_score") or 0):.2f}')}
+    </section>
+    <section>
+      <h2>Pack</h2>
+      <dl>
+        <dt>Ref</dt><dd><code>{esc(detail.get("ref_sha") or "")}</code></dd>
+        <dt>Key</dt><dd><code>{esc(detail.get("pack_key") or "")}</code></dd>
+        <dt>Size</dt><dd>{esc(compact_count(detail.get("pack_bytes")))} bytes</dd>
+        <dt>Download</dt><dd><a href="{esc(pack_url)}">{esc(pack_url)}</a></dd>
+        <dt>Last crawled</dt><dd>{esc(detail.get("last_crawled_at") or "")}</dd>
+      </dl>
+    </section>
+    <section class="columns">
+      <div><h2>Versions</h2>{versions}</div>
+      <div><h2>Sources</h2>{sources}</div>
+    </section>
+    <section class="columns">
+      <div><h2>Content Types</h2>{content_types}</div>
+      <div><h2>Quality</h2>{quality}<h2>Evals</h2>{evals}</div>
+    </section>
+    <section>
+      <h2>Top Files</h2>
+      {top_files}
+    </section>
+  </main>
+</body>
+</html>"""
+
+
+def public_catalog_css() -> str:
+    return """
+    body { margin: 0; background: #f7f7f4; color: #202124; font-family: ui-sans-serif, system-ui, sans-serif; }
+    main { width: min(1120px, calc(100vw - 32px)); margin: 34px auto 64px; }
+    a { color: #202124; }
+    header { margin-bottom: 24px; }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; }
+    h2 { margin: 22px 0 10px; font-size: 16px; }
+    p, span, dd, dt { color: #51565c; font-size: 14px; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #d8dee4; }
+    th, td { border-bottom: 1px solid #e6e8eb; padding: 10px; text-align: left; font-size: 14px; vertical-align: top; }
+    th { color: #51565c; font-weight: 600; background: #fafafa; }
+    code, pre { background: #fff; border: 1px solid #d8dee4; border-radius: 6px; }
+    code { padding: 2px 5px; }
+    pre { overflow-x: auto; padding: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+    .metric, .command { background: #fff; border: 1px solid #d8dee4; border-radius: 8px; padding: 14px; }
+    .metric strong { display: block; font-size: 20px; margin-top: 4px; }
+    .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+    ul { padding-left: 18px; }
+    li { margin: 7px 0; font-size: 14px; }
+    dl { display: grid; grid-template-columns: 120px 1fr; gap: 8px 14px; }
+    """
+
+
+def metric(label: str, value: str) -> str:
+    return f'<div class="metric"><span>{esc(label)}</span><strong>{esc(value)}</strong></div>'
+
+
+def list_rows(rows: list[dict[str, Any]], render) -> str:
+    if not rows:
+        return "<p>Not recorded yet.</p>"
+    return "<ul>" + "".join(f"<li>{render(row)}</li>" for row in rows) + "</ul>"
+
+
+def status_label(value: Any) -> str:
+    return "passed" if bool(value) else "failed"
+
+
+def compact_count(value: Any) -> str:
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError):
+        return "0"
+    if number >= 1_000_000:
+        return f"{number / 1_000_000:.1f}M"
+    if number >= 1_000:
+        return f"{number / 1_000:.1f}k"
+    return str(number)
 
 
 def render_login_page(error: str = "") -> str:

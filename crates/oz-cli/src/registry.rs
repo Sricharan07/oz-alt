@@ -7,7 +7,10 @@ pub(crate) fn parse_library_spec(input: &str) -> Result<LibrarySpec> {
         _ => (cleaned, None),
     };
     let path_parts = name.split('/').collect::<Vec<_>>();
-    if version.is_none() && path_parts.len() >= 3 && looks_like_version(path_parts[path_parts.len() - 1]) {
+    if version.is_none()
+        && path_parts.len() >= 3
+        && looks_like_version(path_parts[path_parts.len() - 1])
+    {
         version = Some(path_parts[path_parts.len() - 1].to_string());
         name = &name[..name.rfind('/').expect("path has slash")];
     }
@@ -300,7 +303,10 @@ pub(crate) fn version_matches(candidate: &str, requested: &str) -> bool {
     }
     let candidate_parts = numeric_parts(&candidate_norm);
     let requested_parts = numeric_parts(&requested_norm);
-    if candidate_parts.is_empty() || requested_parts.is_empty() || requested_parts.len() > candidate_parts.len() {
+    if candidate_parts.is_empty()
+        || requested_parts.is_empty()
+        || requested_parts.len() > candidate_parts.len()
+    {
         return false;
     }
     candidate_parts[..requested_parts.len()] == requested_parts[..]
@@ -310,7 +316,10 @@ fn version_sort_key(version: &str) -> (u8, [u64; 4], String) {
     let normalized = normalize_version(version);
     let parts = numeric_parts(&normalized);
     if parts.is_empty() {
-        let rank = if matches!(normalized.as_str(), "latest" | "stable" | "current" | "default") {
+        let rank = if matches!(
+            normalized.as_str(),
+            "latest" | "stable" | "current" | "default"
+        ) {
             1
         } else {
             0
@@ -325,13 +334,19 @@ fn version_sort_key(version: &str) -> (u8, [u64; 4], String) {
 }
 
 fn normalize_version(version: &str) -> String {
-    version.trim().trim_start_matches('v').trim_start_matches('V').to_ascii_lowercase()
+    version
+        .trim()
+        .trim_start_matches('v')
+        .trim_start_matches('V')
+        .to_ascii_lowercase()
 }
 
 fn looks_like_version(value: &str) -> bool {
     let normalized = normalize_version(value);
-    matches!(normalized.as_str(), "latest" | "stable" | "current" | "default")
-        || numeric_parts(&normalized).len() >= 2
+    matches!(
+        normalized.as_str(),
+        "latest" | "stable" | "current" | "default"
+    ) || numeric_parts(&normalized).len() >= 2
         || value.starts_with('v')
         || value.starts_with('V')
 }

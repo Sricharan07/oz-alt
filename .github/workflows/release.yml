@@ -91,6 +91,7 @@ jobs:
           version="${version#v}"
           python scripts/generate-release-manifest.py --dist dist --version "$version" --output dist/release-manifest.json --sbom dist/sbom.spdx.json
           python scripts/verify-release-artifacts.py --dist dist --manifest dist/release-manifest.json --sbom dist/sbom.spdx.json
+          python scripts/extract-release-notes.py --version "$version" --output dist/release-notes.md
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@v2
         with:
@@ -101,5 +102,6 @@ jobs:
           repository: Sricharan07/oz
           token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          body_path: dist/release-notes.md
           overwrite_files: true
           files: dist/*

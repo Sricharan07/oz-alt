@@ -1,0 +1,80 @@
+name: Setup Oz
+description: Install the Oz CLI, initialize project metadata, and optionally pre-pull documentation packs.
+
+inputs:
+  version:
+    description: npm package version or dist tag for @hiringbae/oz.
+    required: false
+    default: latest
+  api-url:
+    description: Oz API URL.
+    required: false
+    default: https://api.tryoz.dev
+  auth-token:
+    description: Optional Oz access token for authenticated search/pull.
+    required: false
+    default: ""
+  init:
+    description: Run oz init.
+    required: false
+    default: "true"
+  pull:
+    description: Space-separated library specs to pre-pull.
+    required: false
+    default: ""
+  search:
+    description: Optional smoke-test search query to run after install.
+    required: false
+    default: ""
+  search-library:
+    description: Optional library scope for the smoke-test search.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Oz CLI
+      shell: bash
+      run: npm install -g "@hiringbae/oz@${{ inputs.version }}"
+
+    - name: Configure Oz
+      shell: bash
+      env:
+        OZ_ACTION_API_URL: ${{ inputs.api-url }}
+        OZ_ACTION_AUTH_TOKEN: ${{ inputs.auth-token }}
+      run: |
+        set -euo pipefail
+        oz config set api_url "$OZ_ACTION_API_URL"
+        if [ -n "$OZ_ACTION_AUTH_TOKEN" ]; then
+          OZ_DISABLE_KEYCHAIN=1 oz config set auth_token "$OZ_ACTION_AUTH_TOKEN"
+        fi
+
+    - name: Initialize Oz project
+      if: ${{ inputs.init == 'true' }}
+      shell: bash
+      run: oz init
+
+    - name: Pull Oz documentation packs
+      if: ${{ inputs.pull != '' }}
+      shell: bash
+      env:
+        OZ_ACTION_PULL: ${{ inputs.pull }}
+      run: |
+        set -euo pipefail
+        read -r -a libraries <<< "$OZ_ACTION_PULL"
+        oz pull "${libraries[@]}"
+
+    - name: Smoke-test Oz search
+      if: ${{ inputs.search != '' }}
+      shell: bash
+      env:
+        OZ_ACTION_SEARCH: ${{ inputs.search }}
+        OZ_ACTION_SEARCH_LIBRARY: ${{ inputs.search-library }}
+      run: |
+        set -euo pipefail
+        if [ -n "$OZ_ACTION_SEARCH_LIBRARY" ]; then
+          oz search "$OZ_ACTION_SEARCH" "$OZ_ACTION_SEARCH_LIBRARY"
+        else
+          oz search "$OZ_ACTION_SEARCH"
+        fi
