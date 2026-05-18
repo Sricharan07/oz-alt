@@ -7,8 +7,11 @@
       "query": "webhook signature checkout session",
       "patterns": ["webhook", "signature", "checkout", "session"],
       "expected_files": [
+        "guides/webhooks-2.md",
         "guides/webhooks/signature.md",
+        "api-reference/checkout/fulfillment.md",
         "guides/checkout/fulfillment.md",
+        "api-reference/payments/quickstart-checkout-sessions.md",
         "api-reference/api/checkout/sessions.md"
       ],
       "must_include": ["webhook", "signature"],

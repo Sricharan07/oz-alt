@@ -46,6 +46,11 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(intent.content_type, "code_example")
         self.assertNotIn("I", intent.symbols)
 
+    def test_intent_classifier_detects_lower_camel_api_symbols(self) -> None:
+        intent = classify_query("useState set state updater function")
+        self.assertEqual(intent.content_type, "api_reference")
+        self.assertIn("useState", intent.symbols)
+
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(
             classify_content_type("https://example.com/docs/example", "```ts\nconst x = 1\n```"),

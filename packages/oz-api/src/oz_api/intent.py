@@ -12,7 +12,11 @@ class QueryIntent:
 
 
 ERROR_RE = re.compile(r"\b(?:ERR_[A-Z0-9_]+|[A-Z][A-Za-z0-9]*Error|[45]\d{2})\b")
-SYMBOL_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z_$][\w$]*)?\b|\b[a-z_$][\w$]*\([^)]*\)")
+SYMBOL_RE = re.compile(
+    r"\b[A-Z][A-Za-z0-9]*(?:\.[A-Za-z_$][\w$]*)?\b"
+    r"|\b[a-z_$][A-Za-z0-9_$]*[A-Z][A-Za-z0-9_$]*(?:\.[A-Za-z_$][\w$]*)?\b"
+    r"|\b[a-z_$][\w$]*\([^)]*\)"
+)
 CLI_RE = re.compile(r"(?:^|\s)(?:\$|npx|npm|pnpm|yarn|cargo|pip|uv|docker|kubectl|aws|oz)\s+", re.I)
 CONFIG_RE = re.compile(r"\b(config|configure|yaml|toml|json|env|environment variable|option|setting)\b", re.I)
 API_TERMS = ("api of", "method", "function", "class", "parameter", "signature", "return")

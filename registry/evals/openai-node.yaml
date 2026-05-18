@@ -6,7 +6,11 @@
       "name": "streaming chat completions",
       "query": "streaming chat completions client",
       "patterns": ["stream|streaming", "chat.completions|chat completions|responses", "OpenAI"],
-      "expected_files": ["guides/openai/openai-node/master/readme.md", "_symbols/OpenAI.md"],
+      "expected_files": [
+        "api-reference/openai/openai-node/master/readme.md",
+        "guides/openai/openai-node/master/readme.md",
+        "_symbols/OpenAI.md"
+      ],
       "must_include": ["OpenAI", "stream", "chat"],
       "must_not_include": ["GitHub · Change is constant", "Enter your email", "Try GitHub Copilot"]
     },
@@ -14,7 +18,11 @@
       "name": "embeddings",
       "query": "create embeddings with OpenAI client",
       "patterns": ["embedding|embeddings", "OpenAI|client"],
-      "expected_files": ["guides/openai/openai-node/master/readme.md", "_symbols/embeddings.md"],
+      "expected_files": [
+        "api-reference/openai/openai-node/master/readme.md",
+        "guides/openai/openai-node/master/readme.md",
+        "_symbols/embeddings.md"
+      ],
       "must_include": ["embedding", "OpenAI"],
       "must_not_include": ["GitHub · Change is constant"]
     }
