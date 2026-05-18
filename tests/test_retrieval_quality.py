@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 from scripts.worker import queue_has_items
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
+from oz_api.queue import queued_crawler_job_event
 from oz_api.rerank import boost_named_suggestions, boost_query_matches, parse_rerank_results, strip_private_fields, zeroentropy_scores
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
 from oz_crawler.chunks import chunk_markdown, write_chunks
@@ -155,6 +156,25 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertTrue(queue_has_items(FakeRedis(2), "oz:crawler:jobs"))
         self.assertFalse(queue_has_items(FakeRedis(0), "oz:crawler:jobs"))
+
+    def test_requeued_crawler_job_preserves_db_id_and_profile(self) -> None:
+        event = queued_crawler_job_event(
+            {
+                "id": 49,
+                "vendor": "django",
+                "library_name": "django",
+                "source_url": "https://docs.djangoproject.com/en/stable/",
+                "version": "latest",
+                "max_pages": 256,
+                "allowed_hosts": ["docs.djangoproject.com"],
+                "allowed_paths": ["/en/stable/"],
+                "denied_paths": ["/deprecated/"],
+            }
+        )
+
+        self.assertEqual(event["db_job_id"], "49")
+        self.assertEqual(event["profile"]["allowed_hosts"], ["docs.djangoproject.com"])
+        self.assertEqual(event["profile"]["allowed_paths"], ["/en/stable/"])
 
     def test_baseline_profile_excludes_legacy_noise(self) -> None:
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])

@@ -35,6 +35,89 @@ def enqueue_crawler_job(
     return event
 
 
+def requeue_queued_crawler_jobs(*, limit: int = 10) -> int:
+    store = AuthStore.from_env()
+    if store is None:
+        return 0
+    rows = store.execute(
+        """
+        select j.id,
+               j.source_url,
+               j.version,
+               j.max_pages,
+               j.fetcher,
+               j.concurrent_requests,
+               j.download_delay,
+               j.robots_txt,
+               v.name as vendor,
+               l.name as library_name,
+               p.allowed_hosts,
+               p.allowed_paths,
+               p.denied_paths,
+               p.source_priority,
+               p.required_topics,
+               p.expected_symbols,
+               p.min_quality_score,
+               p.min_documents,
+               p.max_junk_ratio
+        from crawler_jobs j
+        join libraries l on l.id = j.library_id
+        join vendors v on v.id = l.vendor_id
+        left join library_profiles p on p.library_id = l.id
+        where j.status = 'queued'
+        order by j.queued_at asc, j.id asc
+        limit :limit
+        """,
+        {"limit": max(1, limit)},
+    )
+    requeued = 0
+    for row in rows:
+        event = queued_crawler_job_event(row)
+        message_id = send_redis_message(event)
+        if not message_id:
+            continue
+        update_crawler_job_queue_message(str(row["id"]), message_id)
+        requeued += 1
+    return requeued
+
+
+def queued_crawler_job_event(row: dict[str, Any]) -> dict[str, Any]:
+    event = {
+        "created_at": now(),
+        "status": "queued",
+        "db_job_id": str(row["id"]),
+        "library_name": row.get("library_name"),
+        "vendor": row.get("vendor"),
+        "source_url": row.get("source_url"),
+        "version": row.get("version") or "latest",
+        "max_pages": row.get("max_pages"),
+        "fetcher": row.get("fetcher"),
+        "concurrent_requests": row.get("concurrent_requests"),
+        "download_delay": row.get("download_delay"),
+        "robots_txt": row.get("robots_txt"),
+    }
+    profile = profile_from_row(row)
+    if profile:
+        event["profile"] = profile
+    return strip_empty_values(event)
+
+
+def profile_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    if row.get("allowed_hosts") is None:
+        return None
+    return {
+        "allowed_hosts": row.get("allowed_hosts") or [],
+        "allowed_paths": row.get("allowed_paths") or [],
+        "denied_paths": row.get("denied_paths") or [],
+        "source_priority": row.get("source_priority") or [],
+        "required_topics": row.get("required_topics") or [],
+        "expected_symbols": row.get("expected_symbols") or [],
+        "min_quality_score": row.get("min_quality_score", 0.35),
+        "min_documents": row.get("min_documents", 2),
+        "max_junk_ratio": row.get("max_junk_ratio", 0.25),
+    }
+
+
 def crawler_job_event(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "created_at": now(),

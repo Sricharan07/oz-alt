@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
 
 from oz_api.admin_ops import mark_crawler_job_failed  # noqa: E402
 from oz_api.crawler_jobs import process_job, process_pending_embedding_promotions  # noqa: E402
+from oz_api.queue import requeue_queued_crawler_jobs  # noqa: E402
 from oz_api.redis_store import redis_client, redis_key  # noqa: E402
 from oz_api.storage import RegistryStorage  # noqa: E402
 
@@ -46,6 +47,8 @@ def main() -> int:
             continue
         if queue_has_items(client, queue_name):
             continue
+        if recover_db_queued_jobs():
+            continue
         try:
             process_pending_embedding_promotions(storage)
         except Exception as exc:
@@ -71,6 +74,17 @@ def queue_has_items(client: Any, queue_name: str) -> bool:
     except Exception as exc:
         print(f"crawler queue depth check failed: {exc}", file=sys.stderr)
         return False
+
+
+def recover_db_queued_jobs() -> bool:
+    try:
+        count = requeue_queued_crawler_jobs(limit=int(os.environ.get("OZ_CRAWLER_REQUEUE_LIMIT", "20")))
+    except Exception as exc:
+        print(f"queued crawler job recovery failed: {exc}", file=sys.stderr)
+        return False
+    if count:
+        print(f"requeued {count} DB-backed crawler job(s)", file=sys.stderr)
+    return count > 0
 
 
 def parse_job(body: Any) -> dict[str, Any]:
