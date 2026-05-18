@@ -215,7 +215,15 @@ async def approve_device(request: Request) -> HTMLResponse:
 
 
 @router.get("/admin/logout")
+async def admin_logout_get() -> HTMLResponse:
+    return HTMLResponse("<!doctype html><p>Use the logout button from the admin page.</p>", status_code=405)
+
+
+@router.post("/admin/logout")
 async def admin_logout(request: Request):
+    form = await read_form_payload(request)
+    if not verify_csrf(session_cookie(request), first_form_value(form, "csrf")):
+        return HTMLResponse("<!doctype html><p>Invalid CSRF token.</p>", status_code=403)
     revoke_web_session(session_cookie(request))
     return redirect_clearing_session("/dashboard")
 

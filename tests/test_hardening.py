@@ -14,6 +14,10 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from oz_api import auth, limits  # noqa: E402
 from oz_api.admin import render_alert_row, render_catalog_row, render_user_row  # noqa: E402
+from oz_api.admin_templates import render_admin_template  # noqa: E402
+from oz_api.http_context import content_length_too_large, request_body_limit_bytes  # noqa: E402
+from oz_api.rerank import rerank_timeout_seconds  # noqa: E402
+from oz_api.retrieval_cache import cache_key  # noqa: E402
 from oz_crawler import security  # noqa: E402
 
 
@@ -41,6 +45,7 @@ class EnvPatch:
 class HardeningTests(unittest.TestCase):
     def tearDown(self) -> None:
         auth._JWT_SECRET_CACHE = None
+        limits.reset_redis_failures()
         security.resolved_addresses.cache_clear()
 
     def test_production_rejects_placeholder_jwt_secret(self) -> None:
@@ -59,10 +64,38 @@ class HardeningTests(unittest.TestCase):
             self.assertTrue(limits.rate_limit_allowed("post:/telemetry", "127.0.0.1", limit=1))
 
     def test_rate_limit_degrades_closed_for_auth_and_admin(self) -> None:
-        with patch("oz_api.limits.redis_client", return_value=None):
-            self.assertFalse(limits.rate_limit_allowed("auth:/login", "127.0.0.1", limit=1))
-            self.assertFalse(limits.rate_limit_allowed("admin:/admin/users", "127.0.0.1", limit=1))
-            self.assertFalse(limits.index_request_allowed("user@example.com"))
+        with EnvPatch(OZ_REDIS_RATE_LIMIT_CIRCUIT_FAILURES="99"):
+            with patch("oz_api.limits.redis_client", return_value=None):
+                self.assertFalse(limits.rate_limit_allowed("auth:/login", "127.0.0.1", limit=1))
+                self.assertFalse(limits.rate_limit_allowed("admin:/admin/users", "127.0.0.1", limit=1))
+                self.assertFalse(limits.index_request_allowed("user@example.com"))
+
+    def test_rate_limit_circuit_opens_after_repeated_redis_failures(self) -> None:
+        with EnvPatch(OZ_REDIS_RATE_LIMIT_CIRCUIT_FAILURES="2", OZ_REDIS_RATE_LIMIT_CIRCUIT_SECONDS="60"):
+            with patch("oz_api.limits.redis_client", return_value=None):
+                self.assertFalse(limits.rate_limit_allowed("auth:/login", "127.0.0.1", limit=1))
+                self.assertTrue(limits.rate_limit_allowed("auth:/login", "127.0.0.1", limit=1))
+                self.assertTrue(limits.redis_circuit_open())
+
+    def test_request_body_size_configuration_is_enforced_by_header(self) -> None:
+        class Request:
+            headers = {"content-length": "5"}
+
+        with EnvPatch(OZ_MAX_REQUEST_BODY_BYTES="4"):
+            self.assertEqual(request_body_limit_bytes(), 4)
+            self.assertTrue(content_length_too_large(Request()))  # type: ignore[arg-type]
+
+    def test_rerank_timeout_uses_millisecond_env(self) -> None:
+        with EnvPatch(OZ_RERANK_TIMEOUT_MS="250"):
+            self.assertEqual(rerank_timeout_seconds(), 0.25)
+
+    def test_retrieval_cache_key_is_scoped_by_variant_and_library(self) -> None:
+        first = cache_key("search", query="cookies", scope="vercel/next.js", max_results=5, variant="control")
+        second = cache_key("search", query="cookies", scope="vercel/next.js", max_results=5, variant="no_rerank")
+        third = cache_key("search", query="cookies", scope="facebook/react", max_results=5, variant="control")
+
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, third)
 
     def test_public_target_blocks_any_private_dns_answer(self) -> None:
         security.resolved_addresses.cache_clear()
@@ -155,6 +188,44 @@ class HardeningTests(unittest.TestCase):
                 ),
             ]
         )
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_admin_template_autoescapes_dynamic_values(self) -> None:
+        malicious = '<script>alert("x")</script>'
+        html = render_admin_template(
+            {
+                "csrf": malicious,
+                "snapshot": {
+                    "usage_events": [],
+                    "users": [{"email": malicious, "role": malicious}],
+                    "embedding_jobs": [],
+                    "quality_runs": [],
+                    "eval_runs": [],
+                    "search_quality_runs": [],
+                    "ops_alerts": [{"status": "open", "title": malicious}],
+                    "backup_runs": [],
+                    "system_checks": [{"check_name": malicious, "status": malicious, "message": malicious}],
+                    "slo_reports": [],
+                    "audit_logs": [],
+                    "freshness_policies": [],
+                    "library_profiles": [],
+                    "promotions": [],
+                    "pack_builds": [],
+                    "crawler_jobs": [],
+                    "crawl_job_logs": [],
+                    "admin_actions": [],
+                },
+                "catalog": [{"vendor": malicious, "library": malicious, "version": "1", "source_urls": [malicious]}],
+                "index_requests": [],
+                "telemetry": [],
+                "crawler_jobs": [],
+                "aggregated_requests": [],
+                "catalog_health": [{"library": malicious}],
+                "zero_result_queries": [],
+            }
+        )
+
         self.assertNotIn("<script>", html)
         self.assertIn("&lt;script&gt;", html)
 

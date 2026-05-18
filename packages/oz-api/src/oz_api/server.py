@@ -12,10 +12,13 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from oz_api.auth import production_env
+from oz_api.auth import jwt_secret, production_env
 from oz_api.db import close_postgres_pools
 from oz_api.http_context import (
     ServerState,
+    BodyTooLarge,
+    content_length_too_large,
+    install_body_limit,
     is_authorized_request,
     request_rate_limit_allowed,
     unauthorized_is_html,
@@ -44,6 +47,8 @@ def create_app(state: ServerState | None = None) -> FastAPI:
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
+        if production_env():
+            jwt_secret()
         yield
     finally:
         close_postgres_pools()
@@ -63,6 +68,10 @@ def install_middleware(app: FastAPI) -> None:
     ) -> Response:
         state: ServerState = request.app.state.oz_state
         try:
+            if request.method in {"POST", "PUT", "PATCH"}:
+                if content_length_too_large(request):
+                    return JSONResponse({"error": "request_body_too_large"}, status_code=413)
+                install_body_limit(request)
             if request.method == "POST" and not request_rate_limit_allowed(request):
                 return JSONResponse(
                     {"error": "rate_limited"},
@@ -75,6 +84,8 @@ def install_middleware(app: FastAPI) -> None:
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
             return await call_next(request)
         except Exception as exc:  # pragma: no cover - ASGI server boundary
+            if isinstance(exc, BodyTooLarge):
+                return JSONResponse({"error": "request_body_too_large"}, status_code=413)
             if isinstance(exc, HTTPException):
                 return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
             LOGGER.exception("unhandled request error path=%s", request.url.path)

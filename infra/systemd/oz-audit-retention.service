@@ -1,0 +1,10 @@
+[Unit]
+Description=Oz audit log export and retention
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/oz/current
+ExecStart=/usr/bin/docker exec docker-oz-api-1 python /app/scripts/export-prune-audit-logs.py
+

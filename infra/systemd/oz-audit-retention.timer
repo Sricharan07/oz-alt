@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Oz audit log export and retention daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

@@ -5,6 +5,7 @@ from typing import Any
 
 from oz_api.auth_store import AuthStore
 from oz_api.redis_store import redis_client, redis_key
+from oz_api.retrieval_metrics import retrieval_latency_metric_values
 
 
 def metrics_authorized(headers: Any) -> bool:
@@ -25,6 +26,13 @@ def render_prometheus_metrics() -> str:
     for name, value in rows.items():
         lines.append(f"# TYPE {name} gauge")
         lines.append(metric_line(name, value))
+    emitted_types = set()
+    for (name, labels), value in retrieval_latency_metric_values().items():
+        metric_type = "histogram" if name.startswith("oz_retrieval_latency_seconds") else "counter"
+        if name not in emitted_types:
+            lines.append(f"# TYPE {name} {metric_type}")
+            emitted_types.add(name)
+        lines.append(metric_line(name, value, dict(labels)))
     return "\n".join(lines) + "\n"
 
 

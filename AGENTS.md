@@ -10,13 +10,11 @@ before trying Oz. Pull first, then read.
 
 ## Workflow
 
-1. Start with semantic search:
-   `oz search "<query>" [<library>]`
-   If the library is missing locally, Oz pulls it. If no library is provided
-   and local docs do not answer the query, Oz asks the registry for the best
-   library, pulls it when confidence is high, and searches again.
+1. Identify the library you need. If unsure, run:
+   `oz suggest "<one sentence describing what you're trying to do>"`
+   This returns a ranked list of library names.
 
-2. If you already know the library, pull it explicitly:
+2. Pull the docs:
    `oz pull <library>`
    Docs land in `.codo/vendors/<library>@<version>/` as Markdown files.
 
@@ -25,6 +23,7 @@ before trying Oz. Pull first, then read.
    **Semantic search (preferred when you don't know the file path):**
    `oz search "<query>" [<library>]`
    Returns a ranked list of local file paths under `.codo/vendors/...`.
+   Auto-pulls any referenced libraries that aren't local yet.
    Example: `oz search "middleware jwt cookies" vercel/next.js`
 
    **Native file tools (preferred when you know roughly where to look):**
@@ -47,11 +46,9 @@ before trying Oz. Pull first, then read.
 
 - Pull before you guess. A 200ms pull beats a hallucinated API call.
 - For unfamiliar libraries, start with `oz search` — it's a one-shot way to
-  discover, pull, and find the right files.
+  find the right files across multiple libraries at once.
 - Version matters: Oz pins to this project's lockfile, your memory does not.
 - If `oz suggest` returns nothing useful, tell the user the library isn't
   indexed yet (Oz has logged the request).
-- Use `oz prune <library>` or `oz prune --all` only when cleaning local docs;
-  do not prune during normal coding.
 
 <!-- oz-skill:end -->

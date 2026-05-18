@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
@@ -15,6 +17,8 @@ from oz_api.freshness import stale_libraries_from_payload
 from oz_api.http_context import client_ip, principal_for_request, read_json_payload, state_from_request
 from oz_api.limits import index_request_allowed
 from oz_api.queue import crawler_job_event, missing_required_crawler_fields
+from oz_api.retrieval_experiments import retrieval_variant
+from oz_api.retrieval_metrics import record_retrieval_latency
 from oz_api.retrieval import (
     RetrievalContext,
     search as retrieval_search,
@@ -134,37 +138,41 @@ async def auth_device_approve(request: Request):
 
 @router.post("/suggest")
 async def suggest(request: Request):
+    started = time.perf_counter()
     state = state_from_request(request)
     payload = await read_json_payload(request)
     query = str(payload.get("query", ""))
     max_results = int(payload.get("max_results", 10))
+    fingerprint = str(payload.get("project_fingerprint", ""))
+    variant = retrieval_variant(fingerprint)
     ctx = RetrievalContext.from_env(state.storage)
-    results = retrieval_suggest(
-        ctx,
-        query,
-        max_results,
-        fingerprint=str(payload.get("project_fingerprint", "")),
-    )
-    record_usage_event(
-        principal_for_request(request),
-        "suggest",
-        query_length=len(query),
-        result_count=len(results),
-        project_fingerprint=str(payload.get("project_fingerprint", "")),
-    )
-    return {
-        "results": results,
-        "stale_libraries": stale_libraries_from_payload(state.storage, payload),
-    }
+    try:
+        results = retrieval_suggest(ctx, query, max_results, fingerprint=fingerprint)
+        record_usage_event(
+            principal_for_request(request),
+            "suggest",
+            query_length=len(query),
+            result_count=len(results),
+            project_fingerprint=fingerprint,
+        )
+        return {
+            "results": results,
+            "stale_libraries": stale_libraries_from_payload(state.storage, payload),
+        }
+    finally:
+        record_retrieval_latency("suggest", variant, time.perf_counter() - started)
 
 
 @router.post("/search")
 async def search(request: Request):
+    started = time.perf_counter()
     state = state_from_request(request)
     payload = await read_json_payload(request)
     query = str(payload.get("query", ""))
     library_scope = payload.get("library_scope")
     max_results = int(payload.get("max_results", 20))
+    fingerprint = str(payload.get("project_fingerprint", ""))
+    variant = retrieval_variant(fingerprint)
     ctx = RetrievalContext.from_env(state.storage)
     try:
         results = retrieval_search(
@@ -172,17 +180,19 @@ async def search(request: Request):
             query,
             library_scope=library_scope,
             max_results=max_results,
-            fingerprint=str(payload.get("project_fingerprint", "")),
+            fingerprint=fingerprint,
         )
     except VersionResolutionError as exc:
         return JSONResponse(exc.response_payload(), status_code=exc.status_code)
+    finally:
+        record_retrieval_latency("search", variant, time.perf_counter() - started)
     record_usage_event(
         principal_for_request(request),
         "search",
         library=str(library_scope or "") or None,
         query_length=len(query),
         result_count=len(results),
-        project_fingerprint=str(payload.get("project_fingerprint", "")),
+        project_fingerprint=fingerprint,
     )
     return {
         "results": results,

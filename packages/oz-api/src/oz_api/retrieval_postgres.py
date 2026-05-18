@@ -9,6 +9,7 @@ from oz_api.db import postgres_connection
 from oz_api.intent import classify_query, intent_name
 from oz_api.ranking import local_chunk_score
 from oz_api.retrieval_context import RetrievalContext
+from oz_api.retrieval_metrics import retrieval_statement_timeout_ms
 from oz_api.storage import normalize_query
 from oz_api.versions import (
     VersionResolutionError,
@@ -27,12 +28,14 @@ def suggest_from_postgres(
     query: str,
     max_results: int,
     fingerprint: str,
+    *,
+    vector_enabled: bool = True,
 ) -> list[dict[str, Any]] | None:
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
     terms = normalized_tsquery(query)
-    vector = vector_literal(embedding) if (embedding := embedding_for_query(query)) else None
+    vector = vector_literal(embedding) if vector_enabled and (embedding := embedding_for_query(query)) else None
     candidates = candidate_limit(max_results)
     if vector:
         sql = """
@@ -123,6 +126,7 @@ def suggest_from_postgres(
     try:
         with connection:
             with connection.cursor() as cursor:
+                cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
                 cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
         return [
@@ -131,6 +135,9 @@ def suggest_from_postgres(
         ]
     except Exception as exc:
         LOGGER.warning("postgres suggest failed: %s", exc)
+        if vector_enabled:
+            LOGGER.warning("retrying postgres suggest with FTS fallback only")
+            return suggest_from_postgres(ctx, query, max_results, fingerprint, vector_enabled=False)
         return None
 
 
@@ -140,6 +147,8 @@ def search_from_postgres(
     library_scope: str | None,
     max_results: int,
     fingerprint: str,
+    *,
+    vector_enabled: bool = True,
 ) -> list[dict[str, Any]] | None:
     connection = postgres_connection(ctx.database_url)
     if connection is None:
@@ -148,7 +157,7 @@ def search_from_postgres(
     intent = intent_name(query)
     query_intent = classify_query(query)
     symbol_pattern = like_pattern(query_intent.symbols or normalize_query(query)[:4])
-    vector = vector_literal(embedding) if (embedding := embedding_for_query(query)) else None
+    vector = vector_literal(embedding) if vector_enabled and (embedding := embedding_for_query(query)) else None
     scope = parse_versioned_scope(library_scope)
     scope_vendor, scope_library = scope.vendor, scope.library
     scope_version_id: int | None = None
@@ -235,6 +244,7 @@ def search_from_postgres(
     try:
         with connection:
             with connection.cursor() as cursor:
+                cursor.execute("set local statement_timeout = %s", (retrieval_statement_timeout_ms(),))
                 cursor.execute(sql, tuple(params))
                 rows = cursor.fetchall()
                 mark_search_versions_requested(cursor, rows)
@@ -243,6 +253,9 @@ def search_from_postgres(
         raise
     except Exception as exc:
         LOGGER.warning("postgres search failed: %s", exc)
+        if vector_enabled:
+            LOGGER.warning("retrying postgres search with FTS/symbol fallback only")
+            return search_from_postgres(ctx, query, library_scope, max_results, fingerprint, vector_enabled=False)
         return None
 
 

@@ -196,12 +196,19 @@ def zeroentropy_scores(api_key: str | None, query: str, documents: list[str]) ->
 def request_scores(url: str, payload: dict[str, Any], headers: dict[str, str]) -> list[tuple[int, float]] | None:
     req = request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
-        with request.urlopen(req, timeout=8) as response:
+        with request.urlopen(req, timeout=rerank_timeout_seconds()) as response:
             body = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
         LOGGER.info("rerank request failed: %s", exc)
         return None
     return parse_rerank_results(body.get("results"))
+
+
+def rerank_timeout_seconds() -> float:
+    try:
+        return max(0.05, int(os.environ.get("OZ_RERANK_TIMEOUT_MS", "300")) / 1000.0)
+    except ValueError:
+        return 0.3
 
 
 def parse_rerank_results(results: Any) -> list[tuple[int, float]] | None:

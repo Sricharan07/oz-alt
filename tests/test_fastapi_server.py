@@ -75,6 +75,13 @@ class FastApiServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "invalid JSON payload")
 
+    def test_large_post_body_returns_payload_too_large(self) -> None:
+        with EnvPatch(OZ_MAX_REQUEST_BODY_BYTES="4"):
+            with self.client() as client:
+                response = client.post("/suggest", content='{"query":"too large"}', headers={"content-type": "application/json"})
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json()["error"], "request_body_too_large")
+
 
 if __name__ == "__main__":
     unittest.main()

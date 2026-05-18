@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from oz_api.retrieval_cache import get_cached_results, put_cached_results
 from oz_api.retrieval_common import dedupe_search_results, latest_entry, unique_libraries_to_pull
 from oz_api.retrieval_context import RetrievalContext
+from oz_api.retrieval_experiments import rerank_enabled, retrieval_variant
 from oz_api.retrieval_local import search_from_fixtures, suggest_from_catalog
 from oz_api.retrieval_postgres import (
     postgres_connection,
@@ -15,11 +17,17 @@ from oz_api.rerank import boost_named_suggestions, maybe_rerank
 
 
 def suggest(ctx: RetrievalContext, query: str, max_results: int, fingerprint: str = "") -> list[dict[str, Any]]:
+    variant = retrieval_variant(fingerprint)
+    cached = get_cached_results("suggest", query, None, max_results, variant)
+    if cached is not None:
+        return cached
     rows = suggest_from_postgres(ctx, query, max_results, fingerprint)
     if rows is None:
         rows = suggest_from_catalog(ctx.storage, query, max_results)
     rows = boost_named_suggestions(query, rows)
-    return maybe_rerank(ctx, "suggest", query, fingerprint, rows)
+    output = maybe_rerank(ctx, "suggest", query, fingerprint, rows) if rerank_enabled(variant) else rows
+    put_cached_results("suggest", query, None, max_results, variant, output)
+    return output
 
 
 def search(
@@ -30,12 +38,18 @@ def search(
     max_results: int,
     fingerprint: str = "",
 ) -> list[dict[str, Any]]:
+    variant = retrieval_variant(fingerprint)
+    cached = get_cached_results("search", query, library_scope, max_results, variant)
+    if cached is not None:
+        return cached
     candidate_pool = max(max_results * 10, 50)
     rows = search_from_postgres(ctx, query, library_scope, candidate_pool, fingerprint)
     if rows is None:
         rows = search_from_fixtures(ctx.storage, query, library_scope=library_scope, max_results=max_results)
-    reranked = maybe_rerank(ctx, f"search:{library_scope or '*'}", query, fingerprint, rows)
-    return dedupe_search_results(reranked, max_results)
+    reranked = maybe_rerank(ctx, f"search:{library_scope or '*'}", query, fingerprint, rows) if rerank_enabled(variant) else rows
+    output = dedupe_search_results(reranked, max_results)
+    put_cached_results("search", query, library_scope, max_results, variant, output)
+    return output
 
 
 __all__ = [

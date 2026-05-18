@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from json import JSONDecodeError
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,10 @@ HTML_AUTH_PATHS = {
     "/account",
     "/account/",
 }
+
+
+class BodyTooLarge(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -125,7 +130,8 @@ def unauthorized_is_html(request: Request) -> bool:
 
 def request_rate_limit_allowed(request: Request) -> bool:
     path = request.url.path
-    identity = client_ip(request)
+    principal = principal_for_request(request)
+    identity = principal.user_id if principal is not None else client_ip(request)
     if path.startswith("/admin"):
         return rate_limit_allowed(f"admin:{path}", identity, limit=60, window_seconds=60) or not production_env()
     if path in {"/suggest", "/search"}:
@@ -137,6 +143,8 @@ def request_rate_limit_allowed(request: Request) -> bool:
 
 async def read_json_payload(request: Request) -> dict[str, Any]:
     body = await request.body()
+    if len(body) > request_body_limit_bytes():
+        raise HTTPException(status_code=413, detail="request body too large")
     if not body:
         return {}
     try:
@@ -150,6 +158,8 @@ async def read_json_payload(request: Request) -> dict[str, Any]:
 
 async def read_form_payload(request: Request) -> dict[str, list[str]]:
     body = await request.body()
+    if len(body) > request_body_limit_bytes():
+        raise HTTPException(status_code=413, detail="request body too large")
     return parse_qs(body.decode("utf-8"), keep_blank_values=True)
 
 
@@ -158,3 +168,38 @@ def first_form_value(form: dict[str, list[str]], name: str, default: str = "") -
     if not values:
         return default
     return values[0]
+
+
+def request_body_limit_bytes() -> int:
+    try:
+        return max(1, int(os.environ.get("OZ_MAX_REQUEST_BODY_BYTES", "1048576")))
+    except ValueError:
+        return 1048576
+
+
+def content_length_too_large(request: Request) -> bool:
+    raw = request.headers.get("content-length")
+    if not raw:
+        return False
+    try:
+        return int(raw) > request_body_limit_bytes()
+    except ValueError:
+        return True
+
+
+def install_body_limit(request: Request) -> None:
+    original_receive = request._receive  # type: ignore[attr-defined]
+    limit = request_body_limit_bytes()
+    received = 0
+
+    async def limited_receive():
+        nonlocal received
+        message = await original_receive()
+        if message.get("type") == "http.request":
+            body = message.get("body") or b""
+            received += len(body)
+            if received > limit:
+                raise BodyTooLarge("request body too large")
+        return message
+
+    request._receive = limited_receive  # type: ignore[attr-defined]

@@ -63,9 +63,17 @@ OZ_APP_URL='https://app.tryoz.dev'
 OZ_COOKIE_SECURE=1
 OZ_COOKIE_DOMAIN='.tryoz.dev'
 OZ_JWT_SECRET='use-a-long-random-secret'
+OZ_MAX_REQUEST_BODY_BYTES=1048576
+OZ_REDIS_RATE_LIMIT_CIRCUIT_FAILURES=3
+OZ_REDIS_RATE_LIMIT_CIRCUIT_SECONDS=60
 OZ_DB_POOL_MIN_SIZE=1
 OZ_DB_POOL_MAX_SIZE=20
 OZ_DB_POOL_TIMEOUT_SECONDS=10
+OZ_RETRIEVAL_CACHE_TTL_SECONDS=300
+OZ_RETRIEVAL_STATEMENT_TIMEOUT_MS=1500
+OZ_RETRIEVAL_AB=''          # optional: control:90,no_rerank:10
+OZ_RETRIEVAL_VARIANT=''     # optional fixed variant override
+OZ_RERANK_TIMEOUT_MS=300
 VOYAGE_API_KEY='...'        # default embeddings: voyage-code-3, 1024 dims
 JINA_API_KEY='...'          # optional cross-encoder rerank, or set OZ_JINA_RERANK_URL for self-hosted
 COHERE_API_KEY='...'        # optional when OZ_RERANK_PROVIDER=cohere
@@ -99,10 +107,12 @@ sudo cp infra/systemd/oz-postgres-maintenance.* /etc/systemd/system/
 sudo cp infra/systemd/oz-pack-storage-tiers.* /etc/systemd/system/
 sudo cp infra/systemd/oz-enterprise-alerts.* /etc/systemd/system/
 sudo cp infra/systemd/oz-slo-report.* /etc/systemd/system/
+sudo cp infra/systemd/oz-audit-retention.* /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now oz-backup.timer
 sudo systemctl enable --now oz-postgres-maintenance.timer oz-pack-storage-tiers.timer
 sudo systemctl enable --now oz-enterprise-alerts.timer oz-slo-report.timer
+sudo systemctl enable --now oz-audit-retention.timer
 ```
 
 Install S3 lifecycle rules for pack/artifact retention:
@@ -222,6 +232,7 @@ VOYAGE_API_KEY='...'
 
 OZ_RERANK_PROVIDER=zeroentropy
 OZ_RERANK_MODEL=zerank-2
+OZ_RERANK_TIMEOUT_MS=300
 OZ_ZEROENTROPY_LATENCY=fast
 ZEROENTROPY_API_KEY='...'
 
@@ -238,6 +249,27 @@ live search queries    -> sync embedding API, query input_type
 ```
 
 `OZ_EMBEDDING_INDEX_MODE=auto` sends libraries with at least `OZ_EMBEDDING_SYNC_THRESHOLD` uncached chunks to the Batch API and embeds smaller changes synchronously. Batch jobs are split at `OZ_VOYAGE_BATCH_MAX_INPUTS` and `OZ_VOYAGE_BATCH_MAX_BYTES`, and a watchdog retries stuck jobs through the sync path after `OZ_EMBEDDING_BATCH_TIMEOUT_HOURS`. Library cost caps abort before embedding when a profile accidentally crawls more than `OZ_MAX_CHUNKS_PER_LIBRARY` chunks or `OZ_MAX_TOKENS_PER_LIBRARY` tokens.
+
+Retrieval hardening defaults:
+
+```bash
+OZ_RETRIEVAL_CACHE_TTL_SECONDS=300
+OZ_RETRIEVAL_STATEMENT_TIMEOUT_MS=1500
+OZ_RETRIEVAL_AB=''          # optional deterministic A/B split, e.g. control:90,no_rerank:10
+OZ_RETRIEVAL_VARIANT=''     # optional fixed variant override
+OZ_RERANK_TIMEOUT_MS=300
+OZ_MAX_REQUEST_BODY_BYTES=1048576
+OZ_REDIS_RATE_LIMIT_CIRCUIT_FAILURES=3
+OZ_REDIS_RATE_LIMIT_CIRCUIT_SECONDS=60
+OZ_AUDIT_RETENTION_DAYS=365
+OZ_AUDIT_EXPORT_BUCKET="$OZ_PACKS_BUCKET"
+OZ_AUDIT_EXPORT_PREFIX=audit-exports
+```
+
+The full-result retrieval cache is Redis-backed and short lived. Search and context
+requests record latency histograms under `/metrics`. Rerank has a strict timeout and
+falls back to the pre-rerank order. Postgres search uses a statement timeout and
+retries once with the vector stage disabled before falling back to fixture search.
 
 ## Auth
 
