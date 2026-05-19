@@ -6,7 +6,11 @@
       "name": "deployment project env vars",
       "query": "Vercel SDK create deployment project environment variables",
       "patterns": ["deployment", "project", "environment variables"],
-      "expected_files": ["guides/https-vercel-com-docs-rest-api-sdk-examples-deployments-automation.md", "guides/https-vercel-com-docs-rest-api-sdk-examples-environment-variables.md"],
+      "expected_files": [
+        "guides/environment-variables/system-environment-variables.md",
+        "guides/environment-variables/sensitive-environment-variables.md",
+        "api-reference/integrations/create-integration/marketplace-api/vercel.md"
+      ],
       "must_include": ["deployment", "environment"],
       "banned_content": ["customer story", "contact sales"]
     }
