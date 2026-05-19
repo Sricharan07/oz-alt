@@ -65,7 +65,10 @@
       "preferred_urls": [
         "https://www.prisma.io/docs/orm/prisma-schema",
         "https://www.prisma.io/docs/orm/prisma-client",
+        "https://www.prisma.io/docs/orm/prisma-client/queries/relation-queries",
         "https://www.prisma.io/docs/orm/prisma-migrate",
+        "https://www.prisma.io/docs/orm/prisma-migrate/understanding-prisma-migrate/mental-model",
+        "https://www.prisma.io/docs/orm/prisma-migrate/understanding-prisma-migrate/migration-histories",
         "https://www.prisma.io/docs/orm/prisma-schema/data-model/relations"
       ],
       "required_topics": ["schema", "client", "migrate", "relation"],
