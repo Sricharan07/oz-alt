@@ -1,7 +1,9 @@
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 export function AuthPage({ mode }) {
   const isSignup = mode === "signup";
+  const [params] = useSearchParams();
+  const next = safeNext(params.get("next") || "");
 
   return (
     <main className="auth-page">
@@ -12,6 +14,7 @@ export function AuthPage({ mode }) {
         </Link>
         <h1>{isSignup ? "Create account" : "Sign in"}</h1>
         <form method="post" action={isSignup ? "/signup" : "/login"} className="auth-form">
+          {next ? <input type="hidden" name="next" value={next} /> : null}
           <label>
             Email
             <input name="email" type="email" autoComplete="email" required />
@@ -32,9 +35,15 @@ export function AuthPage({ mode }) {
         </form>
         <p className="auth-switch">
           {isSignup ? "Already have an account?" : "Need an account?"}{" "}
-          <Link to={isSignup ? "/sign-in" : "/sign-up"}>{isSignup ? "Sign in" : "Create one"}</Link>
+          <Link to={`${isSignup ? "/sign-in" : "/sign-up"}${next ? `?next=${encodeURIComponent(next)}` : ""}`}>
+            {isSignup ? "Sign in" : "Create one"}
+          </Link>
         </p>
       </section>
     </main>
   );
+}
+
+function safeNext(value) {
+  return value.startsWith("/") && !value.startsWith("//") ? value : "";
 }

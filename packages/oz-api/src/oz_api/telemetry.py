@@ -12,6 +12,7 @@ ALLOWED_PROPERTY_KEYS = {
     "libraries",
     "query_length",
     "result_count",
+    "route",
     "scope",
     "status",
 }
@@ -44,7 +45,7 @@ def sanitize_property(key: str, value: Any) -> Any | None:
         if not isinstance(value, list):
             return None
         return [safe_string(item, max_length=120) for item in value[:25] if safe_string(item, max_length=120)]
-    if key in {"anonymous_user_id", "command", "library", "library_scope", "scope", "status"}:
+    if key in {"anonymous_user_id", "command", "library", "library_scope", "route", "scope", "status"}:
         return safe_string(value, max_length=120)
     return None
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiUrl, changePassword, postJson, safeJson } from "../api.js";
+import { apiUrl, approveDeviceCode, changePassword, postJson, safeJson } from "../api.js";
 
 describe("api helpers", () => {
   afterEach(() => {
@@ -51,6 +51,24 @@ describe("api helpers", () => {
           current_password: "old-password-123",
           new_password: "new-password-123",
           confirm_password: "new-password-123",
+          csrf: "csrf"
+        })
+      })
+    );
+  });
+
+  it("sends device approvals through the console API", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify({ ok: true }))));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await approveDeviceCode("ABCD-EFGH", "csrf");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/console/device/approve",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          user_code: "ABCD-EFGH",
           csrf: "csrf"
         })
       })

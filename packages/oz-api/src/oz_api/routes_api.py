@@ -135,6 +135,30 @@ async def console_change_password(request: Request):
     return {"ok": True}
 
 
+@router.post("/api/console/device/approve")
+async def console_approve_device(request: Request):
+    principal = principal_for_request(request)
+    if principal is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    payload = await read_json_payload(request)
+    csrf_error = verify_console_csrf(request, payload)
+    if csrf_error is not None:
+        return csrf_error
+    code = str(payload.get("user_code") or "").strip()
+    if not code:
+        return JSONResponse({"error": "device_code_required"}, status_code=400)
+    try:
+        approve_device_code(
+            code,
+            principal,
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    except (AuthError, RuntimeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"ok": True}
+
+
 def principal_payload(principal) -> dict[str, str | bool]:
     return {
         "id": principal.user_id,

@@ -78,6 +78,13 @@ export async function changePassword({ currentPassword, newPassword, confirmPass
   });
 }
 
+export async function approveDeviceCode(userCode, csrf) {
+  return postJson("/api/console/device/approve", {
+    user_code: userCode,
+    csrf
+  });
+}
+
 export async function logout() {
   return postJson("/auth/logout", {});
 }

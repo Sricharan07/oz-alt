@@ -14,6 +14,25 @@ export class ErrorBoundary extends Component {
     if (import.meta.env.DEV) {
       console.error(error, info);
     }
+    try {
+      const route = window.location?.pathname || "/";
+      navigator.sendBeacon?.(
+        "/telemetry",
+        new Blob([
+          JSON.stringify({
+            event: "console_render_error",
+            properties: {
+              route,
+              scope: "frontend",
+              status: "error",
+              command: info?.componentStack ? "react_boundary" : "render"
+            }
+          })
+        ], { type: "application/json" })
+      );
+    } catch {
+      // Rendering fallback is more important than telemetry delivery.
+    }
   }
 
   render() {

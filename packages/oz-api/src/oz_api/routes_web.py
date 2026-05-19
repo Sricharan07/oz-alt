@@ -44,7 +44,7 @@ async def login(request: Request):
         )
     except (AuthError, RuntimeError) as exc:
         return HTMLResponse(render_login_page(str(exc)), status_code=400)
-    return redirect_with_session("/dashboard", session)
+    return redirect_with_session(safe_next_path(first_form_value(form, "next")), session)
 
 
 @router.post("/signup")
@@ -63,7 +63,7 @@ async def signup(request: Request):
         )
     except (AuthError, RuntimeError) as exc:
         return HTMLResponse(render_signup_page(str(exc)), status_code=400)
-    return redirect_with_session("/dashboard", session)
+    return redirect_with_session(safe_next_path(first_form_value(form, "next")), session)
 
 
 @router.get("/invite", response_class=HTMLResponse)
@@ -245,3 +245,11 @@ def account_page_with_message(principal, session: str | None, *, error: str = ""
         ),
         status_code=status_code,
     )
+
+
+def safe_next_path(value: str) -> str:
+    if not value:
+        return "/dashboard"
+    if value.startswith("/") and not value.startswith("//") and "\n" not in value and "\r" not in value:
+        return value
+    return "/dashboard"

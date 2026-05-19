@@ -6,7 +6,6 @@ const backendPaths = [
   "/account",
   "/api",
   "/catalog",
-  "/device",
   "/health",
   "/invite",
   "/libraries.json",

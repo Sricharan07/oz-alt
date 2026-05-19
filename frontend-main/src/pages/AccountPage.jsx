@@ -13,10 +13,13 @@ import {
 } from "../components/ui/index.js";
 import { dateText, integer } from "../format.js";
 import { useConsoleAccount } from "../hooks/useConsoleAccount.js";
+import { useToast } from "../hooks/useToast.js";
 
 export function AccountPage() {
   const config = runtimeConfig();
   const account = useConsoleAccount();
+  const { notify } = useToast();
+  const [pendingAction, setPendingAction] = useState("");
 
   if (account.loading) {
     return (
@@ -80,8 +83,17 @@ export function AccountPage() {
               dateText(session.last_used_at),
               session.revoked_at ? "Revoked" : "Active",
               session.revoked_at ? "" : (
-                <button className="button secondary compact" type="button" onClick={() => void account.revokeCli(session.id)}>
-                  Revoke
+                <button
+                  className="button secondary compact"
+                  type="button"
+                  disabled={pendingAction === `cli:${session.id}`}
+                  onClick={() => void revokeSession({
+                    key: `cli:${session.id}`,
+                    run: () => account.revokeCli(session.id),
+                    done: "CLI session revoked"
+                  })}
+                >
+                  {pendingAction === `cli:${session.id}` ? "Revoking…" : "Revoke"}
                 </button>
               )
             ]}
@@ -100,8 +112,17 @@ export function AccountPage() {
               dateText(session.expires_at),
               session.revoked_at ? "Revoked" : session.current ? "Current" : "Active",
               session.revoked_at || session.current ? "" : (
-                <button className="button secondary compact" type="button" onClick={() => void account.revokeWeb(session.id)}>
-                  Revoke
+                <button
+                  className="button secondary compact"
+                  type="button"
+                  disabled={pendingAction === `web:${session.id}`}
+                  onClick={() => void revokeSession({
+                    key: `web:${session.id}`,
+                    run: () => account.revokeWeb(session.id),
+                    done: "Web session revoked"
+                  })}
+                >
+                  {pendingAction === `web:${session.id}` ? "Revoking…" : "Revoke"}
                 </button>
               )
             ]}
@@ -139,18 +160,31 @@ export function AccountPage() {
 
       <div className="action-grid">
         <ActionCard title="Approve CLI device" body="Enter the device code shown by oz login." href="/device" icon={KeyRound} />
-        <ActionCard title="Password settings" body="Use backend-protected account settings." href="/account" icon={Shield} />
+        <ActionCard title="Password settings" body="Use backend-protected account settings." href="/settings" icon={Shield} />
         {account.user.is_admin ? (
           <ActionCard title="Admin" body="Open catalog, crawl, and promotion controls." href={config.adminUrl} icon={Settings} />
         ) : null}
       </div>
     </Page>
   );
+
+  async function revokeSession({ key, run, done }) {
+    setPendingAction(key);
+    try {
+      await run();
+      notify({ tone: "success", title: done });
+    } catch (error) {
+      notify({ tone: "warning", title: "Revoke failed", message: error.message || "Try again." });
+    } finally {
+      setPendingAction("");
+    }
+  }
 }
 
 function PasswordPanel({ account }) {
   const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [state, setState] = useState({ loading: false, error: "", message: "" });
+  const { notify } = useToast();
 
   async function submit(event) {
     event.preventDefault();
@@ -159,8 +193,10 @@ function PasswordPanel({ account }) {
       await account.changePassword(form);
       setForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
       setState({ loading: false, error: "", message: "Password updated." });
+      notify({ tone: "success", title: "Password updated" });
     } catch (error) {
       setState({ loading: false, error: error.message || "Unable to update password.", message: "" });
+      notify({ tone: "warning", title: "Password update failed", message: error.message || "Unable to update password." });
     }
   }
 

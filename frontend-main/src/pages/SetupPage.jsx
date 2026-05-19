@@ -2,10 +2,10 @@ import { CodeBlock, CommandBlock, Page, Panel, SectionHeader } from "../componen
 
 export function SetupPage() {
   return (
-    <Page title="Setup" description="Install the CLI, authenticate once, and let agents use local docs as files.">
+    <Page title="Setup" description="Install the CLI, connect your account, and give agents local docs they can read with normal file tools.">
       <div className="two-column">
         <Panel>
-          <SectionHeader title="CLI workflow" />
+          <SectionHeader title="Local project" />
           <CommandBlock
             lines={[
               "npm install -g @hiringbae/oz",
@@ -20,7 +20,9 @@ export function SetupPage() {
         </Panel>
         <Panel>
           <SectionHeader title="Agent instruction" />
-          <CodeBlock>
+          <CodeBlock title="AGENTS.md" copyValue={`Use Oz before guessing external library APIs.
+Start with: oz search "<query>" [library]
+Then read files under .codo/vendors with rg, glob, and read.`}>
             {`Use Oz before guessing external library APIs.
 Start with: oz search "<query>" [library]
 Then read files under .codo/vendors with rg, glob, and read.`}
@@ -29,23 +31,18 @@ Then read files under .codo/vendors with rg, glob, and read.`}
       </div>
 
       <Panel>
-        <SectionHeader title="Path-first MCP" />
+        <SectionHeader title="How agents should use it" />
         <p className="body-text">
-          Oz exposes a small MCP wrapper for clients that prefer native tools. The default tool returns paths and line ranges, not large snippet blobs.
+          Oz keeps context as files. The CLI pulls docs into the repository, semantic search returns paths, and the agent reads only the exact files it needs.
         </p>
-        <CodeBlock>
-          {`{
-  "mcpServers": {
-    "oz": {
-      "command": "oz",
-      "args": ["mcp"],
-      "env": {
-        "OZ_API_URL": "https://api.tryoz.dev"
-      }
-    }
-  }
-}`}
-        </CodeBlock>
+        <CommandBlock
+          lines={[
+            'oz suggest "stripe webhook signature verification"',
+            "oz pull stripe/stripe-node",
+            'oz search "verify webhook signature express" stripe/stripe-node',
+            "rg \"constructEvent\" .codo/vendors/stripe/stripe-node@*/"
+          ]}
+        />
       </Panel>
 
       <Panel>

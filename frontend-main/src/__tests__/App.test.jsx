@@ -98,7 +98,7 @@ describe("Oz console", () => {
 
   it("renders sign-in form against backend auth route", () => {
     render(
-      <MemoryRouter initialEntries={["/sign-in"]}>
+      <MemoryRouter initialEntries={["/sign-in?next=/device?code=ABCD-EFGH"]}>
         <App />
       </MemoryRouter>
     );
@@ -106,6 +106,7 @@ describe("Oz console", () => {
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toHaveAttribute("type", "submit");
     expect(document.querySelector("form")).toHaveAttribute("action", "/login");
+    expect(document.querySelector("input[name='next']")).toHaveValue("/device?code=ABCD-EFGH");
   });
 
   it("renders authenticated account state from backend console payload", async () => {
@@ -152,6 +153,28 @@ describe("Oz console", () => {
     expect(screen.getByText("Top activity")).toBeInTheDocument();
     expect(screen.getByText("Recent events")).toBeInTheDocument();
     expect(screen.getAllByText("facebook/react").length).toBeGreaterThan(0);
+  });
+
+  it("renders authenticated device approval flow", async () => {
+    fetch.mockImplementation((url) => {
+      if (String(url).endsWith("/api/console/account")) {
+        return Promise.resolve(jsonResponse(accountPayload));
+      }
+      if (String(url).endsWith("/libraries.json")) {
+        return Promise.resolve(jsonResponse(librariesPayload));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/device?code=abcd-efgh"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Approve device" })).toBeInTheDocument());
+    expect(screen.getByDisplayValue("ABCD-EFGH")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve device" })).toBeInTheDocument();
   });
 });
 

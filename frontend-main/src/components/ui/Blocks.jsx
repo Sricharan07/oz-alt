@@ -1,15 +1,27 @@
 import { CheckCircle2, CircleAlert } from "lucide-react";
+import { CopyButton } from "../CopyButton.jsx";
 
-export function CommandBlock({ lines }) {
+export function CommandBlock({ lines, title = "Terminal" }) {
+  const value = lines.map((line) => `$ ${line}`).join("\n");
   return (
-    <CodeBlock>
-      {lines.map((line) => `$ ${line}`).join("\n")}
+    <CodeBlock title={title} copyValue={value}>
+      {value}
     </CodeBlock>
   );
 }
 
-export function CodeBlock({ children }) {
-  return <pre className="code-block"><code>{children}</code></pre>;
+export function CodeBlock({ children, title = "", copyValue = "" }) {
+  return (
+    <div className="code-frame">
+      {title || copyValue ? (
+        <div className="code-toolbar">
+          <span>{title}</span>
+          {copyValue ? <CopyButton value={copyValue} label="Copy" compact /> : null}
+        </div>
+      ) : null}
+      <pre className="code-block"><code>{children}</code></pre>
+    </div>
+  );
 }
 
 export function Checklist({ items }) {

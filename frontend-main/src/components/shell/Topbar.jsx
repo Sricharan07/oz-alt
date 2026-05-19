@@ -1,5 +1,6 @@
-import { KeyRound, LogIn, Menu, Search } from "lucide-react";
+import { KeyRound, LogIn, Menu } from "lucide-react";
 import { Link } from "react-router-dom";
+import { GlobalLibrarySearch } from "../GlobalLibrarySearch.jsx";
 import { useConsoleAccount } from "../../hooks/useConsoleAccount.js";
 
 export function Topbar({ collapsed, mobileOpen, onToggleMobile }) {
@@ -25,15 +26,12 @@ export function Topbar({ collapsed, mobileOpen, onToggleMobile }) {
       </Link>
 
       <div className="right-container">
+        <GlobalLibrarySearch />
         <div className="top-buttons">
-          <Link className="top-button search-bar" to="/libraries">
-            <Search size={15} aria-hidden="true" />
-            <span>Search catalog</span>
-          </Link>
-          <a className="top-button" href="/device" aria-label="Approve CLI device">
+          <Link className="top-button" to="/device" aria-label="Approve CLI device">
             <KeyRound size={15} aria-hidden="true" />
             <span>Device</span>
-          </a>
+          </Link>
           {account.authenticated ? (
             <>
               <Link className="top-button" to="/settings" aria-label="Open account">
