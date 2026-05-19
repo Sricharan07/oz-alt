@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from oz_api.admin_templates import render_admin_template
@@ -23,8 +24,31 @@ def render_admin(storage: RegistryStorage, csrf: str = "") -> str:
             "aggregated_requests": aggregate_index_requests(snapshot["index_requests"]),
             "catalog_health": catalog_health_rows(catalog, snapshot["crawler_jobs"], snapshot["telemetry"]),
             "zero_result_queries": top_zero_result_queries(snapshot["telemetry"]),
+            "crawl_max_pages": default_crawl_max_pages(),
+            "crawl_recrawl_interval_hours": default_recrawl_interval_hours(),
+            "crawl_concurrent_requests": default_crawl_concurrent_requests(),
         }
     )
+
+
+def default_crawl_max_pages() -> int:
+    return positive_int_env("OZ_ADMIN_CRAWL_MAX_PAGES") or positive_int_env("OZ_CRAWLER_MAX_PAGES") or 128
+
+
+def default_recrawl_interval_hours() -> int:
+    return positive_int_env("OZ_ADMIN_RECRAWL_INTERVAL_HOURS") or 24
+
+
+def default_crawl_concurrent_requests() -> int:
+    return positive_int_env("OZ_CRAWLER_CONCURRENCY") or 6
+
+
+def positive_int_env(name: str) -> int | None:
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, Any]]]:

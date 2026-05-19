@@ -26,7 +26,7 @@ PY
     --out registry/fixtures \
     --max-pages "$max_pages" \
     --require-profile \
-    "${validation_flag[@]}"
+    ${validation_flag+"${validation_flag[@]}"}
 done
 
 cargo run -p oz -- dev registry build-packs

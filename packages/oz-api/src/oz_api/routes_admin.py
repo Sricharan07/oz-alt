@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from oz_api.admin import load_admin_snapshot, render_admin
+from oz_api.admin import default_crawl_max_pages, load_admin_snapshot, render_admin
 from oz_api.admin_ops import (
     approve_crawl,
     log_admin_action,
@@ -53,7 +53,7 @@ async def enqueue_crawl(request: Request) -> HTMLResponse:
         "vendor": first_form_value(form, "vendor"),
         "source_url": first_form_value(form, "source_url"),
         "version": first_form_value(form, "version", "latest"),
-        "max_pages": first_form_value(form, "max_pages", "128"),
+        "max_pages": first_form_value(form, "max_pages", str(default_crawl_max_pages())),
         "recrawl_interval_hours": first_form_value(form, "recrawl_interval_hours", "24"),
         "fetcher": first_form_value(form, "fetcher"),
         "concurrent_requests": first_form_value(form, "concurrent_requests"),

@@ -88,7 +88,7 @@ def chunk_markdown(
                 parent_key = f"section-{section_idx}-{slugify(' '.join(heading_path) or 'api')}"
                 chunks.append(
                     MarkdownChunk(
-                        text=limit_section_text(section_text, 1800),
+                        text=limit_section_text(section_text, max_tokens),
                         heading_path=heading_path,
                         start_line=section[0][1],
                         end_line=section[-1][2],
@@ -100,7 +100,33 @@ def chunk_markdown(
             chunks.extend(children)
         else:
             chunks.extend(chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None))
-    return [chunk for chunk in chunks if chunk.text.strip()]
+    return [chunk for chunk in enforce_chunk_token_limit(chunks, max_tokens) if chunk.text.strip()]
+
+
+def enforce_chunk_token_limit(chunks: list[MarkdownChunk], max_tokens: int) -> list[MarkdownChunk]:
+    output: list[MarkdownChunk] = []
+    split_budget = max(50, max_tokens - 32)
+    for chunk in chunks:
+        if token_count(chunk.text) <= max_tokens:
+            output.append(chunk)
+            continue
+        block = (chunk.text, chunk.start_line, chunk.end_line, chunk.heading_path)
+        if has_code_fence(chunk.text):
+            pieces = split_large_indivisible_block(
+                block,
+                page_type=chunk.content_type,
+                parent_key=chunk.parent_key,
+                max_tokens=split_budget,
+            )
+        else:
+            pieces = split_large_block(
+                block,
+                page_type=chunk.content_type,
+                parent_key=chunk.parent_key,
+                max_tokens=split_budget,
+            )
+        output.extend(pieces)
+    return output
 
 
 def markdown_blocks(markdown: str) -> list[tuple[str, int, int, list[str]]]:

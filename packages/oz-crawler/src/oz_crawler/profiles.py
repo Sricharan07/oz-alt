@@ -149,8 +149,12 @@ def path_matches(path: str, patterns: list[str], *, root_matches_all: bool) -> b
             if root_matches_all or path == "/":
                 return True
             continue
-        if path.startswith(normalized) or normalized.strip("/") in path.strip("/").split("/"):
+        if normalized.startswith("/"):
+            if path == normalized or path.startswith(normalized.rstrip("/") + "/"):
+                return True
+            continue
+        if normalized.strip("/") in path.strip("/").split("/"):
             return True
-        if "/" not in normalized and normalized in path:
+        if normalized in path:
             return True
     return False

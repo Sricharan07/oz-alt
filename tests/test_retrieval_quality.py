@@ -30,7 +30,7 @@ from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_
 from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
 from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
-from oz_crawler.crawl import prepare_pages
+from oz_crawler.crawl import is_crawlable_doc_url, prepare_pages
 from oz_crawler.crawl_runtime import CrawlRunState
 from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage
@@ -211,6 +211,7 @@ class RetrievalQualityTests(unittest.TestCase):
     def test_validation_junk_ratio_excludes_policy_dedup_rejections(self) -> None:
         rows = [
             {"content_type": "duplicate", "reasons": ["duplicate content", "canonical source: https://docs.example/a"]},
+            {"content_type": "network_page_fetch", "reasons": ["crawler URL returned HTTP 404: https://docs.example/missing"]},
             {"content_type": "junk", "reasons": ["marketing/login language"]},
         ]
 
@@ -218,6 +219,19 @@ class RetrievalQualityTests(unittest.TestCase):
 
     def test_validation_treats_all_retrieval_content_types_as_useful(self) -> None:
         self.assertIn("config", USEFUL_CONTENT_TYPES)
+
+    def test_api_reference_parent_chunks_respect_max_token_limit(self) -> None:
+        markdown = "# Endpoint\n\n## Response\n\n" + "\n".join(f"- field_{idx}: lorem ipsum dolor sit amet" for idx in range(500))
+
+        chunks = chunk_markdown(
+            markdown,
+            source_url="https://docs.example/reference",
+            page_type="api_reference",
+            max_tokens=300,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(token_count(chunk.text) <= 300 for chunk in chunks))
         self.assertIn("cli", USEFUL_CONTENT_TYPES)
         self.assertIn("error_ref", USEFUL_CONTENT_TYPES)
 
@@ -312,6 +326,16 @@ class RetrievalQualityTests(unittest.TestCase):
         profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])
         self.assertIn("deprecated", BASELINE_DENIED_PATHS)
         self.assertFalse(url_allowed_by_profile("https://docs.example.com/docs/legacy/v1/page", profile))
+
+    def test_absolute_allowed_paths_match_prefix_not_any_segment(self) -> None:
+        profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["example.com"], allowed_paths=["/docs"])
+
+        self.assertTrue(url_allowed_by_profile("https://example.com/docs/reference/page", profile))
+        self.assertFalse(url_allowed_by_profile("https://example.com/ui/docs/reference/page", profile))
+
+    def test_crawler_rejects_malformed_markdown_urls(self) -> None:
+        self.assertFalse(is_crawlable_doc_url("https://example.com/docs/guides/auth](https://example.com/docs/auth", "example.com"))
+        self.assertFalse(is_crawlable_doc_url("https://example.com/ui/docs/widget'", "example.com"))
 
     def test_rerank_strips_private_fields_and_boosts_named_suggestions(self) -> None:
         rows = [{"vendor": "vercel", "library": "next.js", "version": "15", "score": 1, "_rerank_text": "secret"}]

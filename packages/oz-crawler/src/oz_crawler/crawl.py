@@ -634,6 +634,8 @@ def is_crawlable_doc_url(url: str, netloc: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
+    if malformed_discovered_url(url):
+        return False
     if not is_textual_url_candidate(url):
         return False
     path = parsed.path.lower()
@@ -649,6 +651,12 @@ def is_crawlable_doc_url(url: str, netloc: str) -> bool:
     if query and re.search(r"(^|&)(image|img|og|product|screenshot|width|height)=", query):
         return False
     return same_site_or_subdomain(url, netloc)
+
+
+def malformed_discovered_url(url: str) -> bool:
+    parsed = urlparse(url)
+    raw = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+    return any(char in raw for char in ("[", "]", "(", ")", "'", '"', "\\"))
 
 
 def same_site_or_subdomain(url: str, netloc: str) -> bool:

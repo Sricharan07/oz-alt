@@ -63,8 +63,11 @@ ADMIN_TEMPLATE = r"""<!doctype html>
       {{ input("library_name", "Library", required=True) }}
       {{ input("version", "Version", value="latest", required=True) }}
       {{ input("source_url", "Source URL", type="url", required=True) }}
-      {{ input("max_pages", "Max pages", type="number", value="128") }}
-      {{ input("recrawl_interval_hours", "Recrawl interval hours", type="number", value="24") }}
+      {{ input("max_pages", "Max pages", type="number", value=crawl_max_pages) }}
+      {{ input("recrawl_interval_hours", "Recrawl interval hours", type="number", value=crawl_recrawl_interval_hours) }}
+      {{ input("concurrent_requests", "Concurrent requests", type="number", value=crawl_concurrent_requests) }}
+      <label for="fetcher">Fetcher</label>
+      <select id="fetcher" name="fetcher"><option value="">profile default</option><option value="auto">auto</option><option value="dynamic">dynamic</option><option value="stealth">stealth</option><option value="stdlib">stdlib</option></select>
       <button class="primary" type="submit">Queue crawl</button>
     </form>
     <form class="panel" method="post" action="/admin/library-profile">
@@ -122,8 +125,9 @@ ADMIN_TEMPLATE = r"""<!doctype html>
           <input type="hidden" name="vendor" value="{{ row.vendor }}">
           <input type="hidden" name="source_url" value="{{ row.source_url }}">
           <input type="hidden" name="version" value="latest">
-          <input type="hidden" name="max_pages" value="128">
-          <input type="hidden" name="recrawl_interval_hours" value="24">
+          <input type="hidden" name="max_pages" value="{{ crawl_max_pages }}">
+          <input type="hidden" name="recrawl_interval_hours" value="{{ crawl_recrawl_interval_hours }}">
+          <input type="hidden" name="concurrent_requests" value="{{ crawl_concurrent_requests }}">
           <button class="button" type="submit">Queue crawl</button>
         </form>
       </td>
@@ -156,7 +160,7 @@ ADMIN_TEMPLATE = r"""<!doctype html>
   {% for row in catalog %}
     <tr>
       <td>{{ row.vendor }}/{{ row.library }}</td><td>{{ row.version }}</td><td>{{ row.description }}</td><td>{{ row.source_urls|first_item }}</td>
-      <td><form method="post" action="/admin/enqueue-crawl"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ row.vendor }}"><input type="hidden" name="library_name" value="{{ row.library }}"><input type="hidden" name="version" value="{{ row.version }}"><input type="hidden" name="source_url" value="{{ row.source_urls|first_item }}"><input type="hidden" name="max_pages" value="128"><input type="hidden" name="recrawl_interval_hours" value="24"><button class="button" type="submit">Recrawl</button></form></td>
+      <td><form method="post" action="/admin/enqueue-crawl"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="vendor" value="{{ row.vendor }}"><input type="hidden" name="library_name" value="{{ row.library }}"><input type="hidden" name="version" value="{{ row.version }}"><input type="hidden" name="source_url" value="{{ row.source_urls|first_item }}"><input type="hidden" name="max_pages" value="{{ crawl_max_pages }}"><input type="hidden" name="recrawl_interval_hours" value="{{ crawl_recrawl_interval_hours }}"><input type="hidden" name="concurrent_requests" value="{{ crawl_concurrent_requests }}"><button class="button" type="submit">Recrawl</button></form></td>
     </tr>
   {% endfor %}
   </tbody></table>

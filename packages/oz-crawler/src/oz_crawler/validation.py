@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import re
 from dataclasses import dataclass
@@ -67,6 +68,14 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     missing_token_counts = sum(1 for row in chunks if int(row.get("token_count") or 0) <= 0)
     if chunks and missing_token_counts:
         errors.append(f"{missing_token_counts} chunks are missing token counts")
+    frontmatter_chunks = sum(1 for row in chunks if has_frontmatter(str(row.get("text") or "")))
+    if chunks and frontmatter_chunks:
+        errors.append(f"{frontmatter_chunks} chunks contain frontmatter")
+    max_allowed_tokens = max_chunk_tokens()
+    oversized_chunks = sum(1 for row in chunks if int(row.get("token_count") or 0) > max_allowed_tokens)
+    if chunks and oversized_chunks:
+        errors.append(f"{oversized_chunks} chunks exceed {max_allowed_tokens} tokens")
+    parent_child_chunks = sum(1 for row in chunks if row.get("parent_chunk_key"))
 
     metrics = {
         "documents": len(pages),
@@ -79,6 +88,10 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         "content_types": content_types,
         "missing_source_anchors": missing_anchors,
         "missing_token_counts": missing_token_counts,
+        "frontmatter_chunks": frontmatter_chunks,
+        "oversized_chunks": oversized_chunks,
+        "max_chunk_tokens": max_allowed_tokens,
+        "parent_child_chunks": parent_child_chunks,
     }
     return ValidationResult(not errors, errors, warnings, metrics)
 
@@ -116,7 +129,7 @@ def is_policy_rejection(row: dict[str, Any]) -> bool:
     reasons = [str(reason).lower() for reason in row.get("reasons") or []]
     content_type = str(row.get("content_type") or "").lower()
     return (
-        content_type in {"duplicate", "archived_version"}
+        content_type in {"duplicate", "archived_version", "network_page_fetch", "network_source_fetch"}
         or any(reason.startswith("duplicate content") for reason in reasons)
         or any("version" in reason and ("archived" in reason or "target" in reason) for reason in reasons)
     )
@@ -176,3 +189,14 @@ def content_type_counts(chunks: list[dict[str, Any]]) -> dict[str, int]:
         key = str(row.get("content_type") or "unknown")
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def has_frontmatter(text: str) -> bool:
+    return bool(re.match(r"(?s)^\s*(?:---|\+\+\+)\n.+?\n(?:---|\+\+\+)(?:\n|$)", text))
+
+
+def max_chunk_tokens() -> int:
+    try:
+        return int(os.environ.get("OZ_MAX_CHUNK_TOKENS", "1200"))
+    except ValueError:
+        return 1200
