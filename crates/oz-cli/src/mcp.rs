@@ -2,7 +2,10 @@ use super::*;
 use std::io::Write;
 
 pub(crate) fn run_mcp_server(project_root: &Path) -> Result<()> {
-    ensure_project(project_root)?;
+    let project_root = std::env::var_os("OZ_MCP_PROJECT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_root.to_path_buf());
+    ensure_project(&project_root)?;
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut reader = std::io::BufReader::new(stdin.lock());
@@ -28,7 +31,7 @@ pub(crate) fn run_mcp_server(project_root: &Path) -> Result<()> {
             "ping" => mcp_response(id, serde_json::json!({})),
             "tools/list" => mcp_response(id, serde_json::json!({ "tools": mcp_tools() })),
             "tools/call" => match call_mcp_tool(
-                project_root,
+                &project_root,
                 message.get("params").cloned().unwrap_or_default(),
             ) {
                 Ok(result) => mcp_response(id, result),
@@ -96,7 +99,7 @@ fn mcp_tools() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({
             "name": "oz_search",
-            "description": "Search version-pinned local Oz docs. Returns file paths and line numbers; read the files with normal file tools.",
+            "description": "Search version-pinned Oz docs first for external library APIs. Returns file paths and line numbers; read the files with normal file tools. Use other doc tools only when Oz has no indexed docs.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -109,7 +112,7 @@ fn mcp_tools() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "oz_pull",
-            "description": "Pull a documentation pack into .codo/vendors so the agent can use native grep/read tools.",
+            "description": "Pull a documentation pack into .codo/vendors so the agent can use native grep/read tools before falling back to other documentation sources.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -120,7 +123,7 @@ fn mcp_tools() -> Vec<serde_json::Value> {
         }),
         serde_json::json!({
             "name": "oz_status",
-            "description": "List documentation packs already pulled into this project.",
+            "description": "List Oz documentation packs already pulled into this project.",
             "inputSchema": {"type": "object", "properties": {}}
         }),
     ]

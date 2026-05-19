@@ -63,7 +63,7 @@ pub(crate) fn setup(
         config.api_url = Some(api_url.trim_end_matches('/').to_string());
         changed_config = true;
     }
-    if config.api_url.is_none() && !skip_login {
+    if config.api_url.is_none() {
         config.api_url = Some(DEFAULT_API_URL.to_string());
         changed_config = true;
     }
@@ -90,7 +90,7 @@ pub(crate) fn setup(
         )?;
     }
 
-    doctor(project_root)
+    doctor_impl(project_root, !skip_login)
 }
 
 fn telemetry_preference() -> Result<bool> {
@@ -589,6 +589,10 @@ fn registry_command(project_root: &Path, command: RegistryCommand) -> Result<()>
 }
 
 pub(crate) fn doctor(project_root: &Path) -> Result<()> {
+    doctor_impl(project_root, true)
+}
+
+fn doctor_impl(project_root: &Path, require_auth_token: bool) -> Result<()> {
     let mut failed = false;
     let config = read_config().unwrap_or_default();
     let api_configured = configured_api_url(&config).is_some();
@@ -613,7 +617,11 @@ pub(crate) fn doctor(project_root: &Path) -> Result<()> {
             api_get_json::<serde_json::Value>(&config, "/health").is_ok(),
             &mut failed,
         );
-        check("auth token", auth_token(&config).is_some(), &mut failed);
+        if require_auth_token {
+            check("auth token", auth_token(&config).is_some(), &mut failed);
+        } else {
+            println!("skip auth token");
+        }
         check(
             "registry catalog",
             remote_catalog_available(&config),

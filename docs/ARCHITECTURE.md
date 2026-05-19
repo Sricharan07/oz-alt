@@ -90,4 +90,17 @@ In the worker, each successful crawl is packed, uploaded to S3-compatible object
 
 ## Agent Contract
 
-`oz install` writes the locked Oz skill into Codex, Claude Code, Cursor, Cline, and Continue project config files. On normal CLI commands, existing installed skill blocks are silently refreshed unless `auto_update_skill` is disabled.
+`oz setup` is the low-friction onboarding path. It writes the API URL to
+`~/.codo/config.json`, initializes `.codo`, installs the locked Oz skill into
+Codex, Claude Code, Cursor, Cline, and Continue project config files, and adds
+MCP configuration for clients with known project/global MCP config locations.
+Today that means:
+
+- `.mcp.json` for project-scoped MCP clients such as Claude Code.
+- `.cursor/mcp.json` for Cursor.
+- `.continue/mcpServers/oz.json` for Continue.
+- Existing Cline MCP settings files when Cline is present.
+- `$CODEX_HOME/config.toml` or `~/.codex/config.toml` for Codex.
+
+On normal CLI commands, existing installed skill blocks and Oz MCP entries are
+silently refreshed unless `auto_update_skill` is disabled.

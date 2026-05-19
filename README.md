@@ -50,8 +50,12 @@ cargo run -p oz -- status
 ```
 
 Pulled docs materialize under `.codo/vendors/<vendor>/<library>@<version>/`.
-`oz install --codex` writes both project `AGENTS.md` instructions and a real Codex skill at
-`$CODEX_HOME/skills/oz/SKILL.md` (default: `~/.codex/skills/oz/SKILL.md`).
+`oz setup` writes the API URL into `~/.codo/config.json`, initializes `.codo`,
+installs agent instructions, and adds Oz MCP configuration for detected clients
+with known config locations.
+`oz install --codex` writes both project `AGENTS.md` instructions, a real Codex
+skill at `$CODEX_HOME/skills/oz/SKILL.md` (default:
+`~/.codex/skills/oz/SKILL.md`), and a Codex MCP server entry.
 
 ## Local API
 
@@ -71,6 +75,10 @@ Run the path-first MCP server for clients that support MCP:
 ```bash
 target/debug/oz mcp
 ```
+
+The MCP server exposes path-first tools: `oz_search`, `oz_pull`, and `oz_status`.
+Agents should still read files from `.codo/vendors` with native file tools after
+`oz_search` returns paths.
 
 Browse indexed libraries and pack metadata at `/libraries` when the API is running.
 

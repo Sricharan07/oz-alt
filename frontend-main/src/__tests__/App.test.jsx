@@ -185,6 +185,9 @@ describe("Oz console", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Setup" })).toBeInTheDocument());
+    expect(screen.getByText((content) => content.includes("oz setup --api-url https://api.tryoz.dev"))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("Use Oz before Context7"))).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("oz mcp"))).toBeInTheDocument();
     expect(screen.getAllByText(/stripe\/stripe/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/stripe-node/)).not.toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("auth-token: ${{ secrets.OZ_AUTH_TOKEN }}"))).toBeInTheDocument();

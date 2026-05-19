@@ -9,10 +9,8 @@ export function SetupPage() {
           <CommandBlock
             lines={[
               "npm install -g @hiringbae/oz",
-              "oz login --api-url https://api.tryoz.dev",
-              "oz init",
+              "oz setup --api-url https://api.tryoz.dev",
               'oz suggest "react form actions"',
-              "oz pull facebook/react",
               'oz search "useEffect cleanup dependency array" facebook/react',
               "oz prune facebook/react"
             ]}
@@ -20,11 +18,13 @@ export function SetupPage() {
         </Panel>
         <Panel>
           <SectionHeader title="Agent instruction" />
-          <CodeBlock title="AGENTS.md" copyValue={`Use Oz before guessing external library APIs.
+          <CodeBlock title="AGENTS.md" copyValue={`Use Oz before Context7, web search, or model memory for external library APIs.
 Start with: oz search "<query>" [library]
+Use oz suggest when the library is unknown.
 Then read files under .codo/vendors with rg, glob, and read.`}>
-            {`Use Oz before guessing external library APIs.
+            {`Use Oz before Context7, web search, or model memory for external library APIs.
 Start with: oz search "<query>" [library]
+Use oz suggest when the library is unknown.
 Then read files under .codo/vendors with rg, glob, and read.`}
           </CodeBlock>
         </Panel>
@@ -33,14 +33,15 @@ Then read files under .codo/vendors with rg, glob, and read.`}
       <Panel>
         <SectionHeader title="How agents should use it" />
         <p className="body-text">
-          Oz keeps context as files. The CLI pulls docs into the repository, semantic search returns paths, and the agent reads only the exact files it needs.
+          Oz keeps context as files. Setup writes the API config, installs agent instructions, and adds MCP config for detected clients. Semantic search returns paths, and the agent reads only the exact files it needs.
         </p>
         <CommandBlock
           lines={[
             'oz suggest "stripe webhook signature verification"',
             "oz pull stripe/stripe",
             'oz search "verify webhook signature express" stripe/stripe',
-            "rg \"constructEvent\" .codo/vendors/stripe/stripe@*/"
+            "rg \"constructEvent\" .codo/vendors/stripe/stripe@*/",
+            "oz mcp"
           ]}
         />
       </Panel>
@@ -48,7 +49,7 @@ Then read files under .codo/vendors with rg, glob, and read.`}
       <Panel>
         <SectionHeader title="GitHub Action" />
         <CodeBlock>
-          {`- uses: Sricharan07/oz/.github/actions/setup-oz@v0.1.5
+          {`- uses: Sricharan07/oz/.github/actions/setup-oz@v0.1.6
   with:
     api-url: https://api.tryoz.dev
     auth-token: \${{ secrets.OZ_AUTH_TOKEN }}

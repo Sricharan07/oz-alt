@@ -4,6 +4,13 @@ All notable Oz product and release changes are tracked here.
 
 ## Unreleased
 
+## 0.1.6
+
+- Make `oz setup` the one-command agent onboarding path by always writing the default registry API URL, even when login is skipped.
+- Add automatic Oz MCP configuration for detected Codex, Cursor, and project-scoped MCP clients.
+- Refresh installed Oz agent instructions to prefer Oz before Context7, web search, model memory, or other doc tools, with fallback only when Oz has no indexed docs.
+- Document path-first MCP tools (`oz_search`, `oz_pull`, `oz_status`) in setup and generated skills.
+
 ## 0.1.5
 
 - Add monorepo-aware `oz init` dependency discovery.
