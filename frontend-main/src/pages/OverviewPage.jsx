@@ -12,12 +12,14 @@ import { getStatus, listLibraries } from "../api.js";
 import { Checklist, CommandBlock, LibraryTable, Metric, Page, Panel, SectionHeader, StatPair } from "../components/ui/index.js";
 import { compactNumber, integer } from "../format.js";
 import { useAsync } from "../hooks/useAsync.js";
+import { useConsoleAccount } from "../hooks/useConsoleAccount.js";
 import { useMotionProgress } from "../hooks/useMotionProgress.js";
 import { summarizeLibraries, topLibraries } from "./pageData.js";
 
 export function OverviewPage() {
   const { data: libraries, loading: librariesLoading } = useAsync(listLibraries, []);
   const { data: status } = useAsync(getStatus, null);
+  const account = useConsoleAccount();
   const rows = useMemo(() => libraries || [], [libraries]);
   const totals = useMemo(() => summarizeLibraries(rows), [rows]);
   const topRows = useMemo(() => topLibraries(rows), [rows]);
@@ -26,6 +28,8 @@ export function OverviewPage() {
   return (
     <Page title="Overview" description="A console for authenticated CLI access, curated library packs, and local docs for agents.">
       <CatalogHealthCard rows={topRows} totals={totals} operational={operational} loading={librariesLoading} />
+
+      <AccountSnapshot account={account} />
 
       <section className="summary-grid" aria-label="Catalog summary">
         <Metric label="Libraries" value={librariesLoading ? "Loading" : integer(totals.libraries)} icon={Library} />
@@ -67,6 +71,40 @@ export function OverviewPage() {
         <LibraryTable rows={rows.slice(0, 8)} loading={librariesLoading} compact />
       </Panel>
     </Page>
+  );
+}
+
+function AccountSnapshot({ account }) {
+  if (account.loading) {
+    return null;
+  }
+
+  if (!account.authenticated) {
+    return (
+      <Panel className="account-snapshot">
+        <SectionHeader title="Connect your CLI account" action={<Link to="/sign-in">Sign in</Link>} />
+        <Checklist
+          items={[
+            "Create or sign into the same account used by oz login.",
+            "Approve the CLI device from the browser.",
+            "Usage and active CLI sessions appear here after the first search or pull."
+          ]}
+        />
+      </Panel>
+    );
+  }
+
+  const totals = account.usage?.totals || {};
+  return (
+    <Panel className="account-snapshot">
+      <SectionHeader title="Your workspace" action={<Link to="/settings">Manage account</Link>} />
+      <div className="account-snapshot-grid">
+        <StatPair label="Signed in as" value={account.user.email} />
+        <StatPair label="CLI sessions" value={integer(account.cliSessions.filter((row) => !row.revoked_at).length)} />
+        <StatPair label="Searches" value={integer(totals.searches)} />
+        <StatPair label="Pulls" value={integer(totals.pulls)} />
+      </div>
+    </Panel>
   );
 }
 

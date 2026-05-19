@@ -1,7 +1,11 @@
 import { KeyRound, LogIn, Menu, Search } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useConsoleAccount } from "../../hooks/useConsoleAccount.js";
 
 export function Topbar({ collapsed, mobileOpen, onToggleMobile }) {
+  const account = useConsoleAccount();
+  const emailName = account.user?.email ? account.user.email.split("@")[0] : "Account";
+
   return (
     <header className="topbar">
       <button
@@ -30,10 +34,22 @@ export function Topbar({ collapsed, mobileOpen, onToggleMobile }) {
             <KeyRound size={15} aria-hidden="true" />
             <span>Device</span>
           </a>
-          <Link className="top-button" to="/sign-in" aria-label="Sign in">
-            <LogIn size={15} aria-hidden="true" />
-            <span>Sign in</span>
-          </Link>
+          {account.authenticated ? (
+            <>
+              <Link className="top-button" to="/settings" aria-label="Open account">
+                <LogIn size={15} aria-hidden="true" />
+                <span>{emailName}</span>
+              </Link>
+              <button className="top-button" type="button" onClick={() => void account.logout()}>
+                <span>Logout</span>
+              </button>
+            </>
+          ) : (
+            <Link className="top-button" to="/sign-in" aria-label="Sign in">
+              <LogIn size={15} aria-hidden="true" />
+              <span>Sign in</span>
+            </Link>
+          )}
         </div>
       </div>
     </header>

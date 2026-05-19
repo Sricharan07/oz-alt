@@ -155,6 +155,77 @@ def usage_summary(principal: AuthPrincipal, *, limit: int = 20) -> list[dict[str
         return []
 
 
+def usage_daily_rows(principal: AuthPrincipal, *, days: int = 30) -> list[dict[str, Any]]:
+    store = AuthStore.from_env()
+    if store is None:
+        return []
+    try:
+        return store.execute(
+            """
+            select day::text as day, event, coalesce(library, '') as library, count::bigint as count
+            from usage_daily
+            where user_id = cast(:user_id as uuid)
+              and day >= current_date - make_interval(days => :days)
+            order by day desc, count desc, event asc, library asc
+            limit 500
+            """,
+            {"user_id": principal.user_id, "days": days},
+        )
+    except Exception:
+        return []
+
+
+def recent_usage_events(principal: AuthPrincipal, *, limit: int = 25) -> list[dict[str, Any]]:
+    store = AuthStore.from_env()
+    if store is None:
+        return []
+    try:
+        return store.execute(
+            """
+            select event,
+                   coalesce(library, '') as library,
+                   query_length,
+                   result_count,
+                   created_at::text as created_at
+            from usage_events
+            where user_id = cast(:user_id as uuid)
+            order by created_at desc
+            limit :limit
+            """,
+            {"user_id": principal.user_id, "limit": limit},
+        )
+    except Exception:
+        return []
+
+
+def usage_totals(principal: AuthPrincipal) -> dict[str, Any]:
+    store = AuthStore.from_env()
+    if store is None:
+        return {"events": 0, "searches": 0, "pulls": 0, "suggests": 0, "libraries": 0}
+    try:
+        row = store.one(
+            """
+            select count(*)::bigint as events,
+                   count(*) filter (where event = 'search')::bigint as searches,
+                   count(*) filter (where event = 'pack_download')::bigint as pulls,
+                   count(*) filter (where event = 'suggest')::bigint as suggests,
+                   count(distinct library) filter (where library is not null and library <> '')::bigint as libraries
+            from usage_events
+            where user_id = cast(:user_id as uuid)
+            """,
+            {"user_id": principal.user_id},
+        )
+        return {
+            "events": int(row.get("events") or 0) if row else 0,
+            "searches": int(row.get("searches") or 0) if row else 0,
+            "pulls": int(row.get("pulls") or 0) if row else 0,
+            "suggests": int(row.get("suggests") or 0) if row else 0,
+            "libraries": int(row.get("libraries") or 0) if row else 0,
+        }
+    except Exception:
+        return {"events": 0, "searches": 0, "pulls": 0, "suggests": 0, "libraries": 0}
+
+
 def sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 

@@ -29,6 +29,41 @@ const statusPayload = {
   }
 };
 
+const accountPayload = {
+  user: {
+    id: "user-1",
+    email: "dev@tryoz.dev",
+    role: "admin",
+    is_admin: true
+  },
+  csrf: "csrf-token",
+  web_sessions: [
+    {
+      id: "web-1",
+      current: true,
+      created_at: "2026-05-18T00:00:00Z",
+      expires_at: "2026-06-18T00:00:00Z",
+      revoked_at: ""
+    }
+  ],
+  cli_sessions: [
+    {
+      id: "cli-1",
+      machine_id: "macbook",
+      created_at: "2026-05-18T00:00:00Z",
+      last_used_at: "2026-05-18T01:00:00Z",
+      expires_at: "2026-08-18T00:00:00Z",
+      revoked_at: ""
+    }
+  ],
+  usage: {
+    totals: { searches: 7, pulls: 3, suggests: 2, libraries: 4 },
+    summary: [{ event: "search", library: "facebook/react", count: 7 }],
+    daily: [],
+    recent_events: [{ event: "search", library: "facebook/react", query_length: 12, result_count: 4, created_at: "2026-05-18T01:00:00Z" }]
+  }
+};
+
 describe("Oz console", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn((url) => {
@@ -37,6 +72,9 @@ describe("Oz console", () => {
       }
       if (String(url).endsWith("/status.json")) {
         return Promise.resolve(jsonResponse(statusPayload));
+      }
+      if (String(url).endsWith("/api/console/account")) {
+        return Promise.resolve(jsonResponse({ error: "unauthorized" }, 401));
       }
       return Promise.resolve(jsonResponse({}));
     }));
@@ -69,11 +107,57 @@ describe("Oz console", () => {
     expect(screen.getByRole("button", { name: "Sign in" })).toHaveAttribute("type", "submit");
     expect(document.querySelector("form")).toHaveAttribute("action", "/login");
   });
+
+  it("renders authenticated account state from backend console payload", async () => {
+    fetch.mockImplementation((url) => {
+      if (String(url).endsWith("/api/console/account")) {
+        return Promise.resolve(jsonResponse(accountPayload));
+      }
+      if (String(url).endsWith("/libraries.json")) {
+        return Promise.resolve(jsonResponse(librariesPayload));
+      }
+      if (String(url).endsWith("/status.json")) {
+        return Promise.resolve(jsonResponse(statusPayload));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/settings"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByText("dev@tryoz.dev · admin")).toBeInTheDocument());
+    expect(screen.getByText("CLI sessions")).toBeInTheDocument();
+    expect(screen.getByText("macbook")).toBeInTheDocument();
+    expect(screen.getByText("Usage summary")).toBeInTheDocument();
+  });
+
+  it("renders authenticated usage state from backend console payload", async () => {
+    fetch.mockImplementation((url) => {
+      if (String(url).endsWith("/api/console/account")) {
+        return Promise.resolve(jsonResponse(accountPayload));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/usage"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Usage" })).toBeInTheDocument());
+    expect(screen.getByText("Top activity")).toBeInTheDocument();
+    expect(screen.getByText("Recent events")).toBeInTheDocument();
+    expect(screen.getAllByText("facebook/react").length).toBeGreaterThan(0);
+  });
 });
 
-function jsonResponse(payload) {
+function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json" }
   });
 }

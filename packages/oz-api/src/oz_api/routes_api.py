@@ -9,12 +9,19 @@ from oz_api.admin_ops import approve_crawl, submit_index_request
 from oz_api.auth import (
     AuthError,
     approve_device_code,
+    change_principal_password,
+    csrf_token,
     exchange_device_code,
+    list_cli_sessions,
+    list_web_sessions,
     refresh_cli_token,
+    revoke_cli_session,
+    revoke_web_session_by_id,
     start_device_authorization,
+    verify_csrf,
 )
 from oz_api.freshness import stale_libraries_from_payload
-from oz_api.http_context import client_ip, principal_for_request, read_json_payload, state_from_request
+from oz_api.http_context import client_ip, principal_for_request, read_json_payload, session_cookie, state_from_request
 from oz_api.limits import index_request_allowed
 from oz_api.queue import crawler_job_event, missing_required_crawler_fields
 from oz_api.retrieval_experiments import retrieval_variant
@@ -27,10 +34,121 @@ from oz_api.retrieval import (
 )
 from oz_api.server_helpers import bulk_refs_payload, single_ref_payload
 from oz_api.telemetry import sanitize_telemetry
-from oz_api.usage import record_pack_download_metrics, record_telemetry_event, record_usage_event
+from oz_api.usage import (
+    recent_usage_events,
+    record_pack_download_metrics,
+    record_telemetry_event,
+    record_usage_event,
+    usage_daily_rows,
+    usage_summary,
+    usage_totals,
+)
 from oz_api.versions import VersionResolutionError
 
 router = APIRouter()
+
+
+@router.get("/api/console/account")
+async def console_account(request: Request):
+    principal = principal_for_request(request)
+    if principal is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    session = session_cookie(request)
+    return {
+        "user": principal_payload(principal),
+        "csrf": csrf_token(session),
+        "web_sessions": list_web_sessions(principal, session),
+        "cli_sessions": list_cli_sessions(principal),
+        "usage": {
+            "totals": usage_totals(principal),
+            "summary": usage_summary(principal),
+            "daily": usage_daily_rows(principal),
+            "recent_events": recent_usage_events(principal),
+        },
+    }
+
+
+@router.post("/api/console/cli-sessions/revoke")
+async def console_revoke_cli_session(request: Request):
+    principal = principal_for_request(request)
+    if principal is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    payload = await read_json_payload(request)
+    csrf_error = verify_console_csrf(request, payload)
+    if csrf_error is not None:
+        return csrf_error
+    try:
+        revoke_cli_session(
+            principal,
+            str(payload.get("token_id") or ""),
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    except (AuthError, RuntimeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"ok": True}
+
+
+@router.post("/api/console/web-sessions/revoke")
+async def console_revoke_web_session(request: Request):
+    principal = principal_for_request(request)
+    if principal is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    payload = await read_json_payload(request)
+    csrf_error = verify_console_csrf(request, payload)
+    if csrf_error is not None:
+        return csrf_error
+    try:
+        revoke_web_session_by_id(
+            principal,
+            str(payload.get("session_id") or ""),
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    except (AuthError, RuntimeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"ok": True}
+
+
+@router.post("/api/console/password")
+async def console_change_password(request: Request):
+    principal = principal_for_request(request)
+    if principal is None:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    payload = await read_json_payload(request)
+    csrf_error = verify_console_csrf(request, payload)
+    if csrf_error is not None:
+        return csrf_error
+    new_password = str(payload.get("new_password") or "")
+    if new_password != str(payload.get("confirm_password") or ""):
+        return JSONResponse({"error": "passwords_do_not_match"}, status_code=400)
+    try:
+        change_principal_password(
+            principal,
+            str(payload.get("current_password") or ""),
+            new_password,
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    except (AuthError, RuntimeError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"ok": True}
+
+
+def principal_payload(principal) -> dict[str, str | bool]:
+    return {
+        "id": principal.user_id,
+        "email": principal.email,
+        "role": principal.role,
+        "is_admin": principal.is_admin,
+    }
+
+
+def verify_console_csrf(request: Request, payload: dict[str, object]) -> JSONResponse | None:
+    submitted = str(payload.get("csrf") or request.headers.get("x-csrf-token") or "")
+    if verify_csrf(session_cookie(request), submitted):
+        return None
+    return JSONResponse({"error": "invalid_csrf"}, status_code=403)
 
 
 @router.get("/refs")

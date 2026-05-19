@@ -463,6 +463,58 @@ def list_cli_sessions(principal: AuthPrincipal) -> list[dict[str, Any]]:
     )
 
 
+def list_web_sessions(principal: AuthPrincipal, current_session: str | None = None) -> list[dict[str, Any]]:
+    rows = require_auth_store().execute(
+        """
+        select id::text as id,
+               created_at::text as created_at,
+               expires_at::text as expires_at,
+               revoked_at::text as revoked_at,
+               session_hash
+        from web_sessions
+        where user_id = cast(:user_id as uuid)
+        order by created_at desc
+        limit 50
+        """,
+        {"user_id": principal.user_id},
+    )
+    current_hash = token_hash(current_session) if current_session else ""
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        output.append(
+            {
+                "id": row.get("id"),
+                "created_at": row.get("created_at"),
+                "expires_at": row.get("expires_at"),
+                "revoked_at": row.get("revoked_at"),
+                "current": bool(current_hash and row.get("session_hash") == current_hash),
+            }
+        )
+    return output
+
+
+def revoke_web_session_by_id(principal: AuthPrincipal, session_id: str, *, ip: str = "", user_agent: str = "") -> None:
+    row = require_auth_store().one(
+        """
+        update web_sessions
+        set revoked_at = coalesce(revoked_at, now())
+        where id = cast(:session_id as uuid)
+          and user_id = cast(:user_id as uuid)
+        returning id::text as id
+        """,
+        {"session_id": session_id, "user_id": principal.user_id},
+    )
+    if not row:
+        raise AuthError("web_session_not_found")
+    audit(
+        "web_session_revoked",
+        user_id=principal.user_id,
+        ip=ip,
+        user_agent=user_agent,
+        metadata={"session_id": str(row.get("id") or "")},
+    )
+
+
 def revoke_cli_session(principal: AuthPrincipal, token_id: str, *, ip: str = "", user_agent: str = "") -> None:
     row = require_auth_store().one(
         """

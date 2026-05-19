@@ -6,3 +6,4 @@ export * from "./NotFoundPage.jsx";
 export * from "./OverviewPage.jsx";
 export * from "./SetupPage.jsx";
 export * from "./StatusPage.jsx";
+export * from "./UsagePage.jsx";

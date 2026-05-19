@@ -179,6 +179,8 @@ def route_label(path: str) -> str:
         return "/libraries"
     if path.startswith("/api/libraries/"):
         return "/api/libraries/:vendor/:library"
+    if path.startswith("/api/console/"):
+        return "/api/console"
     if path in {"/suggest", "/search", "/context", "/telemetry", "/health", "/catalog", "/metrics", "/status", "/status.json"}:
         return path
     return "other"

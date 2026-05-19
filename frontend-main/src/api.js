@@ -31,6 +31,18 @@ export async function fetchJson(path, options = {}) {
   return body;
 }
 
+export async function postJson(path, payload = {}, options = {}) {
+  return fetchJson(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    body: JSON.stringify(payload),
+    ...options
+  });
+}
+
 export async function listLibraries() {
   const payload = await fetchJson("/libraries.json");
   return Array.isArray(payload.libraries) ? payload.libraries : [];
@@ -43,6 +55,31 @@ export async function getLibrary(vendor, library, version = "") {
 
 export async function getStatus() {
   return fetchJson("/status.json");
+}
+
+export async function getConsoleAccount() {
+  return fetchJson("/api/console/account");
+}
+
+export async function revokeCliSession(tokenId, csrf) {
+  return postJson("/api/console/cli-sessions/revoke", { token_id: tokenId, csrf });
+}
+
+export async function revokeWebSession(sessionId, csrf) {
+  return postJson("/api/console/web-sessions/revoke", { session_id: sessionId, csrf });
+}
+
+export async function changePassword({ currentPassword, newPassword, confirmPassword, csrf }) {
+  return postJson("/api/console/password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+    csrf
+  });
+}
+
+export async function logout() {
+  return postJson("/auth/logout", {});
 }
 
 export async function safeJson(response) {
