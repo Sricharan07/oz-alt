@@ -25,12 +25,14 @@ def local_chunk_score(row: dict[str, Any], terms: list[str]) -> float:
     symbols = " ".join(list_of_strings(row.get("symbols"))).lower()
     compact_path = compact(path)
     compact_symbols = compact(symbols)
+    basename = compact(re.sub(r"\.[^.]+$", "", path.rsplit("/", 1)[-1]))
 
     text_hits = sum(text.count(term) for term in terms)
     distinct_text_hits = sum(1 for term in terms if term in text)
     path_hits = sum(1 for term in terms if term in path or compact(term) in compact_path)
     heading_hits = sum(1 for term in terms if term in headings)
     symbol_hits = sum(1 for term in terms if term in symbols or compact(term) in compact_symbols)
+    exact_basename_hits = sum(1 for term in terms if compact(term) == basename)
 
     if text_hits == 0 and path_hits == 0 and heading_hits == 0 and symbol_hits == 0:
         return 0.0
@@ -42,6 +44,7 @@ def local_chunk_score(row: dict[str, Any], terms: list[str]) -> float:
     score += path_hits * 10.0
     score += heading_hits * 16.0
     score += symbol_hits * 35.0
+    score += exact_basename_hits * exact_path_bonus(path, str(row.get("content_type") or "guide"), terms)
     score += CONTENT_TYPE_BONUS.get(str(row.get("content_type") or "guide"), 0.0)
     score += max(float(row.get("quality_score") or 1.0), 0.0) * 3.0
     score -= path_penalty(path)
@@ -73,6 +76,16 @@ def path_penalty(path: str) -> float:
     if any(token in path for token in noisy):
         return 60.0
     return 0.0
+
+
+def exact_path_bonus(path: str, content_type: str, terms: list[str]) -> float:
+    if "_symbols/" in path:
+        return 220.0
+    if path.startswith("api-reference/") or "/api-reference/" in path or content_type == "api_reference":
+        return 180.0
+    if path.startswith("examples/") and not {"example", "examples"}.intersection(terms):
+        return 25.0
+    return 60.0
 
 
 def list_of_strings(value: Any) -> list[str]:

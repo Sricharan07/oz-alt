@@ -19,6 +19,7 @@ from oz_api.crawler_jobs import embedding_result_is_terminal, search_eval_report
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.indexer import add_parent_chunks, limit_to_token_budget
+from oz_api.ranking import local_chunk_score
 from oz_api.queue import queued_crawler_job_event
 from oz_api.rerank import (
     boost_named_suggestions,
@@ -75,6 +76,23 @@ class RetrievalQualityTests(unittest.TestCase):
         intent = classify_query("useState set state updater function")
         self.assertEqual(intent.content_type, "api_reference")
         self.assertIn("useState", intent.symbols)
+
+    def test_local_eval_ranking_prefers_exact_api_reference_over_examples(self) -> None:
+        terms = ["useeffect", "cleanup", "dependency", "array"]
+        api_row = {
+            "path": "api-reference/react/useeffect.md",
+            "text": "useEffect cleanup dependency array",
+            "content_type": "api_reference",
+            "symbols": ["useEffect"],
+        }
+        example_row = {
+            "path": "examples/react/useeffect.md",
+            "text": "useEffect cleanup dependency array " * 5,
+            "content_type": "code_example",
+            "symbols": ["useEffect"],
+        }
+
+        self.assertGreater(local_chunk_score(api_row, terms), local_chunk_score(example_row, terms))
 
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(
