@@ -192,7 +192,18 @@ def content_type_counts(chunks: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def has_frontmatter(text: str) -> bool:
-    return bool(re.match(r"(?s)^\s*(?:---|\+\+\+)\n.+?\n(?:---|\+\+\+)(?:\n|$)", text))
+    stripped = text.lstrip()
+    for marker in ("---", "+++"):
+        if not stripped.startswith(marker + "\n"):
+            continue
+        end = stripped.find("\n" + marker + "\n", len(marker) + 1)
+        if end < 0:
+            continue
+        payload = stripped[len(marker) + 1 : end]
+        lines = [line.strip() for line in payload.splitlines() if line.strip()]
+        if lines and not any(line.startswith(("#", "```")) for line in lines):
+            return any(re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", line) for line in lines)
+    return False
 
 
 def max_chunk_tokens() -> int:

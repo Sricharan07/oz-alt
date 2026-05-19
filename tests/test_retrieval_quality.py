@@ -39,7 +39,7 @@ from oz_crawler.parsers.source_code import source_code_chunks, source_path_allow
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.splitting import split_llms_full
 from oz_crawler.token_counting import token_count
-from oz_crawler.validation import USEFUL_CONTENT_TYPES, true_junk_rejections
+from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections
 
 
 class RetrievalQualityTests(unittest.TestCase):
@@ -104,6 +104,13 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertNotIn("title: Middleware", markdown)
         self.assertTrue(markdown.startswith("# Middleware"))
+
+    def test_markdown_cleanup_strips_horizontal_rules_without_frontmatter_false_positive(self) -> None:
+        markdown = clean_markdown("---\n## Reference\n\nUse `useState`.\n\n---\n## Usage\n")
+
+        self.assertNotIn("---", markdown)
+        self.assertTrue(markdown.startswith("## Reference"))
+        self.assertFalse(has_frontmatter("---\n## Reference\n\nUse `useState`.\n\n---\n"))
 
     def test_llms_full_split_does_not_reemit_frontmatter(self) -> None:
         pages = split_llms_full(

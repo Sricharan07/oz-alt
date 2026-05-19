@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urldefrag
 
 from oz_crawler.content_types import block_content_type
-from oz_crawler.normalize import NormalizedPage
+from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.token_counting import token_count
 
 
@@ -75,6 +75,7 @@ def chunk_markdown(
     max_tokens: int = 650,
 ) -> list[MarkdownChunk]:
     max_tokens = min(max_tokens, max_chunk_tokens())
+    markdown = clean_markdown(markdown)
     blocks = markdown_blocks(markdown)
     sections = section_blocks(blocks)
     chunks: list[MarkdownChunk] = []

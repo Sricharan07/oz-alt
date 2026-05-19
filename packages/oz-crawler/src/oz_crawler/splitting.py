@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Iterable
 from urllib.parse import urlparse
 
-from oz_crawler.normalize import NormalizedPage
+from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.content_types import classify_content_type
 
 
@@ -15,20 +15,20 @@ FRONTMATTER_BLOCK = re.compile(r"(?ms)^---\s*\n(.*?)\n---\s*\n")
 def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
     matches = list(FRONTMATTER_BLOCK.finditer(text))
     if not matches:
-        return [NormalizedPage(title=title_from_markdown(text, source_url), markdown=text.strip() + "\n", source_url=source_url)]
+        markdown = clean_markdown(text)
+        return [NormalizedPage(title=title_from_markdown(markdown, source_url), markdown=markdown, source_url=source_url)]
 
     pages: list[NormalizedPage] = []
     for index, match in enumerate(matches):
         body_start = match.end()
         body_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         frontmatter = parse_frontmatter(match.group(1))
-        body = text[body_start:body_end].strip()
+        body = clean_markdown(text[body_start:body_end])
         if not body:
             continue
         page_url = frontmatter.get("url") or source_url
         title = frontmatter.get("title") or title_from_markdown(body, page_url)
-        markdown = body.strip() + "\n"
-        pages.append(NormalizedPage(title=title, markdown=markdown, source_url=page_url))
+        pages.append(NormalizedPage(title=title, markdown=body, source_url=page_url))
     return pages
 
 

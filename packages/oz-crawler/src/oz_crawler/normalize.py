@@ -97,8 +97,14 @@ def regex_title(html: str) -> str:
 def clean_markdown(markdown: str) -> str:
     lines: list[str] = []
     previous_blank = False
+    in_code = False
     for raw_line in strip_frontmatter(sanitize_secret_tokens(markdown)).splitlines():
         line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+        if not in_code and is_markdown_separator(stripped):
+            continue
         blank = not line.strip()
         if blank and previous_blank:
             continue
@@ -113,9 +119,22 @@ def strip_frontmatter(markdown: str) -> str:
         if not text.startswith(marker + "\n"):
             continue
         end = text.find("\n" + marker + "\n", len(marker) + 1)
-        if end >= 0:
+        if end >= 0 and looks_like_frontmatter(text[len(marker) + 1 : end]):
             return text[end + len(marker) + 2 :]
     return markdown
+
+
+def looks_like_frontmatter(payload: str) -> bool:
+    lines = [line.strip() for line in payload.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if any(line.startswith(("#", "```")) for line in lines):
+        return False
+    return any(re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", line) for line in lines)
+
+
+def is_markdown_separator(stripped_line: str) -> bool:
+    return bool(re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", stripped_line))
 
 
 def sanitize_secret_tokens(text: str) -> str:
