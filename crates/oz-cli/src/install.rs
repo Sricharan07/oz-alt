@@ -499,8 +499,10 @@ the library is not indexed or the needed docs are not available.
 
    **Semantic search (preferred when you don't know the file path):**
    `oz search "<query>" [<library>]`
-   Returns a ranked list of local file paths under `.codo/vendors/...`.
+   Returns ranked local file paths with start/end line ranges under `.codo/vendors/...`.
    Example: `oz search "middleware jwt cookies" vercel/next.js`
+   For machine use, prefer:
+   `oz search "<query>" [<library>] --compact-json --max-results 10`
 
    **Native file tools (preferred when you know roughly where to look):**
    Use your normal Glob, Grep, and Read tools on `.codo/vendors/...`, exactly
@@ -511,9 +513,10 @@ the library is not indexed or the needed docs are not available.
    - Symbol lookup: `_symbols/` contains one file per public API,
      named by symbol (e.g. `_symbols/NextRequest.md`)
 
-5. Read the files. After `oz search` returns paths, or after Glob/Grep
-   locates files, use Read to load their contents. `oz search` only returns
-   paths; content always comes from your Read tool.
+5. Read the matching line windows first. After `oz search` returns paths and
+   line ranges, read the returned window before loading an entire file. Expand
+   to the full file only when the local window is insufficient. `oz search`
+   only returns locations; content always comes from your Read/Grep tools.
 
 6. Use inline snippets only when the task needs them:
    `oz context "<query>" [<library>] --max-tokens 2000`
@@ -524,7 +527,7 @@ the library is not indexed or the needed docs are not available.
    `oz mcp`
    `oz setup` installs MCP config automatically for supported detected clients.
    Preferred MCP tools:
-   - `oz_search`: returns local file paths and line numbers.
+   - `oz_search`: returns local file paths and line ranges.
    - `oz_pull`: materializes docs under `.codo/vendors`.
    - `oz_status`: lists pulled libraries.
    - `oz_context`: returns capped inline snippets only when native file reads are unavailable.

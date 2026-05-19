@@ -175,9 +175,9 @@ fn call_mcp_tool(project_root: &Path, params: serde_json::Value) -> Result<serde
                 .results
                 .iter()
                 .map(|result| match result.line {
-                    Some(line) => format!(
-                        "{}:{line}{}",
-                        result.path,
+                    Some(_) => format!(
+                        "{}{}",
+                        format_search_location(&result.path, result.line, result.end_line),
                         result
                             .content_type
                             .as_deref()

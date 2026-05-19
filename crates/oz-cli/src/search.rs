@@ -8,6 +8,7 @@ pub(crate) fn search_docs(
     max_results: usize,
     content_type: Option<&str>,
     json: bool,
+    compact_json: bool,
 ) -> Result<()> {
     ensure_project(project_root)?;
 
@@ -26,6 +27,7 @@ pub(crate) fn search_docs(
             max_results,
             content_type,
             json,
+            compact_json,
         );
     }
 
@@ -37,11 +39,19 @@ pub(crate) fn search_docs(
         content_type,
     )?;
 
-    if json {
+    if compact_json {
+        println!(
+            "{}",
+            serde_json::to_string(&compact_search_response(&response, None))?
+        );
+    } else if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
         for hit in &response.results {
-            println!("{}:{}", hit.path, hit.line.unwrap_or(1));
+            println!(
+                "{}",
+                format_search_location(&hit.path, hit.line, hit.end_line)
+            );
         }
     }
     emit_telemetry(
@@ -222,6 +232,7 @@ fn search_docs_remote(
     max_results: usize,
     content_type: Option<&str>,
     json: bool,
+    compact_json: bool,
 ) -> Result<()> {
     let max_results = clamp_max_results(max_results, 1, 50);
     let mut selected_library = None;
@@ -250,7 +261,15 @@ fn search_docs_remote(
                 content_type,
             )?;
             if fallback.results.is_empty() {
-                if json {
+                if compact_json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "results": [],
+                            "suggestions": actionable_suggestions(query, &suggestions),
+                        }))?
+                    );
+                } else if json {
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({
@@ -298,7 +317,15 @@ fn search_docs_remote(
 
     warn_stale_response(&response.stale_libraries);
     warn_degraded_response(&response);
-    if json {
+    if compact_json {
+        println!(
+            "{}",
+            serde_json::to_string(&compact_search_response(
+                &response,
+                selected_library.as_deref()
+            ))?
+        );
+    } else if json {
         let mut value = serde_json::to_value(&response)?;
         if let Some(scope) = selected_library {
             value["selected_library"] = serde_json::Value::String(scope);
@@ -309,11 +336,10 @@ fn search_docs_remote(
             eprintln!("oz: selected {scope} from suggestions");
         }
         for result in &response.results {
-            if let Some(line) = result.line {
-                println!("{}:{}", result.path, line);
-            } else {
-                println!("{}", result.path);
-            }
+            println!(
+                "{}",
+                format_search_location(&result.path, result.line, result.end_line)
+            );
         }
     }
     emit_telemetry(
@@ -381,6 +407,70 @@ fn search_docs_remote_response(
     warn_stale_response(&response.stale_libraries);
     warn_degraded_response(&response);
     Ok(response)
+}
+
+fn compact_search_response(
+    response: &SearchResponse,
+    selected_library: Option<&str>,
+) -> serde_json::Value {
+    let results = response
+        .results
+        .iter()
+        .map(|result| {
+            let mut item = serde_json::json!({
+                "path": result.path.clone(),
+            });
+            if let Some(line) = result.line {
+                item["line"] = serde_json::json!(line);
+            }
+            if let Some(end_line) = result.end_line {
+                if result.line.map(|line| end_line > line).unwrap_or(true) {
+                    item["end_line"] = serde_json::json!(end_line);
+                }
+            }
+            if let Some(kind) = &result.content_type {
+                item["type"] = serde_json::json!(kind);
+            }
+            if !result.library.is_empty() {
+                item["library"] = serde_json::json!(result.library.clone());
+            }
+            if !result.version.is_empty() {
+                item["version"] = serde_json::json!(result.version.clone());
+            }
+            item
+        })
+        .collect::<Vec<_>>();
+    let mut value = serde_json::json!({ "results": results });
+    if let Some(scope) = selected_library {
+        value["selected_library"] = serde_json::json!(scope);
+    }
+    if let Some(mode) = &response.retrieval_mode {
+        value["retrieval_mode"] = serde_json::json!(mode);
+    }
+    if response.degraded {
+        value["degraded"] = serde_json::json!(true);
+    }
+    if !response.stale_libraries.is_empty() {
+        value["stale_libraries"] = serde_json::json!(response.stale_libraries);
+    }
+    if !response.libraries_to_pull.is_empty() {
+        value["libraries_to_pull"] = serde_json::json!(response.libraries_to_pull);
+    }
+    value
+}
+
+pub(crate) fn format_search_location(
+    path: &str,
+    line: Option<usize>,
+    end_line: Option<usize>,
+) -> String {
+    match line {
+        Some(line) => match end_line.filter(|end_line| *end_line > line) {
+            Some(end_line) => format!("{path}:{line}-{end_line}"),
+            None => format!("{path}:{line}"),
+        },
+        None => path.to_string(),
+    }
 }
 
 fn context_docs_remote(
@@ -666,6 +756,7 @@ fn local_search_response(
             SearchResult {
                 path: to_project_path(project_root, &hit.path),
                 line: Some(hit.line),
+                end_line: hit.end_line,
                 score: serde_json::json!(hit.score),
                 library,
                 version,
@@ -977,6 +1068,11 @@ fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) 
         hits.push(SearchHit {
             path: library_root.join(relative_path),
             line,
+            end_line: row
+                .get("end_line")
+                .and_then(|value| value.as_u64())
+                .map(|value| value as usize)
+                .filter(|end_line| *end_line >= line),
             score,
             content_type: row
                 .get("content_type")
@@ -1046,6 +1142,7 @@ fn collect_symbol_hits(
         hits.push(SearchHit {
             path: entry.path().to_path_buf(),
             line: 1,
+            end_line: Some(content.lines().count().max(1)),
             score,
             content_type: "api_reference".to_string(),
             snippet: Some(content.clone()),
@@ -1101,6 +1198,7 @@ fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -
             hits.push(SearchHit {
                 path: path.to_path_buf(),
                 line: idx + 1,
+                end_line: Some(idx + 1),
                 score,
                 content_type: "guide".to_string(),
                 snippet: None,

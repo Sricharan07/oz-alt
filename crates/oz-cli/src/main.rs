@@ -123,6 +123,10 @@ enum Command {
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
+
+        /// Print compact machine-readable JSON for coding agents.
+        #[arg(long = "compact-json")]
+        compact_json: bool,
     },
 
     /// Return compact local snippets for search results when inline context is needed.
@@ -337,6 +341,7 @@ impl RegistrySource {
 struct SearchHit {
     path: PathBuf,
     line: usize,
+    end_line: Option<usize>,
     score: usize,
     preview: String,
     content_type: String,
@@ -391,6 +396,8 @@ struct SearchResponse {
 struct SearchResult {
     path: String,
     line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    end_line: Option<usize>,
     score: serde_json::Value,
     library: String,
     version: String,
@@ -528,6 +535,7 @@ fn main() -> Result<()> {
             max_results,
             content_type,
             json,
+            compact_json,
         } => search_docs(
             &project_root,
             &query,
@@ -535,6 +543,7 @@ fn main() -> Result<()> {
             max_results,
             content_type.as_deref(),
             json,
+            compact_json,
         )?,
         Command::Context {
             query,
@@ -770,12 +779,23 @@ mod tests {
                 max_results,
                 content_type,
                 json,
+                compact_json,
                 ..
             } => {
                 assert_eq!(max_results, 5);
                 assert_eq!(content_type.as_deref(), Some("code_example"));
                 assert!(json);
+                assert!(!compact_json);
             }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn parses_compact_search_json() {
+        let cli = Cli::try_parse_from(["oz", "search", "cookies", "--compact-json"]).unwrap();
+        match cli.command {
+            Command::Search { compact_json, .. } => assert!(compact_json),
             _ => panic!("expected search command"),
         }
     }

@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "description": "Oz path-first documentation benchmark: 3 libraries, 10 queries each.",
+  "libraries": [
+    {
+      "library": "vercel/next.js",
+      "version": "15",
+      "cases": [
+        {
+          "id": "nextjs-middleware-auth-cookies",
+          "query": "How do I implement authentication in Next.js middleware using cookies and NextRequest?",
+          "intent": "how_to",
+          "expected_paths": ["guides/app/guides/authentication.md", "guides/app/getting-started/proxy.md", "guides/app/building-your-application/routing/middleware.md", "api-reference/app/api-reference/functions/next-request.md", "api-reference/app/api-reference/functions/cookies.md", "_symbols/NextRequest.md"],
+          "required_terms": ["NextRequest", "cookies", "Proxy"],
+          "banned_terms": ["customer story", "contact sales"]
+        },
+        {
+          "id": "nextjs-route-handler-post-json",
+          "query": "How does a Next.js App Router route handler read a POST body and return JSON?",
+          "intent": "code_example",
+          "expected_paths": ["guides/app/getting-started/route-handlers.md", "api-reference/app/api-reference/file-conventions/route.md", "guides/app/building-your-application/routing/route-handlers.md"],
+          "required_terms": ["Route Handler", "POST", "Response.json"]
+        },
+        {
+          "id": "nextjs-server-action-revalidate",
+          "query": "How do Server Actions mutate data and revalidate a path or cache tag?",
+          "intent": "how_to",
+          "expected_paths": ["guides/app/getting-started/mutating-data.md", "guides/app/getting-started/revalidating.md", "_symbols/revalidatePath.md", "_symbols/revalidateTag.md", "guides/app/building-your-application/data-fetching/server-actions-and-mutations.md", "api-reference/app/api-reference/functions/revalidatepath.md", "api-reference/app/api-reference/functions/revalidatetag.md"],
+          "required_terms": ["Server Actions", "revalidatePath", "revalidateTag"]
+        },
+        {
+          "id": "nextjs-image-remote-patterns",
+          "query": "How do I configure next/image remotePatterns for external image domains?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/components/image.md", "api-reference/app/api-reference/config/next-config-js/images.md"],
+          "required_terms": ["remotePatterns", "images", "next.config"]
+        },
+        {
+          "id": "nextjs-generate-metadata-dynamic",
+          "query": "How does generateMetadata work with dynamic route params in the App Router?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/generate-metadata.md", "_symbols/generateMetadata.md"],
+          "required_terms": ["generateMetadata", "params", "metadata"]
+        },
+        {
+          "id": "nextjs-cookies-server-component",
+          "query": "How do I read and set cookies in Next.js Server Components and Server Actions?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/cookies.md", "_symbols/cookies.md"],
+          "required_terms": ["cookies", "Server Component", "Server Action"]
+        },
+        {
+          "id": "nextjs-redirect-notfound-unauthorized",
+          "query": "When should I use redirect, notFound, unauthorized, and forbidden in Next.js?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/redirect.md", "api-reference/app/api-reference/functions/not-found.md", "api-reference/app/api-reference/functions/unauthorized.md", "api-reference/app/api-reference/functions/forbidden.md"],
+          "required_terms": ["redirect", "notFound", "unauthorized"]
+        },
+        {
+          "id": "nextjs-route-groups-layouts",
+          "query": "How do route groups affect layouts and URL paths in the App Router?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/route-groups.md", "api-reference/app/api-reference/file-conventions/layout.md"],
+          "required_terms": ["route groups", "layout", "URL"]
+        },
+        {
+          "id": "nextjs-fetch-cache-revalidate-tags",
+          "query": "How do fetch cache options, revalidate, and cache tags work in Next.js?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/functions/fetch.md", "api-reference/app/api-reference/functions/revalidatetag.md", "api-reference/app/api-reference/functions/cachetag.md"],
+          "required_terms": ["fetch", "revalidate", "tags"]
+        },
+        {
+          "id": "nextjs-userouter-searchparams",
+          "query": "How do I navigate on the client and read search params with useRouter and useSearchParams?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/use-router.md", "api-reference/app/api-reference/functions/use-search-params.md", "_symbols/useRouter.md"],
+          "required_terms": ["useRouter", "useSearchParams", "Client Component"]
+        }
+      ]
+    },
+    {
+      "library": "facebook/react",
+      "version": "19",
+      "cases": [
+        {
+          "id": "react-useeffect-cleanup-deps",
+          "query": "How do I use useEffect with a cleanup function and dependency array?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/useeffect.md", "_symbols/useEffect.md"],
+          "required_terms": ["useEffect", "cleanup", "dependencies"],
+          "banned_terms": ["tic-tac-toe"]
+        },
+        {
+          "id": "react-usememo-usecallback",
+          "query": "When should I use useMemo versus useCallback for expensive calculations and stable callbacks?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/react/usememo.md", "api-reference/react/usecallback.md", "_symbols/useMemo.md", "_symbols/useCallback.md"],
+          "required_terms": ["useMemo", "useCallback"]
+        },
+        {
+          "id": "react-useref-dom",
+          "query": "How do I use useRef to access a DOM node without re-rendering?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/useref.md", "_symbols/useRef.md"],
+          "required_terms": ["useRef", "DOM", "ref"]
+        },
+        {
+          "id": "react-context-provider-usecontext",
+          "query": "How do I create a context provider and read it with useContext?",
+          "intent": "how_to",
+          "expected_paths": ["api-reference/react/createcontext.md", "api-reference/react/usecontext.md", "_symbols/useContext.md"],
+          "required_terms": ["createContext", "Provider", "useContext"]
+        },
+        {
+          "id": "react-suspense-lazy",
+          "query": "How do Suspense and lazy work for loading UI while code or data is pending?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/react/suspense.md", "api-reference/react/lazy.md", "_symbols/Suspense.md"],
+          "required_terms": ["Suspense", "lazy", "fallback"]
+        },
+        {
+          "id": "react-transition-pending-state",
+          "query": "How do startTransition and useTransition mark updates as non-blocking and expose pending state?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/starttransition.md", "api-reference/react/usetransition.md", "_symbols/useTransition.md"],
+          "required_terms": ["startTransition", "useTransition", "pending"]
+        },
+        {
+          "id": "react-sync-external-store",
+          "query": "How do I subscribe to an external store with useSyncExternalStore?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/usesyncexternalstore.md", "_symbols/useSyncExternalStore.md"],
+          "required_terms": ["useSyncExternalStore", "subscribe", "snapshot"]
+        },
+        {
+          "id": "react-usereducer-dispatch",
+          "query": "How do I manage complex state with useReducer and dispatch actions?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/usereducer.md", "_symbols/useReducer.md"],
+          "required_terms": ["useReducer", "dispatch", "reducer"]
+        },
+        {
+          "id": "react-error-boundary-componentdidcatch",
+          "query": "How do React error boundaries use componentDidCatch?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react/component.md", "_symbols/componentDidCatch.md"],
+          "required_terms": ["error boundary", "componentDidCatch"]
+        },
+        {
+          "id": "react-createroot-hydrateroot",
+          "query": "What is the difference between createRoot and hydrateRoot in React DOM client?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/react-dom/client/createroot.md", "api-reference/react-dom/client/hydrateroot.md", "_symbols/createRoot.md", "_symbols/hydrateRoot.md"],
+          "required_terms": ["createRoot", "hydrateRoot"]
+        }
+      ]
+    },
+    {
+      "library": "tiangolo/fastapi",
+      "version": "latest",
+      "cases": [
+        {
+          "id": "fastapi-depends-response-model",
+          "query": "How do I use Depends dependencies with a path operation and response_model?",
+          "intent": "how_to",
+          "expected_paths": ["guides/tutorial/dependencies/index.md", "guides/tutorial/response-model.md", "_symbols/FastAPI.md"],
+          "required_terms": ["Depends", "response_model", "path operation"]
+        },
+        {
+          "id": "fastapi-path-query-validation",
+          "query": "How do path parameters and query parameters get validated in FastAPI?",
+          "intent": "concept",
+          "expected_paths": ["guides/tutorial/path-params.md", "guides/tutorial/query-params.md", "_symbols/Path.md", "_symbols/Query.md"],
+          "required_terms": ["path parameter", "query parameter", "validation"]
+        },
+        {
+          "id": "fastapi-pydantic-response-model",
+          "query": "How does FastAPI use Pydantic models for request bodies and response models?",
+          "intent": "api_reference",
+          "expected_paths": ["guides/tutorial/body.md", "guides/tutorial/response-model.md"],
+          "required_terms": ["Pydantic", "response_model", "request body"]
+        },
+        {
+          "id": "fastapi-oauth2-jwt-bearer",
+          "query": "How do I implement OAuth2 password bearer authentication with JWT in FastAPI?",
+          "intent": "how_to",
+          "expected_paths": ["guides/tutorial/security/oauth2-jwt.md", "guides/tutorial/security/simple-oauth2.md"],
+          "required_terms": ["OAuth2", "Bearer", "JWT"]
+        },
+        {
+          "id": "fastapi-background-tasks",
+          "query": "How do BackgroundTasks run work after returning a response in FastAPI?",
+          "intent": "api_reference",
+          "expected_paths": ["guides/tutorial/background-tasks.md", "_symbols/BackgroundTasks.md"],
+          "required_terms": ["BackgroundTasks", "response"]
+        },
+        {
+          "id": "fastapi-websockets",
+          "query": "How do I define and handle WebSocket routes in FastAPI?",
+          "intent": "code_example",
+          "expected_paths": ["guides/advanced/websockets.md", "_symbols/WebSocket.md"],
+          "required_terms": ["WebSocket", "websocket"]
+        },
+        {
+          "id": "fastapi-cors-middleware",
+          "query": "How do I configure CORS middleware in FastAPI?",
+          "intent": "config",
+          "expected_paths": ["guides/tutorial/cors.md", "_symbols/CORSMiddleware.md"],
+          "required_terms": ["CORS", "CORSMiddleware", "middleware"]
+        },
+        {
+          "id": "fastapi-apirouter-prefix-tags",
+          "query": "How do I split routes with APIRouter using prefix tags and dependencies?",
+          "intent": "api_reference",
+          "expected_paths": ["guides/tutorial/bigger-applications.md", "_symbols/APIRouter.md"],
+          "required_terms": ["APIRouter", "prefix", "dependencies"]
+        },
+        {
+          "id": "fastapi-uploadfile",
+          "query": "How do I accept file uploads with UploadFile in FastAPI?",
+          "intent": "code_example",
+          "expected_paths": ["guides/tutorial/request-files.md", "_symbols/UploadFile.md"],
+          "required_terms": ["UploadFile", "File"]
+        },
+        {
+          "id": "fastapi-testclient",
+          "query": "How do I test FastAPI routes with TestClient?",
+          "intent": "testing",
+          "expected_paths": ["guides/tutorial/testing.md", "_symbols/TestClient.md"],
+          "required_terms": ["TestClient", "test"]
+        }
+      ]
+    }
+  ]
+}

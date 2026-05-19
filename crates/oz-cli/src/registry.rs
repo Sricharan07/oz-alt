@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 pub(crate) fn parse_library_spec(input: &str) -> Result<LibrarySpec> {
     let cleaned = input.trim().trim_start_matches('/');
@@ -50,7 +52,7 @@ pub(crate) fn resolve_registry_source(
                 let absolute_pack = repo_root(project_root)
                     .unwrap_or_else(|| project_root.to_path_buf())
                     .join(pack_path);
-                if absolute_pack.exists() {
+                if pack_file_is_materialized(&absolute_pack) {
                     return Ok(RegistrySource::Pack(absolute_pack));
                 }
             }
@@ -64,6 +66,26 @@ pub(crate) fn resolve_registry_source(
     }
 
     resolve_fixture_source(project_root, spec).map(RegistrySource::Fixture)
+}
+
+fn pack_file_is_materialized(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
+        return false;
+    }
+    pack_bytes_are_local(&metadata)
+}
+
+#[cfg(unix)]
+fn pack_bytes_are_local(metadata: &fs::Metadata) -> bool {
+    metadata.blocks() > 0
+}
+
+#[cfg(not(unix))]
+fn pack_bytes_are_local(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 fn best_catalog_entry<'a>(
