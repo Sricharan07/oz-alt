@@ -2,6 +2,8 @@ create index if not exists libraries_search_document_idx on libraries using gin 
 create index if not exists chunks_search_document_idx on chunks using gin (search_document);
 create index if not exists chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops);
 create index if not exists chunks_version_path_idx on chunks (version_id, path);
+alter table chunks add column if not exists content_sha text;
+create index if not exists chunks_content_sha_idx on chunks(content_sha);
 create index if not exists library_versions_library_version_idx on library_versions (library_id, version);
 create index if not exists refs_library_channel_idx on refs (library_id, channel);
 create index if not exists index_requests_status_updated_idx on index_requests (status, updated_at desc);

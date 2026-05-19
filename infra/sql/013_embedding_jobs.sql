@@ -13,6 +13,7 @@ create table if not exists embedding_cache (
   input_type text not null,
   schema_version text not null,
   chunk_sha text not null,
+  content_sha text not null,
   token_count integer not null default 0,
   embedding vector(1024) not null,
   created_at timestamptz not null default now()
@@ -81,7 +82,15 @@ create table if not exists embedding_job_items (
   unique (embedding_job_id, chunk_id)
 );
 
+alter table embedding_cache
+  add column if not exists content_sha text;
+
+update embedding_cache
+set content_sha = chunk_sha
+where content_sha is null;
+
 create index if not exists embedding_cache_chunk_sha_idx on embedding_cache(chunk_sha);
+create index if not exists embedding_cache_content_sha_idx on embedding_cache(content_sha);
 create index if not exists embedding_jobs_status_idx on embedding_jobs(status, updated_at);
 create index if not exists embedding_jobs_crawler_job_idx on embedding_jobs(crawler_job_id);
 create index if not exists embedding_jobs_version_idx on embedding_jobs(version_id);

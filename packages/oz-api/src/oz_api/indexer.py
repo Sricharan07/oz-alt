@@ -119,6 +119,7 @@ def write_catalog_and_chunks(
                 chunk_key=str(row.get("chunk_key") or row.get("id") or ""),
                 parent_chunk_key=nullable_string(row.get("parent_chunk_key")),
                 chunk_sha=chunk_sha,
+                content_sha=content_sha_for_row(row),
                 heading_path=list_of_strings(row.get("heading_path")),
                 symbols=list_of_strings(row.get("symbols")),
                 content_type=str(row.get("content_type") or "prose"),
@@ -181,6 +182,7 @@ def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, An
     enriched["text"] = text
     enriched["chunk_key"] = str(enriched.get("chunk_key") or enriched.get("id") or f"{path}#{enriched.get('ordinal') or 1}")
     enriched["content_type"] = canonical_content_type(path, source_url, text, str(enriched.get("content_type") or ""))
+    enriched["content_sha"] = content_sha_for_row(enriched)
     enriched["token_count"] = token_count(text)
     enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
     return enriched
@@ -188,14 +190,16 @@ def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, An
 
 def canonical_content_type(path: str, source_url: str, text: str, existing: str) -> str:
     normalized = existing.strip().lower()
-    if path.startswith("_symbols/") or "/api-reference/" in f"/{path}":
+    if path.startswith("_symbols/"):
         return "api_reference"
     inferred_page = classify_content_type(source_url or path, text)
     inferred_block = block_content_type(source_url or path, text, inferred_page)
-    if normalized in {"api_reference", "code_example", "config", "cli", "error_ref"}:
+    if normalized in {"code_example", "config", "cli", "error_ref"}:
         return normalized
     if inferred_block in {"api_reference", "code_example", "config", "cli", "error_ref"}:
         return inferred_block
+    if normalized == "api_reference":
+        return normalized
     if normalized in {"prose", "guide"}:
         return "prose" if inferred_page == "prose" else inferred_page
     return inferred_page if inferred_page != "index" else "prose"
@@ -217,20 +221,42 @@ def source_anchor_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
 def add_parent_chunks(entry: dict[str, Any], fixture: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output = list(rows)
     existing_keys = {str(row.get("chunk_key") or "") for row in output}
+    paths_with_explicit_parents = {str(row.get("path") or "") for row in output if row.get("parent_chunk_key")}
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in output:
-        if row.get("content_type") == "api_reference" and not str(row.get("path") or "").startswith("_symbols/"):
-            groups.setdefault(str(row.get("path") or "README.md"), []).append(row)
+        path = str(row.get("path") or "README.md")
+        if path in paths_with_explicit_parents:
+            continue
+        if row.get("content_type") == "api_reference" and not path.startswith("_symbols/") and int(row.get("ordinal") or 1) > 0:
+            groups.setdefault(path, []).append(row)
     for path, children in sorted(groups.items()):
+        meaningful_children = unique_meaningful_children(children)
+        if len(meaningful_children) < 2:
+            continue
         parent_key = f"{path}#parent-api-reference"
-        for child in children:
+        for child in meaningful_children:
             if str(child.get("chunk_key") or "") != parent_key:
                 child["parent_chunk_key"] = child.get("parent_chunk_key") or parent_key
         if parent_key in existing_keys:
             continue
-        parent = parent_chunk_row(entry, fixture, path, parent_key, children)
+        parent = parent_chunk_row(entry, fixture, path, parent_key, meaningful_children)
         existing_keys.add(parent_key)
         output.append(parent)
+    return output
+
+
+def unique_meaningful_children(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for child in children:
+        text = str(child.get("text") or "").strip()
+        if token_count(text) < 12:
+            continue
+        key = normalized_content_hash(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(child)
     return output
 
 
@@ -266,11 +292,6 @@ def parent_chunk_row(
 
 
 def parent_content(fixture: Path, path: str, children: list[dict[str, Any]]) -> str:
-    source_path = fixture / path
-    if source_path.exists() and source_path.is_file():
-        text = source_path.read_text(encoding="utf-8", errors="replace").strip()
-        if text:
-            return text
     joined = "\n\n".join(str(row.get("text") or "").strip() for row in children if str(row.get("text") or "").strip())
     return joined
 
@@ -498,6 +519,18 @@ def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def content_sha_for_row(row: dict[str, Any]) -> str:
+    existing = str(row.get("content_sha") or "")
+    if len(existing) == 64 and all(char in "0123456789abcdef" for char in existing.lower()):
+        return existing
+    return normalized_content_hash(str(row.get("text") or row.get("content") or ""))
+
+
+def normalized_content_hash(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 class IndexWriter:
     def upsert_vendor(self, vendor: str) -> int:
         raise NotImplementedError
@@ -544,6 +577,7 @@ class IndexWriter:
         chunk_key: str | None,
         parent_chunk_key: str | None,
         chunk_sha: str,
+        content_sha: str,
         heading_path: list[str],
         symbols: list[str],
         content_type: str,
@@ -838,6 +872,7 @@ class PostgresWriter(IndexWriter):
         chunk_key: str | None,
         parent_chunk_key: str | None,
         chunk_sha: str,
+        content_sha: str,
         heading_path: list[str],
         symbols: list[str],
         content_type: str,
@@ -854,11 +889,11 @@ class PostgresWriter(IndexWriter):
             """
             insert into chunks(
               version_id, path, start_line, end_line, source_url, ordinal, chunk_key,
-              parent_chunk_key, chunk_sha, heading_path, symbols, content_type,
+              parent_chunk_key, chunk_sha, content_sha, heading_path, symbols, content_type,
               quality_score, token_count, source_anchor, embedding_model,
               embedding_dimensions, content, embedding
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
               set path = excluded.path,
                   start_line = excluded.start_line,
@@ -867,6 +902,7 @@ class PostgresWriter(IndexWriter):
                   ordinal = excluded.ordinal,
                   chunk_key = excluded.chunk_key,
                   parent_chunk_key = excluded.parent_chunk_key,
+                  content_sha = excluded.content_sha,
                   heading_path = excluded.heading_path,
                   symbols = excluded.symbols,
                   content_type = excluded.content_type,
@@ -888,6 +924,7 @@ class PostgresWriter(IndexWriter):
                 chunk_key,
                 parent_chunk_key,
                 chunk_sha,
+                content_sha,
                 json.dumps(heading_path),
                 json.dumps(symbols),
                 content_type,

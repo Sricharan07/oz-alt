@@ -1,0 +1,14 @@
+{
+  "library": "tiangolo/fastapi",
+  "version": "latest",
+  "checks": [
+    {
+      "name": "path operation dependency",
+      "query": "FastAPI path operation dependency Depends response model",
+      "patterns": ["path operation", "Depends|dependency", "response model"],
+      "expected_files": ["guides/tutorial/dependencies/index.md", "guides/tutorial/response-model.md", "guides/fastapi-para.md"],
+      "must_include": ["FastAPI", "Depends"],
+      "must_not_include": ["sponsor", "newsletter"]
+    }
+  ]
+}

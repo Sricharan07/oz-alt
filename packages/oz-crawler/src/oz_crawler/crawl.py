@@ -122,7 +122,7 @@ def crawl_single_page(
         f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
         encoding="utf-8",
     )
-    artifacts = collect_source_artifacts(url, pages, profile=profile, state=state)
+    artifacts = collect_source_artifacts(url, pages, profile=profile, state=state, max_documents=max(24, crawl_options.max_pages))
     artifact_pages = artifact_normalized_pages(artifacts)
     all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile, version=version)
     rejected.extend(dead_letter_rejections(state))

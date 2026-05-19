@@ -1,0 +1,14 @@
+{
+  "library": "vuejs/vue",
+  "version": "3",
+  "checks": [
+    {
+      "name": "composition api ref computed watch",
+      "query": "Vue 3 Composition API ref computed watch",
+      "patterns": ["ref", "computed", "watch"],
+      "expected_files": ["api-reference/guide/extras/reactivity-in-depth.md", "guides/guide/essentials/computed.md", "_symbols/ref.md", "_symbols/computed.md", "_symbols/watch.md"],
+      "must_include": ["ref", "computed"],
+      "must_not_include": ["sponsor", "blog"]
+    }
+  ]
+}

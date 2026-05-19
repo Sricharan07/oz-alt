@@ -33,7 +33,7 @@ def endpoint_doc(title: str, method: str, route: str, operation: dict[str, Any],
     summary = str(operation.get("summary") or operation.get("operationId") or "").strip()
     description = str(operation.get("description") or "").strip()
     params = operation.get("parameters") if isinstance(operation.get("parameters"), list) else []
-    lines = [f"# {title}: {method} {route}", "", f"**Source:** {source_url}#{method.lower()}-{slugify(route)}", ""]
+    lines = [f"# {title}: {method} {route}", ""]
     if summary:
         lines.extend([summary, ""])
     if description:

@@ -181,7 +181,7 @@ def version_chunks(connection: Any, version_id: int) -> list[dict[str, Any]]:
     return rows(
         connection,
         """
-        select id, chunk_sha, content, token_count, embedding is not null as embedded
+        select id, chunk_sha, coalesce(content_sha, chunk_sha) as content_sha, content, token_count, embedding is not null as embedded
         from chunks
         where version_id = %s
         order by id
@@ -194,7 +194,7 @@ def missing_embedding_chunks(connection: Any, version_id: int) -> list[dict[str,
     return rows(
         connection,
         """
-        select id, chunk_sha, content, token_count
+        select id, chunk_sha, coalesce(content_sha, chunk_sha) as content_sha, content, token_count
         from chunks
         where version_id = %s
           and (
@@ -278,7 +278,7 @@ def apply_cache_hits(connection: Any, version_id: int, chunks: list[dict[str, An
               or c.embedding_model is distinct from %s
               or c.embedding_dimensions is distinct from %s
             )
-            and ec.chunk_sha = c.chunk_sha
+            and ec.content_sha = coalesce(c.content_sha, c.chunk_sha)
             and ec.provider = %s
             and ec.model = %s
             and ec.dimensions = %s
@@ -646,21 +646,22 @@ def upsert_embedding_cache(connection: Any, row: dict[str, Any], embedding: list
         """
         insert into embedding_cache (
           cache_key, provider, model, dimensions, input_type, schema_version,
-          chunk_sha, token_count, embedding
+          chunk_sha, content_sha, token_count, embedding
         )
-        values (%s, %s, %s, %s, 'document', %s, %s, %s, %s::vector)
+        values (%s, %s, %s, %s, 'document', %s, %s, %s, %s, %s::vector)
         on conflict (cache_key) do update
         set embedding = excluded.embedding,
             token_count = excluded.token_count,
             created_at = now()
         """,
         (
-            embedding_cache_key(str(row["chunk_sha"])),
+            embedding_cache_key(str(row.get("content_sha") or row["chunk_sha"])),
             embedding_provider(),
             embedding_model(),
             embedding_dimensions(),
             cache_schema_version(),
             str(row["chunk_sha"]),
+            str(row.get("content_sha") or row["chunk_sha"]),
             int(row.get("token_count") or 0),
             vector_literal(embedding),
         ),
@@ -678,7 +679,7 @@ def upsert_embedding_item(connection: Any, job_id: int, row: dict[str, Any], sta
             error = excluded.error,
             updated_at = now()
         """,
-        (job_id, int(row["id"]), str(row["chunk_sha"]), embedding_cache_key(str(row["chunk_sha"])), status, error),
+        (job_id, int(row["id"]), str(row["chunk_sha"]), embedding_cache_key(str(row.get("content_sha") or row["chunk_sha"])), status, error),
     )
 
 
@@ -782,7 +783,7 @@ def result(
     return EmbeddingEnsureResult(status, mode, job_id, version_id, len(chunks), pending, cached, embedded, failed)
 
 
-def embedding_cache_key(chunk_sha: str) -> str:
+def embedding_cache_key(content_sha: str) -> str:
     payload = "\0".join(
         [
             cache_schema_version(),
@@ -790,7 +791,7 @@ def embedding_cache_key(chunk_sha: str) -> str:
             embedding_model(),
             str(embedding_dimensions()),
             DOCUMENT_INPUT_TYPE,
-            chunk_sha,
+            content_sha,
         ]
     )
     import hashlib

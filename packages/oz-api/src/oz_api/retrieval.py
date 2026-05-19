@@ -178,10 +178,12 @@ def context_source_text(row: dict[str, Any]) -> str:
     matched = clean_context_text(str(row.get("_matched_text") or ""))
     parent = clean_context_text(str(row.get("_parent_text") or ""))
     content_type = str(row.get("content_type") or "")
+    if matched and useful_context_text(matched, row):
+        return matched
     if content_type in {"code_example", "config", "cli", "error_ref"} and matched:
         return matched
-    if content_type == "api_reference" and matched:
-        return matched if len(matched) >= 120 else parent or matched
+    if content_type == "api_reference" and matched and row.get("symbols"):
+        return matched
     return matched or parent
 
 
@@ -220,9 +222,31 @@ def collapse_repeated_headings(text: str) -> str:
 def useful_context_text(text: str, row: dict[str, Any]) -> bool:
     if not text.strip():
         return False
+    if low_signal_context_text(text):
+        return False
     if str(row.get("content_type") or "") == "api_reference" and row.get("symbols"):
         return True
     return approximate_tokens(text) >= CONTEXT_MIN_TOKENS
+
+
+def low_signal_context_text(text: str) -> bool:
+    stripped = text.strip()
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if not lines:
+        return True
+    if len(lines) == 1 and re.match(r"^#{1,6}\s+", lines[0]):
+        return True
+    boilerplate_terms = (
+        "index of all docs",
+        "edit this page",
+        "was this page helpful",
+        "skip to main content",
+        "on this page",
+    )
+    lowered = stripped.lower()
+    if any(term in lowered for term in boilerplate_terms) and approximate_tokens(stripped) < 40:
+        return True
+    return False
 
 
 def trim_to_token_budget(text: str, budget: int) -> str:

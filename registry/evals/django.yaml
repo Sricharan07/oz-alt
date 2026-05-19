@@ -1,0 +1,14 @@
+{
+  "library": "django/django",
+  "version": "latest",
+  "checks": [
+    {
+      "name": "model queryset filter",
+      "query": "Django QuerySet filter model objects",
+      "patterns": ["QuerySet|queryset", "filter", "model"],
+      "expected_files": ["guides/topics/db/queries.md", "api-reference/ref/models/querysets.md", "guides/django-documentation.md"],
+      "must_include": ["QuerySet", "filter"],
+      "must_not_include": ["download", "donate", "sponsor"]
+    }
+  ]
+}

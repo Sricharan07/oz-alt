@@ -22,7 +22,7 @@ def type_definition_chunks(text: str, source_url: str, *, language: str, limit: 
                 "path": f"api-reference/types/{slugify(name)}.md",
                 "title": name,
                 "source_url": f"{source_url}#{slugify(name)}",
-                "markdown": f"# {name}\n\n**Source:** {source_url}#{slugify(name)}\n\n```{language}\n{body}\n```\n",
+                "markdown": f"# {name}\n\n```{language}\n{body}\n```\n",
             }
         )
         if len(output) >= limit:

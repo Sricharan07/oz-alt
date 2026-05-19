@@ -18,7 +18,7 @@ from oz_api import admin_ops
 from oz_api.crawler_jobs import embedding_result_is_terminal, terminal_embedding_error
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
-from oz_api.indexer import limit_to_token_budget
+from oz_api.indexer import add_parent_chunks, limit_to_token_budget
 from oz_api.queue import queued_crawler_job_event
 from oz_api.rerank import (
     boost_named_suggestions,
@@ -30,8 +30,8 @@ from oz_api.rerank import (
 )
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
 from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
-from oz_crawler.chunks import chunk_markdown, write_chunks
-from oz_crawler.content_types import classify_content_type
+from oz_crawler.chunks import chunk_markdown, content_hash, write_chunks
+from oz_crawler.content_types import block_content_type, classify_content_type
 from oz_crawler.crawl import is_crawlable_doc_url, prepare_pages
 from oz_crawler.crawl_runtime import CrawlRunState
 from oz_crawler.embeddings import embedding_batches
@@ -41,6 +41,7 @@ from oz_crawler.normalize import clean_markdown
 from oz_crawler.parsers.source_code import source_code_chunks, source_path_allowed
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.splitting import split_llms_full
+from oz_crawler.sources import artifact_markdown
 from oz_crawler.token_counting import token_count
 from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections
 
@@ -83,11 +84,23 @@ class RetrievalQualityTests(unittest.TestCase):
             classify_content_type("https://example.com/docs/config", "```json\n{\"x\": true}\n```"),
             "config",
         )
+        self.assertEqual(
+            block_content_type("https://example.com/api-reference/widget", "```ts\nclient.create()\n```", "api_reference"),
+            "code_example",
+        )
+        self.assertEqual(
+            block_content_type("https://example.com/docs", "Setup: instructions\nNote: continue\nTip: read this", "prose"),
+            "prose",
+        )
+        self.assertEqual(
+            block_content_type("https://example.com/docs", "JSON API URL fix solution", "prose"),
+            "prose",
+        )
 
     def test_chunker_keeps_code_fence_with_snippet_metadata(self) -> None:
         chunks = chunk_markdown("# API\n\nUse it:\n\n```ts\nclient.responses.create({})\n```\n", source_url="https://docs.example/api", page_type="api_reference")
-        self.assertTrue(any("```ts" in chunk.text and chunk.content_type == "api_reference" for chunk in chunks))
-        self.assertTrue(any(chunk.chunk_key or chunk.parent_key for chunk in chunks))
+        self.assertTrue(any("```ts" in chunk.text and chunk.content_type == "code_example" for chunk in chunks))
+        self.assertEqual(len([chunk for chunk in chunks if "client.responses.create" in chunk.text]), 1)
 
     def test_chunker_skips_duplicate_parent_for_single_api_child(self) -> None:
         chunks = chunk_markdown(
@@ -168,6 +181,13 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(pages[0].title, "Routing")
         self.assertNotIn("title:", pages[0].markdown)
 
+    def test_source_artifact_markdown_keeps_source_url_out_of_indexed_text(self) -> None:
+        markdown = artifact_markdown("Routing", "---\ntitle: Routing\n---\n# Routing\n\nUse routes.")
+
+        self.assertTrue(markdown.startswith("# Routing"))
+        self.assertNotIn("**Source:**", markdown)
+        self.assertNotIn("title:", markdown)
+
     def test_language_filter_rejects_non_target_prose_but_keeps_code_heavy_docs(self) -> None:
         spanish = " ".join(["el ejemplo para configurar la respuesta con los valores"] * 20)
         code_heavy = "```ts\n" + "\n".join(["export function readCookie() { return cookies.get('sid') }"] * 20) + "\n```"
@@ -229,8 +249,36 @@ class RetrievalQualityTests(unittest.TestCase):
             row = next(json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip())
 
         self.assertIn("chunk_sha", row)
+        self.assertIn("content_sha", row)
+        self.assertEqual(row["content_sha"], content_hash(row["text"]))
         self.assertNotIn("embedding", row)
         self.assertNotIn("embedding_model", row)
+
+    def test_write_chunks_assigns_symbols_only_when_present_in_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vendor" / "library" / "latest"
+            target.mkdir(parents=True)
+            write_chunks(
+                target,
+                [
+                    NormalizedPage(
+                        title="Hooks",
+                        markdown="# Hooks\n\nUse `useEffect` for cleanup.\n\n## Other\n\nUse memoization carefully.",
+                        source_url="https://react.dev/reference/react/hooks",
+                        path="api-reference/react/hooks.md",
+                        content_type="api_reference",
+                        symbols=("useEffect", "useEffectEvent"),
+                    )
+                ],
+            )
+            rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
+
+        effect_rows = [row for row in rows if "useEffect" in row["text"]]
+        other_rows = [row for row in rows if "memoization" in row["text"]]
+        self.assertTrue(effect_rows)
+        self.assertEqual(effect_rows[0]["symbols"], ["useEffect"])
+        self.assertTrue(other_rows)
+        self.assertEqual(other_rows[0]["symbols"], [])
 
     def test_prepare_pages_rejects_duplicate_source_content(self) -> None:
         markdown = "# useEffect\n\n" + "React effect cleanup dependencies example. " * 20
@@ -287,6 +335,41 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertTrue(all(token_count(chunk.text) <= 300 for chunk in chunks))
         self.assertIn("cli", USEFUL_CONTENT_TYPES)
         self.assertIn("error_ref", USEFUL_CONTENT_TYPES)
+
+    def test_indexer_adds_parent_only_for_multiple_meaningful_api_children(self) -> None:
+        entry = {"vendor": "v", "library": "l", "version": "1"}
+        single = [
+            {
+                "path": "api-reference/widget.md",
+                "chunk_key": "api-reference/widget.md#1",
+                "content_type": "api_reference",
+                "ordinal": 1,
+                "text": "Widget reads request values, validates headers, applies cookie metadata, and returns response metadata for callers.",
+            }
+        ]
+        multiple = [
+            {
+                "path": "api-reference/widget.md",
+                "chunk_key": "api-reference/widget.md#1",
+                "content_type": "api_reference",
+                "ordinal": 1,
+                "text": "Widget reads request values, validates headers, applies cookie metadata, and returns response metadata for callers.",
+            },
+            {
+                "path": "api-reference/widget.md",
+                "chunk_key": "api-reference/widget.md#2",
+                "content_type": "api_reference",
+                "ordinal": 2,
+                "text": "Widget writes response headers, serializes body values, and preserves status information for middleware callers.",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(len(add_parent_chunks(entry, Path(tmp), single)), 1)
+            parented = add_parent_chunks(entry, Path(tmp), multiple)
+
+        self.assertEqual(len(parented), 3)
+        self.assertTrue(any(row.get("chunk_key") == "api-reference/widget.md#parent-api-reference" for row in parented))
 
     def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
         with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):

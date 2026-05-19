@@ -36,6 +36,7 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
             chunk_key = scoped_chunk_key(source_path, chunk.chunk_key or str(idx))
             parent_chunk_key = scoped_chunk_key(source_path, chunk.parent_key) if chunk.parent_key else None
             chunk_sha = stable_chunk_sha(target, source_path, idx, chunk.text)
+            content_sha = content_hash(chunk.text)
             content_key = normalized_chunk_key(chunk.text)
             if chunk_sha in seen_chunk_shas or content_key in seen_content_keys:
                 continue
@@ -51,10 +52,11 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                     "chunk_key": chunk_key,
                     "parent_chunk_key": parent_chunk_key,
                     "chunk_sha": chunk_sha,
+                    "content_sha": content_sha,
                     "start_line": chunk.start_line + 4,
                     "end_line": chunk.end_line + 4,
                     "heading_path": chunk.heading_path,
-                    "symbols": list(page.symbols),
+                    "symbols": chunk_symbols(chunk.text, page.symbols),
                     "content_type": chunk.content_type,
                     "quality_score": page.quality_score,
                     "token_count": token_count(chunk.text),
@@ -408,9 +410,33 @@ def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) ->
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def content_hash(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.strip())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def normalized_chunk_key(text: str) -> str:
     normalized = re.sub(r"\s+", " ", text.strip().lower())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def chunk_symbols(text: str, page_symbols: tuple[str, ...] | list[str]) -> list[str]:
+    output: list[str] = []
+    for symbol in page_symbols:
+        value = str(symbol).strip()
+        if not value or value in output:
+            continue
+        if symbol_in_text(value, text):
+            output.append(value)
+    return output
+
+
+def symbol_in_text(symbol: str, text: str) -> bool:
+    escaped = re.escape(symbol)
+    prefix = r"(?<![A-Za-z0-9_$])" if re.match(r"^[A-Za-z0-9_$]", symbol) else ""
+    suffix = r"(?![A-Za-z0-9_$])" if re.search(r"[A-Za-z0-9_$]$", symbol) else ""
+    flags = 0 if any(char.isupper() for char in symbol) else re.I
+    return bool(re.search(prefix + escaped + suffix, text, flags))
 
 
 def split_text_by_token_budget(text: str, max_tokens: int) -> list[str]:

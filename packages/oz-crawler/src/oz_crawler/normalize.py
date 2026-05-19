@@ -34,6 +34,17 @@ SECRET_TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"pk_(test|live)_REDACTED(?:_(?:test|live)_REDACTED)+"), r"pk_\1_REDACTED"),
 )
 
+BOILERPLATE_LINE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^(?:edit this page|was this page helpful\??|on this page|skip to main content)$", re.I),
+    re.compile(r"^(?:previous|next)(?:\s*/\s*(?:previous|next))?$", re.I),
+    re.compile(r"^(?:view|edit) (?:on|in) github$", re.I),
+    re.compile(r"^for an index of all docs\b", re.I),
+    re.compile(r"^(?:toggle navigation|open navigation|close navigation)$", re.I),
+    re.compile(r"^(?:copy page|copy code|copy link)$", re.I),
+    re.compile(r"^(?:last updated|updated)\s*:?\s+.+$", re.I),
+    re.compile(r"^</?(?:Intro|InlineToc|TableOfContents|Cards?|Card|Steps?|Tabs?|Tab|FileTree|PagesOnly|AppOnly|PagesRouter|AppRouter)\b[^>]*?/?>$", re.I),
+)
+
 
 @dataclass(frozen=True)
 class NormalizedPage:
@@ -105,6 +116,8 @@ def clean_markdown(markdown: str) -> str:
             in_code = not in_code
         if not in_code and is_markdown_separator(stripped):
             continue
+        if not in_code and is_boilerplate_line(stripped):
+            continue
         blank = not line.strip()
         if blank and previous_blank:
             continue
@@ -135,6 +148,15 @@ def looks_like_frontmatter(payload: str) -> bool:
 
 def is_markdown_separator(stripped_line: str) -> bool:
     return bool(re.match(r"^(?:-{3,}|\*{3,}|_{3,})$", stripped_line))
+
+
+def is_boilerplate_line(stripped_line: str) -> bool:
+    if not stripped_line:
+        return False
+    normalized = re.sub(r"\s+", " ", stripped_line.strip(" -*_"))
+    if re.match(r"^\[(?:edit this page|view on github|previous|next|copy)\]\([^)]*\)$", normalized, re.I):
+        return True
+    return any(pattern.search(normalized) for pattern in BOILERPLATE_LINE_PATTERNS)
 
 
 def sanitize_secret_tokens(text: str) -> str:

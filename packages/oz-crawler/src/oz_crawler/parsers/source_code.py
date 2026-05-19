@@ -24,7 +24,7 @@ def source_code_chunks(
                 "path": f"api-reference/source/{slugify(name)}.md",
                 "title": name,
                 "source_url": f"{source_url}#{slugify(name)}",
-                "markdown": f"# {name}\n\n**Source:** {source_url}#{slugify(name)}\n\n```{language}\n{body.strip()}\n```\n",
+                "markdown": f"# {name}\n\n```{language}\n{body.strip()}\n```\n",
             }
         )
         if len(chunks) >= limit:

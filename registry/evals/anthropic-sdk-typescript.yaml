@@ -1,0 +1,14 @@
+{
+  "library": "anthropics/anthropic-sdk-typescript",
+  "version": "latest",
+  "checks": [
+    {
+      "name": "messages create streaming",
+      "query": "Anthropic TypeScript SDK messages create streaming",
+      "patterns": ["Anthropic", "messages", "stream|streaming"],
+      "expected_files": ["guides/README.md", "api-reference/types/messages.md", "_symbols/messages.create.md"],
+      "must_include": ["Anthropic", "messages"],
+      "must_not_include": ["customer story", "contact sales", "try for free"]
+    }
+  ]
+}

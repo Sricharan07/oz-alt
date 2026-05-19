@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from functools import cmp_to_key
 from typing import Any
 
@@ -160,6 +161,8 @@ def search_from_postgres(
     intent = intent_name(query)
     query_intent = classify_query(query)
     symbol_pattern = like_pattern(query_intent.symbols or normalize_query(query)[:4])
+    exact_symbol_keys = [compact_key(symbol) for symbol in query_intent.symbols if compact_key(symbol)]
+    exact_symbol_paths = [f"_symbols/{symbol}.md".lower() for symbol in query_intent.symbols]
     vector = vector_literal(embedding) if vector_enabled and (embedding := embedding_for_query(query)) else None
     scope = parse_versioned_scope(library_scope)
     scope_vendor, scope_library = scope.vendor, scope.library
@@ -188,7 +191,20 @@ def search_from_postgres(
         if content_types:
             params.append(content_types)
         params.extend([vector, candidates])
-    params.extend([intent, symbol_pattern, symbol_pattern, symbol_pattern])
+    params.extend(
+        [
+            exact_symbol_paths,
+            exact_symbol_keys,
+            exact_symbol_keys,
+            intent,
+            symbol_pattern,
+            symbol_pattern,
+            symbol_pattern,
+            exact_symbol_paths,
+            exact_symbol_keys,
+            exact_symbol_keys,
+        ]
+    )
     if scope_vendor:
         params.extend([scope_vendor, scope_library, scope_version_id])
     if content_types:
@@ -208,12 +224,19 @@ def search_from_postgres(
           {vector_cte}
         ),
         symbol_candidates as (
-          {candidate_select("0::float8", "0::float8", "1.0::float8")}
+          {candidate_select("0::float8", "0::float8", symbol_score_expr())}
           where coalesce(c.dedupe_canonical, true)
             and (
               c.path ilike %s
               or c.symbols::text ilike %s
               or c.heading_path::text ilike %s
+              or lower(c.path) = any(%s::text[])
+              or compact_basename(c.path) = any(%s::text[])
+              or exists (
+                select 1
+                from jsonb_array_elements_text(c.symbols) symbol_value
+                where compact_key_sql(symbol_value) = any(%s::text[])
+              )
             )
             {where_scope}
             {content_filter}
@@ -312,6 +335,21 @@ def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> st
     """
 
 
+def symbol_score_expr() -> str:
+    return """
+        case
+          when lower(c.path) = any(%s::text[]) then 8.0
+          when left(c.path, 9) = '_symbols/' and compact_basename(c.path) = any(%s::text[]) then 7.5
+          when exists (
+            select 1
+            from jsonb_array_elements_text(c.symbols) symbol_value
+            where compact_key_sql(symbol_value) = any(%s::text[])
+          ) then 6.0
+          else 1.0
+        end
+    """
+
+
 def vector_candidate_cte(where_scope: str, content_filter: str) -> str:
     return f"""
         {candidate_select("0::float8", "greatest(1 - (c.embedding <=> %s::vector), 0)", "0::float8")}
@@ -353,6 +391,10 @@ def like_pattern(values: list[str]) -> str:
     if not compact:
         return "%"
     return "%" + "%".join(compact[:4]) + "%"
+
+
+def compact_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
 def candidate_limit(max_results: int) -> int:

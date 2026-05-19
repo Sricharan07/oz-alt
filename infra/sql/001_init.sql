@@ -1,6 +1,22 @@
 create extension if not exists vector;
 create extension if not exists pgcrypto;
 
+create or replace function compact_key_sql(value text)
+returns text
+language sql
+immutable
+as $$
+  select regexp_replace(lower(coalesce(value, '')), '[^a-z0-9]+', '', 'g')
+$$;
+
+create or replace function compact_basename(value text)
+returns text
+language sql
+immutable
+as $$
+  select compact_key_sql(regexp_replace(regexp_replace(coalesce(value, ''), '^.*/', ''), '\.[^.]+$', ''))
+$$;
+
 create or replace function content_type_score(value text)
 returns double precision
 language sql
@@ -132,6 +148,7 @@ create table if not exists chunks (
   ordinal integer not null default 1,
   chunk_key text,
   chunk_sha text not null,
+  content_sha text,
   heading_path jsonb not null default '[]'::jsonb,
   symbols jsonb not null default '[]'::jsonb,
   content_type text not null default 'prose',

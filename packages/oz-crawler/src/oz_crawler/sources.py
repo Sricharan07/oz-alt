@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from oz_crawler.normalize import NormalizedPage
+from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.parsers import openapi_chunks, type_definition_chunks
 from oz_crawler.parsers.source_code import source_code_chunks, source_language_for_path, source_path_allowed
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
@@ -33,24 +34,100 @@ def collect_source_artifacts(
     *,
     profile: LibraryProfile | None = None,
     state: CrawlRunState | None = None,
-    max_documents: int = 24,
+    max_documents: int = 240,
 ) -> list[SourceArtifact]:
-    urls = sorted(
-        {
-            seed_url,
-            *(profile.preferred_urls if profile else []),
-            *common_source_urls(seed_url),
-            *(url for page in pages for url in extract_urls(page.markdown, base_url=page.source_url)),
-        }
+    urls = prioritized_urls(
+        seed_url,
+        preferred_urls=profile.preferred_urls if profile else [],
+        discovered_urls=[url for page in pages for url in extract_urls(page.markdown, base_url=page.source_url)],
     )
     urls = [url for url in urls if url_allowed_by_profile(url, profile)]
     artifacts: list[SourceArtifact] = []
-    artifacts.extend(llms_artifacts(seed_url, profile=profile, state=state, limit=max_documents))
-    artifacts.extend(markdown_url_artifacts(urls, profile=profile, state=state, limit=max_documents))
-    artifacts.extend(openapi_artifacts(urls, profile=profile, state=state, limit=max_documents))
-    artifacts.extend(type_definition_artifacts(urls, profile=profile, state=state, limit=max_documents))
-    artifacts.extend(github_docs_artifacts(urls, profile=profile, state=state, limit=max_documents))
-    return dedupe_artifacts(artifacts)[:max_documents]
+    artifacts.extend(llms_artifacts(seed_url, profile=profile, state=state, limit=source_budget("llms", max_documents)))
+    artifacts.extend(markdown_url_artifacts(urls, profile=profile, state=state, limit=source_budget("markdown", max_documents)))
+    artifacts.extend(openapi_artifacts(urls, profile=profile, state=state, limit=source_budget("openapi", max_documents)))
+    artifacts.extend(type_definition_artifacts(urls, profile=profile, state=state, limit=source_budget("type_defs", max_documents)))
+    artifacts.extend(github_docs_artifacts(urls, profile=profile, state=state, limit=source_budget("github", max_documents)))
+    return select_artifacts_by_priority(dedupe_artifacts(artifacts), max_documents)
+
+
+def prioritized_urls(seed_url: str, *, preferred_urls: list[str], discovered_urls: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[tuple[int, int, str]] = []
+    sources = [seed_url, *preferred_urls, *common_source_urls(seed_url), *discovered_urls]
+    preferred = set(preferred_urls)
+    for index, url in enumerate(sources):
+        if url in seen:
+            continue
+        seen.add(url)
+        ordered.append((url_priority(url, preferred), index, url))
+    ordered.sort(key=lambda item: (item[0], item[1]))
+    return [url for _, _, url in ordered]
+
+
+def url_priority(url: str, preferred_urls: set[str]) -> int:
+    lower = url.lower()
+    path = urlparse(url).path.lower()
+    if url in preferred_urls:
+        return 0
+    if "llms-full.txt" in lower:
+        return 1
+    if lower.endswith("/llms.txt"):
+        return 2
+    if re.search(r"(openapi|swagger).*\.(json|ya?ml)$", path):
+        return 3
+    if path.endswith((".d.ts", ".pyi")):
+        return 4
+    if urlparse(url).netloc.lower() in {"github.com", "raw.githubusercontent.com"}:
+        return 5
+    if path.endswith((".md", ".mdx")):
+        return 6
+    return 9
+
+
+def source_budget(kind: str, max_documents: int) -> int:
+    defaults = {
+        "llms": max_documents,
+        "markdown": max_documents,
+        "openapi": min(max_documents, 200),
+        "type_defs": min(max_documents, 500),
+        "github": max_documents,
+    }
+    env_name = f"OZ_SOURCE_{kind.upper()}_LIMIT"
+    try:
+        configured = int(os.environ.get(env_name, str(defaults[kind])))
+    except (KeyError, ValueError):
+        configured = defaults.get(kind, max_documents)
+    return max(0, min(configured, max(max_documents, configured)))
+
+
+def select_artifacts_by_priority(artifacts: list[SourceArtifact], max_documents: int) -> list[SourceArtifact]:
+    cap = max_source_artifacts(max_documents)
+    ranked = sorted(enumerate(artifacts), key=lambda item: (artifact_priority(item[1]), item[0]))
+    return [artifact for _, artifact in ranked[:cap]]
+
+
+def max_source_artifacts(max_documents: int) -> int:
+    try:
+        configured = int(os.environ.get("OZ_SOURCE_MAX_ARTIFACTS", str(max_documents)))
+    except ValueError:
+        configured = max_documents
+    return max(1, configured)
+
+
+def artifact_priority(artifact: SourceArtifact) -> int:
+    path = artifact.path.lower()
+    if path.startswith("api-reference/openapi/"):
+        return 0
+    if path.startswith("api-reference/types/") or path.startswith("api-reference/source/"):
+        return 1
+    if path.startswith("api-reference/"):
+        return 2
+    if path.startswith("examples/"):
+        return 3
+    if path.startswith("guides/"):
+        return 4
+    return 9
 
 
 def common_source_urls(seed_url: str) -> list[str]:
@@ -88,7 +165,7 @@ def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, state: Craw
                     path=document_path(page.source_url, page.title, "guide"),
                     title=page.title,
                     source_url=page.source_url,
-                    markdown=f"# {page.title}\n\n**Source:** {page.source_url}\n\n{page.markdown.strip()}\n",
+                    markdown=artifact_markdown(page.title, page.markdown),
                 )
             )
             if len(output) >= limit:
@@ -119,7 +196,7 @@ def markdown_url_artifacts(
                 path=document_path(url, title, "guide"),
                 title=title,
                 source_url=url,
-                markdown=f"# {title}\n\n**Source:** {url}\n\n{text.strip()}\n",
+                markdown=artifact_markdown(title, text),
             )
         )
         if len(output) >= limit:
@@ -174,7 +251,7 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
                     path=f"api-reference/types-{slugify(url)}.md",
                     title="Type Definitions",
                     source_url=url,
-                    markdown=f"# Type Definitions\n\n**Source:** {url}\n\n```{language}\n{text.strip()}\n```\n",
+                    markdown=code_artifact_markdown("Type Definitions", language, text),
                 )
             )
         if len(output) >= limit:
@@ -288,9 +365,9 @@ def github_file_artifact(
 def render_openapi(text: str, source_url: str) -> str:
     parsed = parse_openapi(text)
     if not parsed:
-        return f"# OpenAPI Reference\n\n**Source:** {source_url}\n\n```yaml\n{text.strip()}\n```\n"
+        return code_artifact_markdown("OpenAPI Reference", "yaml", text)
     title = nested_string(parsed, ["info", "title"]) or "OpenAPI Reference"
-    lines = ["# " + title, "", f"**Source:** {source_url}", ""]
+    lines = ["# " + title, ""]
     paths = parsed.get("paths") if isinstance(parsed, dict) else None
     if isinstance(paths, dict):
         for route, operations in sorted(paths.items()):
@@ -351,8 +428,23 @@ def nested_string(value: dict, path: list[str]) -> str:
 def markdown_for_github_file(name: str, text: str, source_url: str) -> str:
     if re.search(r"\.(d\.ts|pyi)$", name, re.I):
         language = "typescript" if name.endswith(".d.ts") else "python"
-        return f"# {name}\n\n**Source:** {source_url}\n\n```{language}\n{text.strip()}\n```\n"
-    return f"**Source:** {source_url}\n\n{text.strip()}\n"
+        return code_artifact_markdown(name, language, text)
+    return artifact_markdown(name, text)
+
+
+def artifact_markdown(title: str, text: str) -> str:
+    cleaned = clean_markdown(text)
+    if not cleaned:
+        return f"# {title.strip()}\n"
+    first_heading = re.match(r"^#\s+", cleaned)
+    if first_heading:
+        return cleaned
+    return f"# {title.strip()}\n\n{cleaned}".strip() + "\n"
+
+
+def code_artifact_markdown(title: str, language: str, text: str) -> str:
+    body = text.strip()
+    return f"# {title.strip()}\n\n```{language}\n{body}\n```\n"
 
 
 def markdown_title(text: str) -> str:
