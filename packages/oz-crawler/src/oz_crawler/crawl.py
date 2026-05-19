@@ -410,6 +410,7 @@ def fetch_html_stdlib(url: str, *, state: CrawlRunState | None = None) -> str:
     if state is not None:
         state.limiter.wait(url)
     extra_headers = state.cache.conditional_headers(url) if state else {}
+    extra_headers["Accept"] = "text/html, application/xhtml+xml, text/plain;q=0.5, */*;q=0.1"
     response = fetch_public_url(
         url,
         timeout=20,

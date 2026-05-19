@@ -17,7 +17,7 @@ from oz_api.admin_templates import render_admin_template  # noqa: E402
 from oz_api.http_context import content_length_too_large, request_body_limit_bytes  # noqa: E402
 from oz_api.rerank import rerank_timeout_seconds  # noqa: E402
 from oz_api.retrieval_cache import cache_key  # noqa: E402
-from oz_crawler import security  # noqa: E402
+from oz_crawler import crawl, security  # noqa: E402
 
 
 class EnvPatch:
@@ -168,6 +168,21 @@ class HardeningTests(unittest.TestCase):
                     security.fetch_public_url(f"http://example.test:{server.port}/docs", max_bytes=4, attempts=1)
         finally:
             server.stop()
+
+    def test_stdlib_page_fetch_prefers_html_accept_header(self) -> None:
+        seen_headers: dict[str, str] = {}
+
+        def fake_fetch(_url: str, **kwargs: object) -> security.PinnedFetchResponse:
+            seen_headers.update(kwargs.get("extra_headers") or {})
+            return security.PinnedFetchResponse(_url, b"<html>ok</html>", {"content-type": "text/html"}, 200)
+
+        with patch("oz_crawler.crawl.assert_public_http_url"), patch(
+            "oz_crawler.crawl.fetch_public_url", side_effect=fake_fetch
+        ):
+            self.assertEqual(crawl.fetch_html_stdlib("https://docs.example/page"), "<html>ok</html>")
+
+        self.assertIn("text/html", seen_headers.get("Accept", ""))
+        self.assertNotIn("text/markdown", seen_headers.get("Accept", ""))
 
     def test_admin_template_autoescapes_dynamic_values(self) -> None:
         malicious = '<script>alert("x")</script>'
