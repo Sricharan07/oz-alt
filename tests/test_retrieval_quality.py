@@ -15,8 +15,9 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from scripts.worker import queue_has_items
 from oz_api import admin_ops
+from oz_api.crawler_jobs import embedding_result_is_terminal, terminal_embedding_error
 from oz_api.intent import classify_query
-from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
+from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.indexer import limit_to_token_budget
 from oz_api.queue import queued_crawler_job_event
 from oz_api.rerank import (
@@ -33,6 +34,7 @@ from oz_crawler.chunks import chunk_markdown, write_chunks
 from oz_crawler.content_types import classify_content_type
 from oz_crawler.crawl import is_crawlable_doc_url, prepare_pages
 from oz_crawler.crawl_runtime import CrawlRunState
+from oz_crawler.embeddings import embedding_batches
 from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage
 from oz_crawler.normalize import clean_markdown
@@ -106,6 +108,42 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertLessEqual(token_count(capped), 1200)
         self.assertIn("line 0", capped)
+
+    def test_embedding_sync_batches_respect_token_budget(self) -> None:
+        rows = [(index, "token " * 400) for index in range(10)]
+        with patch.dict("os.environ", {"OZ_EMBEDDING_BATCH_SIZE": "128", "OZ_EMBEDDING_SYNC_MAX_TOKENS_PER_REQUEST": "1000"}):
+            batches = embedding_batches(rows)
+
+        self.assertGreater(len(batches), 1)
+        for batch in batches:
+            self.assertLessEqual(sum(token_count(text) for _, text in batch), 1000)
+
+    def test_terminal_embedding_statuses_block_promotion(self) -> None:
+        failed = EmbeddingEnsureResult(
+            status="failed",
+            mode="sync",
+            job_id=10,
+            version_id=20,
+            total_chunks=100,
+            pending_chunks=5,
+            cached_chunks=0,
+            embedded_chunks=95,
+            failed_chunks=5,
+        )
+        waiting = EmbeddingEnsureResult(
+            status="batch_running",
+            mode="batch",
+            job_id=11,
+            version_id=21,
+            total_chunks=100,
+            pending_chunks=100,
+            cached_chunks=0,
+            embedded_chunks=0,
+        )
+
+        self.assertTrue(embedding_result_is_terminal(failed))
+        self.assertFalse(embedding_result_is_terminal(waiting))
+        self.assertEqual(terminal_embedding_error({"embedding_status": "failed", "embedding_error": "128 chunks failed"}), "128 chunks failed")
 
     def test_markdown_cleanup_strips_frontmatter(self) -> None:
         markdown = clean_markdown("---\ntitle: Middleware\n---\n# Middleware\n\nUse cookies.")

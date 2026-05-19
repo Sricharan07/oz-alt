@@ -31,6 +31,7 @@ from oz_crawler.pack import build_pack_bytes
 
 
 ROOT = Path(os.environ.get("OZ_REPO_ROOT", Path.cwd())).resolve()
+TERMINAL_EMBEDDING_STATUSES = {"failed", "cancelled"}
 
 
 def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
@@ -162,11 +163,20 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
     incomplete = [result for result in embedding_results if not result.complete]
     if incomplete:
         waiting = incomplete[0]
+        if embedding_result_is_terminal(waiting):
+            metadata = embedding_result_summary(waiting)
+            record_crawler_job_log(
+                job,
+                "error",
+                "embedding failed; pack was not promoted",
+                metadata,
+            )
+            raise RuntimeError(f"embedding {waiting.status}; pack was not promoted")
         record_crawler_job_log(
             job,
             "info",
             "promotion waiting for embeddings",
-            {"embedding_status": waiting.status, "embedding_job_id": waiting.job_id, "pending_chunks": waiting.pending_chunks},
+            embedding_result_summary(waiting),
         )
         mark_crawler_job_embedding_waiting(
             job,
@@ -180,6 +190,24 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
     record_catalog_promotion(catalog_entry, job, quality)
     record_crawler_job_log(job, "info", "catalog promoted", {"pack_key": pack_key})
     mark_crawler_job_completed(job, pack_key=pack_key, ref_sha=str(manifest["tree_sha256"]))
+
+
+def embedding_result_is_terminal(result: Any) -> bool:
+    return str(getattr(result, "status", "") or "") in TERMINAL_EMBEDDING_STATUSES
+
+
+def embedding_result_summary(result: Any) -> dict[str, Any]:
+    return {
+        "embedding_status": getattr(result, "status", None),
+        "embedding_job_id": getattr(result, "job_id", None),
+        "version_id": getattr(result, "version_id", None),
+        "mode": getattr(result, "mode", None),
+        "total_chunks": getattr(result, "total_chunks", None),
+        "pending_chunks": getattr(result, "pending_chunks", None),
+        "cached_chunks": getattr(result, "cached_chunks", None),
+        "embedded_chunks": getattr(result, "embedded_chunks", None),
+        "failed_chunks": getattr(result, "failed_chunks", None),
+    }
 
 
 def catalog_entry_for_job(
@@ -244,6 +272,7 @@ def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
     ctx = RetrievalContext.from_env(storage)
     if not ctx.database_url:
         return 0
+    failed_count = mark_terminal_embedding_jobs(ctx.database_url)
     with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "embedding_promotion_scan", "library": "system"}):
         ready = embedding_ready_rows(ctx.database_url)
     if not ready:
@@ -251,13 +280,77 @@ def process_pending_embedding_promotions(storage: RegistryStorage) -> int:
             completed = poll_and_apply_embedding_jobs(ctx.database_url)
         for result in completed:
             finalize_embedding_index(ctx.database_url, result.version_id, result.job_id)
+        failed_count += mark_terminal_embedding_jobs(ctx.database_url)
         with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "embedding_promotion_scan", "library": "system"}):
             ready = embedding_ready_rows(ctx.database_url)
     count = 0
     for row in ready:
         if promote_embedding_ready_job(storage, row):
             count += 1
-    return count
+    return count + failed_count
+
+
+def mark_terminal_embedding_jobs(database_url: str | None) -> int:
+    connection = postgres_connection(database_url)
+    if connection is None:
+        return 0
+    rows: list[dict[str, Any]] = []
+    with connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select j.id as crawler_job_id,
+                       ej.id as embedding_job_id,
+                       ej.status as embedding_status,
+                       ej.error as embedding_error,
+                       ej.pending_chunks,
+                       ej.failed_chunks
+                from crawler_jobs j
+                join embedding_jobs ej on ej.id = j.embedding_job_id
+                where j.status = 'batch_running'
+                  and ej.status in ('failed', 'cancelled')
+                order by ej.updated_at asc
+                limit 100
+                """
+            )
+            columns = [getattr(column, "name", column[0]) for column in cursor.description]
+            rows = [dict(zip(columns, row, strict=False)) for row in cursor.fetchall()]
+        for row in rows:
+            status = str(row.get("embedding_status") or "failed")
+            crawler_status = "cancelled" if status == "cancelled" else "failed"
+            error = terminal_embedding_error(row)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    update crawler_jobs
+                    set status = %s,
+                        finished_at = coalesce(finished_at, now()),
+                        embedding_finished_at = coalesce(embedding_finished_at, now()),
+                        embedding_error = coalesce(embedding_error, %s),
+                        last_error = coalesce(last_error, %s)
+                    where id = %s
+                    """,
+                    (crawler_status, error, error, int(row["crawler_job_id"])),
+                )
+            record_crawler_job_log(
+                {"db_job_id": str(row["crawler_job_id"])},
+                "error" if crawler_status == "failed" else "info",
+                "embedding failed; crawler job closed" if crawler_status == "failed" else "embedding cancelled; crawler job closed",
+                {
+                    "embedding_job_id": row.get("embedding_job_id"),
+                    "embedding_status": status,
+                    "pending_chunks": row.get("pending_chunks"),
+                    "failed_chunks": row.get("failed_chunks"),
+                    "error": error,
+                },
+            )
+    return len(rows)
+
+
+def terminal_embedding_error(row: dict[str, Any]) -> str:
+    status = str(row.get("embedding_status") or "failed")
+    default = "embedding job cancelled" if status == "cancelled" else "embedding job failed"
+    return str(row.get("embedding_error") or default)[:2000]
 
 
 def embedding_ready_rows(database_url: str | None) -> list[dict[str, Any]]:

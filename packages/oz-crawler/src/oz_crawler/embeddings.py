@@ -27,9 +27,7 @@ def embeddings_for_texts(texts: list[str]) -> list[list[float] | None]:
         if text.strip():
             pending.append((index, text))
 
-    batch_size = embedding_batch_size()
-    for offset in range(0, len(pending), batch_size):
-        batch = pending[offset : offset + batch_size]
+    for batch in embedding_batches(pending):
         batch_texts = [text for _, text in batch]
         throttle_sync_batch(sum(token_count(text) for text in batch_texts))
         embeddings = request_embeddings_for_provider(batch_texts)
@@ -45,6 +43,32 @@ def embedding_batch_size() -> int:
         return max(1, min(int(os.environ.get("OZ_EMBEDDING_BATCH_SIZE", "128")), 128))
     except ValueError:
         return 128
+
+
+def embedding_max_tokens_per_request() -> int:
+    try:
+        return max(1, int(os.environ.get("OZ_EMBEDDING_SYNC_MAX_TOKENS_PER_REQUEST", "100000")))
+    except ValueError:
+        return 100000
+
+
+def embedding_batches(pending: list[tuple[int, str]]) -> list[list[tuple[int, str]]]:
+    max_inputs = embedding_batch_size()
+    max_tokens = embedding_max_tokens_per_request()
+    batches: list[list[tuple[int, str]]] = []
+    current: list[tuple[int, str]] = []
+    current_tokens = 0
+    for item in pending:
+        item_tokens = token_count(item[1])
+        if current and (len(current) >= max_inputs or current_tokens + item_tokens > max_tokens):
+            batches.append(current)
+            current = []
+            current_tokens = 0
+        current.append(item)
+        current_tokens += item_tokens
+    if current:
+        batches.append(current)
+    return batches
 
 
 def request_embeddings_for_provider(texts: list[str]) -> list[list[float] | None]:
