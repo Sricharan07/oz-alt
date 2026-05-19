@@ -11,7 +11,7 @@
   {"vendor": "django", "library": "django", "version": "latest", "source_url": "https://docs.djangoproject.com/en/stable/"},
   {"vendor": "expressjs", "library": "express", "version": "5", "source_url": "https://expressjs.com/en/guide/error-handling"},
   {"vendor": "honojs", "library": "hono", "version": "latest", "source_url": "https://hono.dev/docs/"},
-  {"vendor": "vercel", "library": "sdk", "version": "latest", "source_url": "https://vercel.com/docs/rest-api"},
+  {"vendor": "vercel", "library": "sdk", "version": "latest", "source_url": "https://vercel.com/docs/rest-api/deployments/create-a-new-deployment"},
   {"vendor": "openai", "library": "openai-node", "version": "latest", "source_url": "https://github.com/openai/openai-node"},
   {"vendor": "anthropics", "library": "anthropic-sdk-typescript", "version": "latest", "source_url": "https://github.com/anthropics/anthropic-sdk-typescript"}
 ]
