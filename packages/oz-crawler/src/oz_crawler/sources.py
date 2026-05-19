@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 
 from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.parsers import openapi_chunks, type_definition_chunks
@@ -57,6 +57,9 @@ def prioritized_urls(seed_url: str, *, preferred_urls: list[str], discovered_url
     sources = [seed_url, *preferred_urls, *common_source_urls(seed_url), *discovered_urls]
     preferred = set(preferred_urls)
     for index, url in enumerate(sources):
+        url = clean_candidate_url(url)
+        if not url:
+            continue
         if url in seen:
             continue
         seen.add(url)
@@ -66,8 +69,11 @@ def prioritized_urls(seed_url: str, *, preferred_urls: list[str], discovered_url
 
 
 def url_priority(url: str, preferred_urls: set[str]) -> int:
+    parsed = parse_http_url(url)
+    if parsed is None:
+        return 99
     lower = url.lower()
-    path = urlparse(url).path.lower()
+    path = parsed.path.lower()
     if url in preferred_urls:
         return 0
     if "llms-full.txt" in lower:
@@ -78,7 +84,7 @@ def url_priority(url: str, preferred_urls: set[str]) -> int:
         return 3
     if path.endswith((".d.ts", ".pyi")):
         return 4
-    if urlparse(url).netloc.lower() in {"github.com", "raw.githubusercontent.com"}:
+    if parsed.netloc.lower() in {"github.com", "raw.githubusercontent.com"}:
         return 5
     if path.endswith((".md", ".mdx")):
         return 6
@@ -458,7 +464,31 @@ def markdown_title(text: str) -> str:
 def extract_urls(text: str, *, base_url: str) -> list[str]:
     urls = re.findall(r"https?://[^\s)>\"]+", text)
     urls.extend(urljoin(base_url, link) for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text))
-    return [url.split("#", 1)[0] for url in urls]
+    cleaned: list[str] = []
+    for url in urls:
+        candidate = clean_candidate_url(url.split("#", 1)[0])
+        if candidate:
+            cleaned.append(candidate)
+    return cleaned
+
+
+def clean_candidate_url(url: str) -> str:
+    candidate = str(url or "").strip().strip("<>")
+    candidate = candidate.rstrip(".,;")
+    return candidate if parse_http_url(candidate) is not None else ""
+
+
+def parse_http_url(url: str) -> ParseResult | None:
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not hostname:
+        return None
+    if "[" in parsed.netloc or "]" in parsed.netloc:
+        return None
+    return parsed
 
 
 def github_repo(url: str) -> list[tuple[str, str]]:

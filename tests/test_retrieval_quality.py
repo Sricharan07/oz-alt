@@ -42,7 +42,7 @@ from oz_crawler.normalize import clean_markdown
 from oz_crawler.parsers.source_code import source_code_chunks, source_path_allowed
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
 from oz_crawler.splitting import split_llms_full
-from oz_crawler.sources import artifact_markdown
+from oz_crawler.sources import artifact_markdown, extract_urls, prioritized_urls
 from oz_crawler.token_counting import token_count
 from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections
 
@@ -188,6 +188,19 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertTrue(markdown.startswith("# Routing"))
         self.assertNotIn("**Source:**", markdown)
         self.assertNotIn("title:", markdown)
+
+    def test_source_url_discovery_skips_malformed_urls(self) -> None:
+        text = "Good https://docs.example/reference and malformed https://[bad]/docs should not crash."
+
+        self.assertEqual(extract_urls(text, base_url="https://docs.example"), ["https://docs.example/reference"])
+        self.assertEqual(
+            prioritized_urls(
+                "https://docs.example",
+                preferred_urls=[],
+                discovered_urls=["https://[bad]/docs", "https://docs.example/guide"],
+            )[-1],
+            "https://docs.example/guide",
+        )
 
     def test_language_filter_rejects_non_target_prose_but_keeps_code_heavy_docs(self) -> None:
         spanish = " ".join(["el ejemplo para configurar la respuesta con los valores"] * 20)
