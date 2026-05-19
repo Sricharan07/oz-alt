@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -618,6 +619,7 @@ def search_eval_report(
         expected = [str(item) for item in check.get("expected_files", [])]
         banned = [str(item).lower() for item in check.get("must_not_include", [])]
         required = [str(item).lower() for item in check.get("must_include", [])]
+        patterns = [str(item) for item in check.get("patterns", [])]
         rows = search_from_fixtures(storage, query, library_scope=library, max_results=5, fixtures_root=fixtures_root)
         paths = [str(row.get("path") or "") for row in rows]
         ranks = [idx + 1 for idx, path in enumerate(paths) if any(path.endswith(item) for item in expected)]
@@ -633,7 +635,7 @@ def search_eval_report(
                 jury_result = {"error": str(exc)[:500]}
         joined = "\n".join(contents).lower()
         junk_hit = any(term in content.lower() for term in banned for content in contents)
-        content_hit = all(term in joined for term in required)
+        content_hit = content_requirement_hit(joined, required, patterns)
         duplicate_hit = len(paths) != len(set(paths))
         if ranks:
             hits += 1
@@ -683,6 +685,12 @@ def search_eval_report(
         "jury_score": round(jury_score, 3) if use_jury else None,
         "checks": checks,
     }
+
+
+def content_requirement_hit(joined_content: str, required_terms: list[str], patterns: list[str]) -> bool:
+    if patterns:
+        return all(re.search(pattern, joined_content, re.I) for pattern in patterns)
+    return all(term in joined_content for term in required_terms)
 
 
 def eval_spec_for_library(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:

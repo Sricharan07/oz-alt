@@ -41,6 +41,7 @@ BOILERPLATE_LINE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^for an index of all docs\b", re.I),
     re.compile(r"^(?:toggle navigation|open navigation|close navigation)$", re.I),
     re.compile(r"^(?:copy page|copy code|copy link)$", re.I),
+    re.compile(r"^(?:sponsors?|blog)$", re.I),
     re.compile(r"^(?:last updated|updated)\s*:?\s+.+$", re.I),
     re.compile(r"^</?(?:Intro|InlineToc|TableOfContents|Cards?|Card|Steps?|Tabs?|Tab|FileTree|PagesOnly|AppOnly|PagesRouter|AppRouter)\b[^>]*?/?>$", re.I),
 )
