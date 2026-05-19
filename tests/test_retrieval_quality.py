@@ -17,6 +17,7 @@ from scripts.worker import queue_has_items
 from oz_api import admin_ops
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
+from oz_api.indexer import limit_to_token_budget
 from oz_api.queue import queued_crawler_job_event
 from oz_api.rerank import (
     boost_named_suggestions,
@@ -98,6 +99,13 @@ class RetrievalQualityTests(unittest.TestCase):
 
     def test_token_counter_uses_tiktoken_encoding(self) -> None:
         self.assertEqual(token_count("hello world"), 2)
+
+    def test_indexer_caps_generated_parent_content_by_real_token_count(self) -> None:
+        text = "\n".join(f"line {index} `someSymbolCall({index})` with explanation" for index in range(1000))
+        capped = limit_to_token_budget(text, 1200)
+
+        self.assertLessEqual(token_count(capped), 1200)
+        self.assertIn("line 0", capped)
 
     def test_markdown_cleanup_strips_frontmatter(self) -> None:
         markdown = clean_markdown("---\ntitle: Middleware\n---\n# Middleware\n\nUse cookies.")

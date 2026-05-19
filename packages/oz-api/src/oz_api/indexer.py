@@ -174,13 +174,14 @@ def append_unique_chunk_row(
 def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(row)
     path = str(enriched.get("path") or "README.md")
-    text = str(enriched.get("text") or "")
+    text = limit_to_token_budget(str(enriched.get("text") or ""), index_chunk_token_limit())
     source_url = str(enriched.get("source_url") or "")
     enriched["path"] = path
     enriched["source_url"] = source_url
+    enriched["text"] = text
     enriched["chunk_key"] = str(enriched.get("chunk_key") or enriched.get("id") or f"{path}#{enriched.get('ordinal') or 1}")
     enriched["content_type"] = canonical_content_type(path, source_url, text, str(enriched.get("content_type") or ""))
-    enriched["token_count"] = int(enriched.get("token_count") or token_count(text))
+    enriched["token_count"] = token_count(text)
     enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
     return enriched
 
@@ -240,7 +241,7 @@ def parent_chunk_row(
     parent_key: str,
     children: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    content = parent_content(fixture, path, children)
+    content = limit_to_token_budget(parent_content(fixture, path, children), index_chunk_token_limit())
     source_url = first_non_empty(str(row.get("source_url") or "") for row in children)
     headings = list_of_strings(children[0].get("heading_path")) if children else [Path(path).stem]
     symbols = sorted({symbol for row in children for symbol in list_of_strings(row.get("symbols"))})
@@ -269,16 +270,36 @@ def parent_content(fixture: Path, path: str, children: list[dict[str, Any]]) -> 
     if source_path.exists() and source_path.is_file():
         text = source_path.read_text(encoding="utf-8", errors="replace").strip()
         if text:
-            return limit_tokens(text, 1800)
+            return text
     joined = "\n\n".join(str(row.get("text") or "").strip() for row in children if str(row.get("text") or "").strip())
-    return limit_tokens(joined, 1800)
+    return joined
 
 
-def limit_tokens(text: str, max_tokens: int) -> str:
-    words = re.findall(r"\S+", text)
-    if len(words) <= max_tokens:
+def index_chunk_token_limit() -> int:
+    try:
+        return max(100, int(os.environ.get("OZ_MAX_CHUNK_TOKENS", "1200")))
+    except ValueError:
+        return 1200
+
+
+def limit_to_token_budget(text: str, max_tokens: int) -> str:
+    text = text.strip()
+    if token_count(text) <= max_tokens:
         return text
-    return " ".join(words[:max_tokens]).strip()
+    low = 0
+    high = len(text)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = text[:mid].rstrip()
+        if "\n" in candidate:
+            candidate = candidate.rsplit("\n", 1)[0].rstrip() or text[:mid].rstrip()
+        if token_count(candidate) <= max_tokens:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best.strip() or text[: max(1, max_tokens)].strip()
 
 
 def first_non_empty(values: Any) -> str:
