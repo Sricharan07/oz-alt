@@ -128,7 +128,7 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
     )
     record_eval_run(eval_entry, eval_type="pack_materialization", passed=True, metrics=pack_eval)
     with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "search_eval", "library": f"{vendor}/{library}"}):
-        search_eval = search_eval_report(storage, f"{vendor}/{library}", version)
+        search_eval = search_eval_report(storage, f"{vendor}/{library}", version, fixtures_root=registry_root)
     if search_eval is not None:
         record_eval_run(eval_entry, eval_type="semantic_search", passed=bool(search_eval["passed"]), metrics=search_eval)
         if not search_eval["passed"]:
@@ -594,7 +594,13 @@ def pack_eval_report(manifest: dict[str, Any]) -> dict[str, Any]:
     return {"passed": passed, "metrics": metrics}
 
 
-def search_eval_report(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:
+def search_eval_report(
+    storage: RegistryStorage,
+    library: str,
+    version: str,
+    *,
+    fixtures_root: Path | None = None,
+) -> dict[str, Any] | None:
     spec = eval_spec_for_library(storage, library, version)
     if spec is None:
         return None
@@ -612,10 +618,10 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
         expected = [str(item) for item in check.get("expected_files", [])]
         banned = [str(item).lower() for item in check.get("must_not_include", [])]
         required = [str(item).lower() for item in check.get("must_include", [])]
-        rows = search_from_fixtures(storage, query, library_scope=library, max_results=5)
+        rows = search_from_fixtures(storage, query, library_scope=library, max_results=5, fixtures_root=fixtures_root)
         paths = [str(row.get("path") or "") for row in rows]
         ranks = [idx + 1 for idx, path in enumerate(paths) if any(path.endswith(item) for item in expected)]
-        contents = fixture_result_contents(storage, paths)
+        contents = fixture_result_contents(storage, paths, fixtures_root=fixtures_root)
         jury_result: dict[str, Any] = {}
         if use_jury:
             try:
@@ -651,7 +657,7 @@ def search_eval_report(storage: RegistryStorage, library: str, version: str) -> 
         )
     total = len(checks)
     recall = hits / total if total else 0.0
-    materialized = materialization_rate(storage, checks)
+    materialized = materialization_rate(storage, checks, fixtures_root=fixtures_root)
     junk_rate = junk_failures / total if total else 0.0
     duplicate_rate = duplicate_failures / total if total else 0.0
     content_rate = 1 - (content_failures / total if total else 0.0)
@@ -691,8 +697,14 @@ def eval_spec_for_library(storage: RegistryStorage, library: str, version: str) 
     return None
 
 
-def fixture_result_contents(storage: RegistryStorage, paths: list[str]) -> list[str]:
+def fixture_result_contents(
+    storage: RegistryStorage,
+    paths: list[str],
+    *,
+    fixtures_root: Path | None = None,
+) -> list[str]:
     output: list[str] = []
+    root = fixtures_root or storage.fixtures_root
     for result_path in paths:
         relative = result_path.removeprefix(".codo/vendors/")
         if "/" not in relative:
@@ -704,19 +716,24 @@ def fixture_result_contents(storage: RegistryStorage, paths: list[str]) -> list[
         if "@" not in library_version:
             continue
         library, version = library_version.rsplit("@", 1)
-        path = storage.fixtures_root / vendor / library / version / doc_path
+        path = root / vendor / library / version / doc_path
         if path.exists():
             output.append(path.read_text(encoding="utf-8", errors="replace"))
     return output
 
 
-def materialization_rate(storage: RegistryStorage, checks: list[dict[str, Any]]) -> float:
+def materialization_rate(
+    storage: RegistryStorage,
+    checks: list[dict[str, Any]],
+    *,
+    fixtures_root: Path | None = None,
+) -> float:
     total = 0
     existing = 0
     for check in checks:
         for result_path in check.get("paths", []):
             total += 1
-            existing += int(bool(fixture_result_contents(storage, [str(result_path)])))
+            existing += int(bool(fixture_result_contents(storage, [str(result_path)], fixtures_root=fixtures_root)))
     return existing / total if total else 1.0
 
 

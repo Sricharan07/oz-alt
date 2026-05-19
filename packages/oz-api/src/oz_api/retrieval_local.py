@@ -42,13 +42,15 @@ def search_from_fixtures(
     library_scope: str | None,
     max_results: int,
     content_types: list[str] | None = None,
+    fixtures_root: Any | None = None,
 ) -> list[dict[str, Any]]:
     terms = normalize_query(query)
     scope = parse_versioned_scope(library_scope)
-    selected_versions = selected_fixture_versions(storage, scope)
+    root = fixtures_root or storage.fixtures_root
+    selected_versions = selected_fixture_versions(storage, scope, fixtures_root=root)
     hits: list[dict[str, Any]] = []
 
-    for fixture in storage.fixtures_root.glob("*/*/*"):
+    for fixture in root.glob("*/*/*"):
         if not fixture.is_dir():
             continue
         vendor, library, version = fixture.parts[-3:]
@@ -155,10 +157,16 @@ def default_catalog_entries(storage: RegistryStorage) -> list[dict[str, Any]]:
     return output
 
 
-def selected_fixture_versions(storage: RegistryStorage, scope: Any) -> set[tuple[str, str, str]]:
+def selected_fixture_versions(
+    storage: RegistryStorage,
+    scope: Any,
+    *,
+    fixtures_root: Any | None = None,
+) -> set[tuple[str, str, str]]:
+    root = fixtures_root or storage.fixtures_root
     fixtures = [
         (path.parts[-3], path.parts[-2], path.parts[-1])
-        for path in storage.fixtures_root.glob("*/*/*")
+        for path in root.glob("*/*/*")
         if path.is_dir()
     ]
     if scope.vendor and scope.library:

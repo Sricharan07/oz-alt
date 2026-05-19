@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from scripts.worker import queue_has_items
 from oz_api import admin_ops
-from oz_api.crawler_jobs import embedding_result_is_terminal, terminal_embedding_error
+from oz_api.crawler_jobs import embedding_result_is_terminal, search_eval_report, terminal_embedding_error
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.indexer import add_parent_chunks, limit_to_token_budget
@@ -29,6 +29,7 @@ from oz_api.rerank import (
     zeroentropy_scores,
 )
 from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
+from oz_api.storage import RegistryStorage
 from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
 from oz_crawler.chunks import chunk_markdown, content_hash, write_chunks
 from oz_crawler.content_types import block_content_type, classify_content_type
@@ -240,6 +241,56 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(restored.dead_letters[0].status, 503)
         self.assertTrue(progress)
         self.assertEqual(progress[-1]["dead_letter_items"][0]["status"], 503)
+
+    def test_pre_promotion_search_eval_uses_candidate_fixture_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            eval_root = repo / "registry" / "evals"
+            eval_root.mkdir(parents=True)
+            (eval_root / "widget.yaml").write_text(
+                json.dumps(
+                    {
+                        "library": "acme/widget",
+                        "version": "1",
+                        "checks": [
+                            {
+                                "name": "candidate docs",
+                                "query": "new target",
+                                "expected_files": ["guides/new.md"],
+                                "must_include": ["target"],
+                                "must_not_include": ["old"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stale = repo / "registry" / "fixtures" / "acme" / "widget" / "1"
+            stale.mkdir(parents=True)
+            (stale / "_chunks.jsonl").write_text(
+                json.dumps({"path": "guides/old.md", "text": "old target", "start_line": 1}) + "\n",
+                encoding="utf-8",
+            )
+            candidate_root = repo / "candidate-fixtures"
+            candidate = candidate_root / "acme" / "widget" / "1"
+            (candidate / "guides").mkdir(parents=True)
+            (candidate / "guides" / "new.md").write_text("new target", encoding="utf-8")
+            (candidate / "_chunks.jsonl").write_text(
+                json.dumps({"path": "guides/new.md", "text": "new target", "start_line": 1}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = search_eval_report(
+                RegistryStorage(repo_root=repo),
+                "acme/widget",
+                "1",
+                fixtures_root=candidate_root,
+            )
+
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["checks"][0]["paths"], [".codo/vendors/acme/widget@1/guides/new.md"])
 
     def test_write_chunks_does_not_embed_inline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
