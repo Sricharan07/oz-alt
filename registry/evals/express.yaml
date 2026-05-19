@@ -8,7 +8,7 @@
       "patterns": ["middleware", "error", "next"],
       "expected_files": ["guides/guide/error-handling.md", "guides/guide/using-middleware.md", "guides/5-x-api.md"],
       "must_include": ["middleware", "error"],
-      "must_not_include": ["sponsor", "contribute"]
+      "banned_paths": ["/(sponsor|contribute)"]
     }
   ]
 }

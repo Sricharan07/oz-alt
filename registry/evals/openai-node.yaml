@@ -12,7 +12,7 @@
         "_symbols/OpenAI.md"
       ],
       "must_include": ["OpenAI", "stream", "chat"],
-      "must_not_include": ["GitHub · Change is constant", "Enter your email", "Try GitHub Copilot"]
+      "banned_content": ["GitHub · Change is constant", "Enter your email", "Try GitHub Copilot"]
     },
     {
       "name": "embeddings",
@@ -24,7 +24,7 @@
         "_symbols/embeddings.md"
       ],
       "must_include": ["embedding", "OpenAI"],
-      "must_not_include": ["GitHub · Change is constant"]
+      "banned_content": ["GitHub · Change is constant"]
     }
   ]
 }

@@ -15,7 +15,7 @@
         "api-reference/api/checkout/sessions.md"
       ],
       "must_include": ["webhook", "signature"],
-      "must_not_include": ["customer story", "contact sales", "try for free"]
+      "banned_content": ["customer story", "contact sales", "try for free"]
     }
   ]
 }

@@ -8,7 +8,7 @@
       "patterns": ["middleware", "context|Context", "request|response"],
       "expected_files": ["guides/docs/guides/middleware.md", "api-reference/api/context.md", "guides/hono.md"],
       "must_include": ["middleware", "Context"],
-      "must_not_include": ["showcase", "sponsor"]
+      "banned_paths": ["/(showcase|sponsor)"]
     }
   ]
 }

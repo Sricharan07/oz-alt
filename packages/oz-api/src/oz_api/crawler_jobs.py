@@ -617,7 +617,10 @@ def search_eval_report(
     for check in spec.get("checks", []):
         query = str(check.get("query") or "")
         expected = [str(item) for item in check.get("expected_files", [])]
-        banned = [str(item).lower() for item in check.get("must_not_include", [])]
+        banned_files = [str(item) for item in check.get("banned_files", [])]
+        banned_paths = [str(item) for item in check.get("banned_paths", [])]
+        banned_content = [str(item).lower() for item in check.get("banned_content", [])]
+        banned_content.extend(str(item).lower() for item in check.get("must_not_include", []))
         required = [str(item).lower() for item in check.get("must_include", [])]
         patterns = [str(item) for item in check.get("patterns", [])]
         rows = search_from_fixtures(storage, query, library_scope=library, max_results=5, fixtures_root=fixtures_root)
@@ -634,7 +637,9 @@ def search_eval_report(
                     raise RuntimeError(f"jury search eval failed: {exc}") from exc
                 jury_result = {"error": str(exc)[:500]}
         joined = "\n".join(contents).lower()
-        junk_hit = any(term in content.lower() for term in banned for content in contents)
+        junk_hit = path_junk_hit(paths, banned_files, banned_paths) or any(
+            term in content.lower() for term in banned_content for content in contents
+        )
         content_hit = content_requirement_hit(joined, required, patterns)
         duplicate_hit = len(paths) != len(set(paths))
         if ranks:
@@ -650,6 +655,8 @@ def search_eval_report(
                 "query": query,
                 "paths": paths,
                 "expected_files": expected,
+                "banned_files": banned_files,
+                "banned_paths": banned_paths,
                 "expected_file_hit": bool(ranks),
                 "junk_top5": junk_hit,
                 "duplicate_top5": duplicate_hit,
@@ -691,6 +698,15 @@ def content_requirement_hit(joined_content: str, required_terms: list[str], patt
     if patterns:
         return all(re.search(pattern, joined_content, re.I) for pattern in patterns)
     return all(term in joined_content for term in required_terms)
+
+
+def path_junk_hit(paths: list[str], banned_files: list[str], banned_paths: list[str]) -> bool:
+    for path in paths:
+        if any(path.endswith(item) for item in banned_files):
+            return True
+        if any(re.search(pattern, path, re.I) for pattern in banned_paths):
+            return True
+    return False
 
 
 def eval_spec_for_library(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:

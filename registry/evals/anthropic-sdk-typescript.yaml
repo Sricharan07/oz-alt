@@ -8,7 +8,7 @@
       "patterns": ["Anthropic", "messages", "stream|streaming"],
       "expected_files": ["guides/README.md", "api-reference/types/messages.md", "_symbols/messages.create.md"],
       "must_include": ["Anthropic", "messages"],
-      "must_not_include": ["customer story", "contact sales", "try for free"]
+      "banned_content": ["customer story", "contact sales", "try for free"]
     }
   ]
 }

@@ -8,7 +8,7 @@
       "patterns": ["useEffect", "cleanup|clean up", "dependencies|dependency array"],
       "expected_files": ["api-reference/react/useeffect.md", "_symbols/useEffect.md"],
       "must_include": ["useEffect", "cleanup", "dependencies"],
-      "must_not_include": ["tic-tac-toe", "GitHub · Change is constant"]
+      "banned_content": ["tic-tac-toe", "GitHub · Change is constant"]
     },
     {
       "name": "useState reference",
@@ -16,7 +16,7 @@
       "patterns": ["useState", "set function|updater"],
       "expected_files": ["api-reference/react/usestate.md", "_symbols/useState.md"],
       "must_include": ["useState", "set function"],
-      "must_not_include": ["tic-tac-toe"]
+      "banned_content": ["tic-tac-toe"]
     }
   ]
 }

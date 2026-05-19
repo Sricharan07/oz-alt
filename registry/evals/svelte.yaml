@@ -8,7 +8,7 @@
       "patterns": ["runes", "state", "effect|derived"],
       "expected_files": ["guides/svelte/state.md", "guides/svelte/effect.md", "guides/svelte/derived.md", "_symbols/$state.md"],
       "must_include": ["state", "effect"],
-      "must_not_include": ["showcase", "blog"]
+      "banned_paths": ["/(showcase|blog)"]
     }
   ]
 }

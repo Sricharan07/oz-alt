@@ -8,7 +8,7 @@
       "patterns": ["deployment", "project", "environment variables"],
       "expected_files": ["guides/https-vercel-com-docs-rest-api-sdk-examples-deployments-automation.md", "guides/https-vercel-com-docs-rest-api-sdk-examples-environment-variables.md"],
       "must_include": ["deployment", "environment"],
-      "must_not_include": ["customer story", "contact sales"]
+      "banned_content": ["customer story", "contact sales"]
     }
   ]
 }

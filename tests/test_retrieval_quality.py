@@ -15,7 +15,13 @@ sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
 
 from scripts.worker import queue_has_items
 from oz_api import admin_ops
-from oz_api.crawler_jobs import content_requirement_hit, embedding_result_is_terminal, search_eval_report, terminal_embedding_error
+from oz_api.crawler_jobs import (
+    content_requirement_hit,
+    embedding_result_is_terminal,
+    path_junk_hit,
+    search_eval_report,
+    terminal_embedding_error,
+)
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.indexer import add_parent_chunks, limit_to_token_budget
@@ -333,6 +339,10 @@ class RetrievalQualityTests(unittest.TestCase):
     def test_search_eval_content_requirements_support_pattern_alternatives(self) -> None:
         self.assertTrue(content_requirement_hit("useState updater function", ["set function"], ["set function|updater"]))
         self.assertFalse(content_requirement_hit("useState render", ["set function"], ["set function|updater"]))
+
+    def test_search_eval_path_bans_do_not_flag_valid_content_words(self) -> None:
+        self.assertFalse(path_junk_hit([".codo/vendors/vuejs/vue@3/guides/blog-example.md"], [], ["/blog$"]))
+        self.assertTrue(path_junk_hit([".codo/vendors/vuejs/vue@3/guides/blog.md"], [], ["/blog\\.md$"]))
 
     def test_write_chunks_does_not_embed_inline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

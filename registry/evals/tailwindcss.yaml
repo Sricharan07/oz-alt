@@ -8,7 +8,7 @@
       "patterns": ["utility|utilities", "responsive", "hover"],
       "expected_files": ["guides/styling-with-utility-classes.md", "guides/hover-focus-and-other-states.md", "guides/get-started-with-tailwind-css.md"],
       "must_include": ["utility", "responsive"],
-      "must_not_include": ["showcase", "sponsor"]
+      "banned_paths": ["/(showcase|sponsor|blog)"]
     }
   ]
 }

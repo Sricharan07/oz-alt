@@ -13,7 +13,7 @@
         "guides/orm/prisma-schema/data-model/relations.md"
       ],
       "must_include": ["schema", "client"],
-      "must_not_include": ["testimonial", "customer story"]
+      "banned_content": ["testimonial", "customer story"]
     },
     {
       "name": "migrate shadow database",
@@ -25,7 +25,7 @@
         "guides/orm/prisma-migrate/understanding-prisma-migrate/migration-histories.md"
       ],
       "must_include": ["migration", "shadow"],
-      "must_not_include": ["testimonial", "customer story"]
+      "banned_content": ["testimonial", "customer story"]
     }
   ]
 }

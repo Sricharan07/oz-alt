@@ -8,7 +8,8 @@
       "patterns": ["auth", "row level security|RLS", "policy"],
       "expected_files": ["guides/guides/auth.md", "guides/guides/database/postgres/row-level-security.md", "guides/supabase-documentation.md"],
       "must_include": ["auth", "policy"],
-      "must_not_include": ["customer story", "pricing"]
+      "banned_content": ["customer story"],
+      "banned_paths": ["/pricing"]
     }
   ]
 }

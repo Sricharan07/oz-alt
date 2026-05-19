@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,7 @@ def evaluate_search(
             top = results[:5]
             expected = [str(item) for item in check.get("expected_files", [])]
             banned_files = [str(item) for item in check.get("banned_files", [])]
+            banned_paths = [str(item) for item in check.get("banned_paths", [])]
             banned_content = [str(item).lower() for item in check.get("banned_content", [])]
             banned_content.extend(str(item).lower() for item in check.get("must_not_include", []))
             required_content = [str(item).lower() for item in check.get("must_include", [])]
@@ -119,6 +121,9 @@ def evaluate_search(
             duplicate_top5 = len(paths) != len(set(paths))
             duplicate_failures += int(duplicate_top5)
             junk_hit = any(any(path.endswith(item) for item in banned_files) for path in paths)
+            junk_hit = junk_hit or any(
+                any(re.search(pattern, path, re.I) for pattern in banned_paths) for path in paths
+            )
             materialized_contents = read_result_contents(project, paths)
             jury_result = judge_check(check, paths, materialized_contents) if jury else {}
             if jury_result:
@@ -130,7 +135,7 @@ def evaluate_search(
                 junk_checks += 1
                 junk_hit = junk_hit or any(term in content.lower() for term in banned_content for content in materialized_contents)
             else:
-                junk_checks += int(bool(banned_files))
+                junk_checks += int(bool(banned_files or banned_paths))
             junk_failures += int(junk_hit)
             if hit_ranks:
                 reciprocal_sum += 1.0 / hit_ranks[0]
@@ -148,6 +153,7 @@ def evaluate_search(
                     "expected_files": expected,
                     "expected_file_hit": expected_hit,
                     "banned_files": banned_files,
+                    "banned_paths": banned_paths,
                     "junk_top5": junk_hit,
                     "duplicate_top5": duplicate_top5,
                     "required_content_hit": content_requirement_hit,
