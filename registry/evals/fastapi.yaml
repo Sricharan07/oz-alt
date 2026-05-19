@@ -6,7 +6,15 @@
       "name": "path operation dependency",
       "query": "FastAPI path operation dependency Depends response model",
       "patterns": ["path operation", "Depends|dependency", "response model"],
-      "expected_files": ["guides/tutorial/dependencies/index.md", "guides/tutorial/response-model.md", "guides/fastapi-para.md"],
+      "expected_files": [
+        "_symbols/FastAPI.md",
+        "_symbols/Path.md",
+        "_symbols/Response.md",
+        "examples/dependencies.md",
+        "examples/fastapi.md",
+        "guides/tutorial/dependencies/index.md",
+        "guides/tutorial/response-model.md"
+      ],
       "must_include": ["FastAPI", "Depends"],
       "banned_paths": ["/(sponsor|newsletter)"]
     }

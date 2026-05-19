@@ -134,6 +134,12 @@
       "allowed_hosts": ["expressjs.com"],
       "allowed_paths": ["/en"],
       "denied_paths": ["/blog"],
+      "preferred_urls": [
+        "https://expressjs.com/en/guide/error-handling",
+        "https://expressjs.com/en/guide/using-middleware",
+        "https://expressjs.com/en/guide/routing",
+        "https://expressjs.com/en/api"
+      ],
       "required_topics": ["router", "middleware", "request", "response"],
       "expected_symbols": ["Router", "Request", "Response"],
       "min_documents": 1
@@ -246,7 +252,10 @@
         "/anthropics/anthropic-sdk-typescript/tree"
       ],
       "preferred_urls": [
-        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/README.md"
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/README.md",
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/api.md",
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/helpers.md",
+        "https://raw.githubusercontent.com/anthropics/anthropic-sdk-typescript/main/examples/streaming.ts"
       ],
       "required_topics": ["messages", "streaming", "client"],
       "expected_symbols": ["Anthropic"]

@@ -6,7 +6,13 @@
       "name": "middleware error handler",
       "query": "Express 5 middleware error handler next",
       "patterns": ["middleware", "error", "next"],
-      "expected_files": ["guides/guide/error-handling.md", "guides/guide/using-middleware.md", "guides/5-x-api.md"],
+      "expected_files": [
+        "guides/en/guide/error-handling.md",
+        "guides/en/guide/using-middleware.md",
+        "guides/en/guide/routing.md",
+        "guides/guide/error-handling.md",
+        "guides/guide/using-middleware.md"
+      ],
       "must_include": ["middleware", "error"],
       "banned_paths": ["/(sponsor|contribute)"]
     }

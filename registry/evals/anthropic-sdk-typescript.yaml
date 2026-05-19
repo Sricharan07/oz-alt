@@ -6,7 +6,13 @@
       "name": "messages create streaming",
       "query": "Anthropic TypeScript SDK messages create streaming",
       "patterns": ["Anthropic", "messages", "stream|streaming"],
-      "expected_files": ["guides/README.md", "api-reference/types/messages.md", "_symbols/messages.create.md"],
+      "expected_files": [
+        "guides/anthropics/anthropic-sdk-typescript/main/readme.md",
+        "examples/anthropics/anthropic-sdk-typescript/main/examples/streaming.md",
+        "_symbols/Anthropic.md",
+        "_symbols/client.messages.stream.md",
+        "_symbols/messages.create.md"
+      ],
       "must_include": ["Anthropic", "messages"],
       "banned_content": ["customer story", "contact sales", "try for free"]
     }

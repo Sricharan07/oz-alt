@@ -6,7 +6,14 @@
       "name": "middleware context request",
       "query": "Hono middleware context request response",
       "patterns": ["middleware", "context|Context", "request|response"],
-      "expected_files": ["guides/docs/guides/middleware.md", "api-reference/api/context.md", "guides/hono.md"],
+      "expected_files": [
+        "api-reference/concepts/middleware.md",
+        "_symbols/Context.md",
+        "_symbols/Hono.md",
+        "guides/api/hono.md",
+        "guides/docs/guides/middleware.md",
+        "api-reference/api/context.md"
+      ],
       "must_include": ["middleware", "Context"],
       "banned_paths": ["/(showcase|sponsor)"]
     }

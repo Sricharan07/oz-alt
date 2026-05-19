@@ -6,7 +6,13 @@
       "name": "model queryset filter",
       "query": "Django QuerySet filter model objects",
       "patterns": ["QuerySet|queryset", "filter", "model"],
-      "expected_files": ["guides/topics/db/queries.md", "api-reference/ref/models/querysets.md", "guides/django-documentation.md"],
+      "expected_files": [
+        "_symbols/QuerySet.md",
+        "guides/en/stable/ref/models/querysets.md",
+        "guides/en/stable/topics/db/queries.md",
+        "guides/topics/db/queries.md",
+        "api-reference/ref/models/querysets.md"
+      ],
       "must_include": ["QuerySet", "filter"],
       "banned_paths": ["/(download|donate|sponsor)"]
     }
