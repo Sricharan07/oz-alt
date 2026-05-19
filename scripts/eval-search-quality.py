@@ -20,6 +20,8 @@ def main() -> int:
     parser.add_argument("--record-db", action="store_true", help="Record results in search_quality_runs when DB env is set.")
     parser.add_argument("--min-expected-recall-at-5", type=float, default=0.85)
     parser.add_argument("--min-precision-at-5", type=float, default=0.75)
+    parser.add_argument("--min-precision-at-1", type=float, default=0.60)
+    parser.add_argument("--min-mrr", type=float, default=0.70)
     parser.add_argument("--max-junk-top5-rate", type=float, default=0.0)
     parser.add_argument("--max-duplicate-top5-rate", type=float, default=0.0)
     parser.add_argument("--jury", action="store_true", help="Use an OpenAI-compatible judge endpoint for c7score-style scoring.")
@@ -50,6 +52,8 @@ def main() -> int:
             min_precision_at_5=args.min_precision_at_5,
             max_junk_top5_rate=args.max_junk_top5_rate,
             max_duplicate_top5_rate=args.max_duplicate_top5_rate,
+            min_precision_at_1=args.min_precision_at_1,
+            min_mrr=args.min_mrr,
             jury=args.jury,
             min_jury_score=args.min_jury_score,
         )
@@ -72,6 +76,8 @@ def evaluate_search(
     min_precision_at_5: float,
     max_junk_top5_rate: float,
     max_duplicate_top5_rate: float,
+    min_precision_at_1: float,
+    min_mrr: float,
     jury: bool,
     min_jury_score: float,
 ) -> dict[str, Any]:
@@ -167,6 +173,8 @@ def evaluate_search(
     passed = (
         precision >= min_expected_recall_at_5
         and precision >= min_precision_at_5
+        and top1 >= min_precision_at_1
+        and mrr >= min_mrr
         and materialization == 1.0
         and junk_top5_rate <= max_junk_top5_rate
         and duplicate_top5_rate <= max_duplicate_top5_rate
@@ -188,6 +196,8 @@ def evaluate_search(
         "thresholds": {
             "min_expected_recall_at_5": min_expected_recall_at_5,
             "min_precision_at_5": min_precision_at_5,
+            "min_precision_at_1": min_precision_at_1,
+            "min_mrr": min_mrr,
             "max_junk_top5_rate": max_junk_top5_rate,
             "max_duplicate_top5_rate": max_duplicate_top5_rate,
             "min_jury_score": min_jury_score if jury else None,

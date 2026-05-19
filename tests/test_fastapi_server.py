@@ -107,6 +107,25 @@ class FastApiServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.json()["error"], "request_body_too_large")
 
+    def test_context_route_returns_snippets_and_retrieval_mode(self) -> None:
+        with self.client() as client:
+            response = client.post(
+                "/context",
+                json={
+                    "query": "middleware jwt cookies",
+                    "library_scope": "vercel/next.js",
+                    "max_tokens": 800,
+                    "max_results": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("retrieval_mode", payload)
+        self.assertGreaterEqual(len(payload["results"]), 1)
+        self.assertIn("snippet", payload["results"][0])
+        self.assertNotIn("title:", payload["results"][0]["snippet"])
+
 
 if __name__ == "__main__":
     unittest.main()

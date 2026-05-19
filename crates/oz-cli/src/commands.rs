@@ -56,6 +56,7 @@ pub(crate) fn setup(
     api_url: Option<&str>,
     skip_login: bool,
     skip_install: bool,
+    agents: AgentInstallMode,
 ) -> Result<()> {
     let mut config = read_config()?;
     let mut changed_config = false;
@@ -77,17 +78,8 @@ pub(crate) fn setup(
 
     init_project(project_root)?;
 
-    if !skip_install {
-        install_skill(
-            project_root,
-            InstallTargets {
-                codex: false,
-                claude_code: false,
-                cursor: false,
-                cline: false,
-                continue_agent: false,
-            },
-        )?;
+    if !skip_install && agents != AgentInstallMode::None {
+        install_skill(project_root, InstallTargets::for_mode(agents, project_root))?;
     }
 
     doctor_impl(project_root, !skip_login)

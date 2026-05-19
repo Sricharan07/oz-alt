@@ -151,6 +151,7 @@ def search_from_postgres(
     fingerprint: str,
     *,
     vector_enabled: bool = True,
+    content_types: list[str] | None = None,
 ) -> list[dict[str, Any]] | None:
     connection = postgres_connection(ctx.database_url)
     if connection is None:
@@ -170,21 +171,28 @@ def search_from_postgres(
         if scope_vendor
         else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
     )
+    content_filter = "and c.content_type = any(%s)" if content_types else ""
     candidates = candidate_limit(max_results)
     params: list[Any] = [terms, intent, terms]
     if scope_vendor:
         params.extend([scope_vendor, scope_library, scope_version_id])
+    if content_types:
+        params.append(content_types)
     params.append(candidates)
     vector_cte = empty_vector_cte()
     if vector:
-        vector_cte = vector_candidate_cte(where_scope)
+        vector_cte = vector_candidate_cte(where_scope, content_filter)
         params.extend([vector, intent])
         if scope_vendor:
             params.extend([scope_vendor, scope_library, scope_version_id])
+        if content_types:
+            params.append(content_types)
         params.extend([vector, candidates])
     params.extend([intent, symbol_pattern, symbol_pattern, symbol_pattern])
     if scope_vendor:
         params.extend([scope_vendor, scope_library, scope_version_id])
+    if content_types:
+        params.append(content_types)
     params.extend([candidates, max_results])
     sql = f"""
         with fts_candidates as (
@@ -192,6 +200,7 @@ def search_from_postgres(
           where c.search_document @@ websearch_to_tsquery('english', %s)
             and coalesce(c.dedupe_canonical, true)
             {where_scope}
+            {content_filter}
           order by fts_score desc, path asc, start_line asc
           limit %s
         ),
@@ -207,6 +216,7 @@ def search_from_postgres(
               or c.heading_path::text ilike %s
             )
             {where_scope}
+            {content_filter}
           order by symbol_score desc, path asc, start_line asc
           limit %s
         ),
@@ -251,14 +261,23 @@ def search_from_postgres(
                     cursor.execute(sql, tuple(params))
                     rows = cursor.fetchall()
                     mark_search_versions_requested(cursor, rows)
-        return score_postgres_rows(rows, query)
+        mode = "vector_candidates" if vector else "fts_symbol_fallback"
+        return score_postgres_rows(rows, query, retrieval_mode=mode, degraded=not bool(vector))
     except VersionResolutionError:
         raise
     except Exception as exc:
         LOGGER.warning("postgres search failed: %s", exc)
         if vector_enabled:
             LOGGER.warning("retrying postgres search with FTS/symbol fallback only")
-            return search_from_postgres(ctx, query, library_scope, max_results, fingerprint, vector_enabled=False)
+            return search_from_postgres(
+                ctx,
+                query,
+                library_scope,
+                max_results,
+                fingerprint,
+                vector_enabled=False,
+                content_types=content_types,
+            )
         return None
 
 
@@ -293,12 +312,13 @@ def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> st
     """
 
 
-def vector_candidate_cte(where_scope: str) -> str:
+def vector_candidate_cte(where_scope: str, content_filter: str) -> str:
     return f"""
         {candidate_select("0::float8", "greatest(1 - (c.embedding <=> %s::vector), 0)", "0::float8")}
         where c.embedding is not null
           and coalesce(c.dedupe_canonical, true)
           {where_scope}
+          {content_filter}
         order by c.embedding <=> %s::vector
         limit %s
     """
@@ -339,7 +359,13 @@ def candidate_limit(max_results: int) -> int:
     return max(max_results * 10, 50)
 
 
-def score_postgres_rows(rows: list[Any], query: str) -> list[dict[str, Any]]:
+def score_postgres_rows(
+    rows: list[Any],
+    query: str,
+    *,
+    retrieval_mode: str,
+    degraded: bool,
+) -> list[dict[str, Any]]:
     terms = normalize_query(query)
     scored: list[dict[str, Any]] = []
     for row in rows:
@@ -363,7 +389,13 @@ def score_postgres_rows(rows: list[Any], query: str) -> list[dict[str, Any]]:
                 "matched_path": row[12],
                 "source_anchor": row[13],
                 "content_type": row[9],
+                "heading_path": row[7] or [],
+                "symbols": row[8] or [],
                 "token_count": int(row[14] or 0),
+                "retrieval_mode": retrieval_mode,
+                "degraded": degraded,
+                "_matched_text": row[11] or "",
+                "_parent_text": row[15] or "",
                 "_rerank_text": rerank_text(row),
             }
         )

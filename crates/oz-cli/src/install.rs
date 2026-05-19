@@ -10,6 +10,46 @@ pub(crate) struct InstallTargets {
 }
 
 impl InstallTargets {
+    pub(crate) fn for_mode(mode: AgentInstallMode, project_root: &Path) -> Self {
+        match mode {
+            AgentInstallMode::Detected => Self::default_detected(project_root),
+            AgentInstallMode::All => Self::all(),
+            AgentInstallMode::None => Self::none(),
+        }
+    }
+
+    fn none() -> Self {
+        Self {
+            codex: false,
+            claude_code: false,
+            cursor: false,
+            cline: false,
+            continue_agent: false,
+        }
+    }
+
+    fn all() -> Self {
+        Self {
+            codex: true,
+            claude_code: true,
+            cursor: true,
+            cline: true,
+            continue_agent: true,
+        }
+    }
+
+    fn default_detected(project_root: &Path) -> Self {
+        let detected = detect_install_targets(project_root);
+        if detected.has_selection() {
+            detected
+        } else {
+            Self {
+                codex: true,
+                ..Self::none()
+            }
+        }
+    }
+
     fn has_selection(&self) -> bool {
         if self.codex || self.claude_code || self.cursor || self.cline || self.continue_agent {
             true
@@ -26,13 +66,7 @@ impl InstallTargets {
         if detected.has_selection() {
             detected
         } else {
-            Self {
-                codex: true,
-                claude_code: true,
-                cursor: true,
-                cline: true,
-                continue_agent: true,
-            }
+            Self::default_detected(project_root)
         }
     }
 }
@@ -493,6 +527,7 @@ the library is not indexed or the needed docs are not available.
    - `oz_search`: returns local file paths and line numbers.
    - `oz_pull`: materializes docs under `.codo/vendors`.
    - `oz_status`: lists pulled libraries.
+   - `oz_context`: returns capped inline snippets only when native file reads are unavailable.
    Even through MCP, prefer `oz_search` path results and then read files with
    native file tools.
 

@@ -28,6 +28,7 @@ from oz_api.retrieval_experiments import retrieval_variant
 from oz_api.retrieval_metrics import record_retrieval_latency
 from oz_api.retrieval import (
     RetrievalContext,
+    context as retrieval_context,
     search as retrieval_search,
     suggest as retrieval_suggest,
     unique_libraries_to_pull as retrieval_unique_libraries_to_pull,
@@ -284,7 +285,7 @@ async def suggest(request: Request):
     state = state_from_request(request)
     payload = await read_json_payload(request)
     query = str(payload.get("query", ""))
-    max_results = int(payload.get("max_results", 10))
+    max_results = bounded_int(payload.get("max_results"), default=10, minimum=1, maximum=50)
     fingerprint = str(payload.get("project_fingerprint", ""))
     variant = retrieval_variant(fingerprint)
     ctx = RetrievalContext.from_env(state.storage)
@@ -312,8 +313,9 @@ async def search(request: Request):
     payload = await read_json_payload(request)
     query = str(payload.get("query", ""))
     library_scope = payload.get("library_scope")
-    max_results = int(payload.get("max_results", 20))
+    max_results = bounded_int(payload.get("max_results"), default=20, minimum=1, maximum=50)
     fingerprint = str(payload.get("project_fingerprint", ""))
+    content_types = content_type_payload(payload)
     variant = retrieval_variant(fingerprint)
     ctx = RetrievalContext.from_env(state.storage)
     try:
@@ -323,6 +325,7 @@ async def search(request: Request):
             library_scope=library_scope,
             max_results=max_results,
             fingerprint=fingerprint,
+            content_types=content_types,
         )
     except VersionResolutionError as exc:
         return JSONResponse(exc.response_payload(), status_code=exc.status_code)
@@ -340,7 +343,81 @@ async def search(request: Request):
         "results": results,
         "libraries_to_pull": retrieval_unique_libraries_to_pull(results),
         "stale_libraries": stale_libraries_from_payload(state.storage, payload),
+        "retrieval_mode": retrieval_mode(results),
+        "degraded": any(bool(row.get("degraded")) for row in results),
     }
+
+
+@router.post("/context")
+async def context(request: Request):
+    started = time.perf_counter()
+    state = state_from_request(request)
+    payload = await read_json_payload(request)
+    query = str(payload.get("query", ""))
+    library_scope = payload.get("library_scope")
+    max_tokens = bounded_int(payload.get("max_tokens"), default=2000, minimum=100, maximum=8000)
+    max_results = bounded_int(payload.get("max_results"), default=8, minimum=1, maximum=20)
+    fingerprint = str(payload.get("project_fingerprint", ""))
+    content_types = content_type_payload(payload)
+    variant = retrieval_variant(fingerprint)
+    ctx = RetrievalContext.from_env(state.storage)
+    try:
+        result = retrieval_context(
+            ctx,
+            query,
+            library_scope=library_scope,
+            max_tokens=max_tokens,
+            max_results=max_results,
+            fingerprint=fingerprint,
+            content_types=content_types,
+        )
+    except VersionResolutionError as exc:
+        return JSONResponse(exc.response_payload(), status_code=exc.status_code)
+    finally:
+        record_retrieval_latency("context", variant, time.perf_counter() - started)
+    rows = result["results"]
+    record_usage_event(
+        principal_for_request(request),
+        "context",
+        library=str(library_scope or "") or None,
+        query_length=len(query),
+        result_count=len(rows),
+        project_fingerprint=fingerprint,
+    )
+    return {
+        **result,
+        "libraries_to_pull": retrieval_unique_libraries_to_pull(rows),
+        "stale_libraries": stale_libraries_from_payload(state.storage, payload),
+    }
+
+
+def bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def content_type_payload(payload: dict[str, object]) -> list[str] | None:
+    raw = payload.get("content_types", payload.get("content_type"))
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, list):
+        values = [str(item) for item in raw]
+    else:
+        return None
+    return [value for value in values if value.strip()] or None
+
+
+def retrieval_mode(results: list[dict[str, object]]) -> str:
+    for row in results:
+        mode = str(row.get("retrieval_mode") or "")
+        if mode:
+            return mode
+    return "unknown"
 
 
 @router.post("/index-request")

@@ -5,9 +5,10 @@ pub(crate) fn search_docs(
     project_root: &Path,
     query: &str,
     library_scope: Option<&str>,
+    max_results: usize,
+    content_type: Option<&str>,
     json: bool,
 ) -> Result<()> {
-    let vendors_root = project_root.join(VENDORS_DIR);
     ensure_project(project_root)?;
 
     let terms = normalize_query(query);
@@ -17,52 +18,30 @@ pub(crate) fn search_docs(
 
     let config = read_config()?;
     if configured_api_url(&config).is_some() {
-        return search_docs_remote(project_root, &config, query, library_scope, json);
+        return search_docs_remote(
+            project_root,
+            &config,
+            query,
+            library_scope,
+            max_results,
+            content_type,
+            json,
+        );
     }
 
-    let scope = library_scope.map(parse_library_scope).transpose()?;
-    let mut hits = search_vendor_tree(project_root, &vendors_root, &terms, &scope)?;
-
-    if hits.is_empty() {
-        if let Some(spec) = best_registry_match(project_root, &terms, &scope)? {
-            pull_library_impl(project_root, &spec, true)?;
-            hits = search_vendor_tree(project_root, &vendors_root, &terms, &scope)?;
-        }
-    }
-
-    hits.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then_with(|| a.path.cmp(&b.path))
-            .then(a.line.cmp(&b.line))
-    });
-
-    let mut seen_paths = HashSet::new();
-    let output = hits
-        .into_iter()
-        .filter(|hit| seen_paths.insert(hit.path.clone()))
-        .take(20)
-        .map(|hit| {
-            serde_json::json!({
-                "path": to_project_path(project_root, &hit.path),
-                "line": hit.line,
-                "score": hit.score,
-            })
-        })
-        .collect::<Vec<_>>();
+    let response = local_search_response(
+        project_root,
+        &terms,
+        library_scope,
+        max_results,
+        content_type,
+    )?;
 
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": output }))?
-        );
+        println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
-        for hit in &output {
-            println!(
-                "{}:{}",
-                hit["path"].as_str().unwrap_or_default(),
-                hit["line"].as_u64().unwrap_or_default()
-            );
+        for hit in &response.results {
+            println!("{}:{}", hit.path, hit.line.unwrap_or(1));
         }
     }
     emit_telemetry(
@@ -70,7 +49,7 @@ pub(crate) fn search_docs(
         "search_query",
         serde_json::json!({
             "query_length": query.len(),
-            "result_count": output.len(),
+            "result_count": response.results.len(),
             "library_scope": library_scope,
         }),
     );
@@ -83,6 +62,8 @@ pub(crate) fn context_docs(
     query: &str,
     library_scope: Option<&str>,
     max_tokens: usize,
+    max_results: usize,
+    content_type: Option<&str>,
     json: bool,
 ) -> Result<()> {
     ensure_project(project_root)?;
@@ -91,11 +72,25 @@ pub(crate) fn context_docs(
         bail!("context query must contain at least one alphanumeric term");
     }
     let config = read_config()?;
-    let hits = if configured_api_url(&config).is_some() {
-        remote_context_hits(project_root, &config, query, library_scope)?
-    } else {
-        local_context_hits(project_root, &terms, library_scope)?
-    };
+    if configured_api_url(&config).is_some() {
+        return context_docs_remote(
+            project_root,
+            &config,
+            query,
+            library_scope,
+            max_tokens,
+            max_results,
+            content_type,
+            json,
+        );
+    }
+    let hits = local_context_hits(
+        project_root,
+        &terms,
+        library_scope,
+        max_results,
+        content_type,
+    )?;
     let snippets = context_snippets(project_root, &hits, max_tokens)?;
     if json {
         println!(
@@ -129,6 +124,7 @@ pub(crate) fn search_docs_response(
     query: &str,
     library_scope: Option<&str>,
     max_results: usize,
+    content_type: Option<&str>,
 ) -> Result<SearchResponse> {
     ensure_project(project_root)?;
     let terms = normalize_query(query);
@@ -143,9 +139,79 @@ pub(crate) fn search_docs_response(
             query,
             library_scope,
             max_results,
+            content_type,
         );
     }
-    local_search_response(project_root, &terms, library_scope, max_results)
+    local_search_response(
+        project_root,
+        &terms,
+        library_scope,
+        max_results,
+        content_type,
+    )
+}
+
+pub(crate) fn context_docs_response(
+    project_root: &Path,
+    query: &str,
+    library_scope: Option<&str>,
+    max_tokens: usize,
+    max_results: usize,
+    content_type: Option<&str>,
+) -> Result<ContextResponse> {
+    ensure_project(project_root)?;
+    let terms = normalize_query(query);
+    if terms.is_empty() {
+        bail!("context query must contain at least one alphanumeric term");
+    }
+    let config = read_config()?;
+    if configured_api_url(&config).is_some() {
+        let response = remote_context_response(
+            project_root,
+            &config,
+            query,
+            library_scope,
+            max_tokens,
+            max_results,
+            content_type,
+        )?;
+        warn_stale_response(&response.stale_libraries);
+        return Ok(response);
+    }
+    let hits = local_context_hits(
+        project_root,
+        &terms,
+        library_scope,
+        max_results,
+        content_type,
+    )?;
+    let snippets = context_snippets(project_root, &hits, max_tokens)?;
+    let results = snippets
+        .into_iter()
+        .map(|snippet| ContextResult {
+            path: snippet["path"].as_str().unwrap_or_default().to_string(),
+            line: snippet["line"].as_u64().map(|value| value as usize),
+            score: serde_json::Value::Null,
+            library: String::new(),
+            version: String::new(),
+            matched_path: None,
+            source_anchor: None,
+            content_type: None,
+            heading_path: Vec::new(),
+            symbols: Vec::new(),
+            token_count: snippet["token_count"].as_u64().unwrap_or_default() as usize,
+            snippet: snippet["snippet"].as_str().unwrap_or_default().to_string(),
+            retrieval_mode: Some("local_grep".to_string()),
+            degraded: false,
+        })
+        .collect();
+    Ok(ContextResponse {
+        results,
+        libraries_to_pull: Vec::new(),
+        stale_libraries: Vec::new(),
+        retrieval_mode: Some("local_grep".to_string()),
+        degraded: false,
+    })
 }
 
 fn search_docs_remote(
@@ -153,8 +219,11 @@ fn search_docs_remote(
     config: &OzConfig,
     query: &str,
     library_scope: Option<&str>,
+    max_results: usize,
+    content_type: Option<&str>,
     json: bool,
 ) -> Result<()> {
+    let max_results = clamp_max_results(max_results, 1, 50);
     let mut selected_library = None;
     let mut response = if library_scope.is_none() {
         let suggestions = remote_suggestions(project_root, config, query, 5)?;
@@ -163,9 +232,23 @@ fn search_docs_remote(
             let spec = format!("{scope}@{}", suggestion.version);
             pull_library_impl(project_root, &spec, true)?;
             selected_library = Some(scope.clone());
-            remote_search_with_pulls(project_root, config, query, Some(&scope), 20)?
+            remote_search_with_pulls(
+                project_root,
+                config,
+                query,
+                Some(&scope),
+                max_results,
+                content_type,
+            )?
         } else if !suggestions.is_empty() {
-            let fallback = remote_search_with_pulls(project_root, config, query, None, 20)?;
+            let fallback = remote_search_with_pulls(
+                project_root,
+                config,
+                query,
+                None,
+                max_results,
+                content_type,
+            )?;
             if fallback.results.is_empty() {
                 if json {
                     println!(
@@ -183,10 +266,17 @@ fn search_docs_remote(
             }
             fallback
         } else {
-            remote_search_with_pulls(project_root, config, query, None, 20)?
+            remote_search_with_pulls(project_root, config, query, None, max_results, content_type)?
         }
     } else {
-        remote_search_with_pulls(project_root, config, query, library_scope, 20)?
+        remote_search_with_pulls(
+            project_root,
+            config,
+            query,
+            library_scope,
+            max_results,
+            content_type,
+        )?
     };
 
     if response.results.is_empty() && library_scope.is_some() {
@@ -195,12 +285,19 @@ fn search_docs_remote(
             if resolved_scope != scope {
                 selected_library = Some(resolved_scope.clone());
             }
-            response =
-                remote_search_with_pulls(project_root, config, query, Some(&resolved_scope), 20)?;
+            response = remote_search_with_pulls(
+                project_root,
+                config,
+                query,
+                Some(&resolved_scope),
+                max_results,
+                content_type,
+            )?;
         }
     }
 
     warn_stale_response(&response.stale_libraries);
+    warn_degraded_response(&response);
     if json {
         let mut value = serde_json::to_value(&response)?;
         if let Some(scope) = selected_library {
@@ -237,19 +334,35 @@ fn search_docs_remote_response(
     query: &str,
     library_scope: Option<&str>,
     max_results: usize,
+    content_type: Option<&str>,
 ) -> Result<SearchResponse> {
+    let max_results = clamp_max_results(max_results, 1, 50);
     let mut response = if library_scope.is_none() {
         let suggestions = remote_suggestions(project_root, config, query, 5)?;
         if let Some(suggestion) = auto_select_suggestion(&suggestions) {
             let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
             let spec = format!("{scope}@{}", suggestion.version);
             pull_library_impl(project_root, &spec, true)?;
-            remote_search_with_pulls(project_root, config, query, Some(&scope), max_results)?
+            remote_search_with_pulls(
+                project_root,
+                config,
+                query,
+                Some(&scope),
+                max_results,
+                content_type,
+            )?
         } else {
-            remote_search_with_pulls(project_root, config, query, None, max_results)?
+            remote_search_with_pulls(project_root, config, query, None, max_results, content_type)?
         }
     } else {
-        remote_search_with_pulls(project_root, config, query, library_scope, max_results)?
+        remote_search_with_pulls(
+            project_root,
+            config,
+            query,
+            library_scope,
+            max_results,
+            content_type,
+        )?
     };
 
     if response.results.is_empty() && library_scope.is_some() {
@@ -261,45 +374,98 @@ fn search_docs_remote_response(
                 query,
                 Some(&resolved_scope),
                 max_results,
+                content_type,
             )?;
         }
     }
     warn_stale_response(&response.stale_libraries);
+    warn_degraded_response(&response);
     Ok(response)
 }
 
-fn remote_context_hits(
+fn context_docs_remote(
     project_root: &Path,
     config: &OzConfig,
     query: &str,
     library_scope: Option<&str>,
-) -> Result<Vec<(String, usize)>> {
-    let mut response = if library_scope.is_none() {
-        let suggestions = remote_suggestions(project_root, config, query, 5)?;
-        if let Some(suggestion) = auto_select_suggestion(&suggestions) {
-            let scope = format!("{}/{}", suggestion.vendor, suggestion.library);
-            let spec = format!("{scope}@{}", suggestion.version);
-            pull_library_impl(project_root, &spec, true)?;
-            remote_search_with_pulls(project_root, config, query, Some(&scope), 20)?
-        } else {
-            remote_search_with_pulls(project_root, config, query, None, 20)?
-        }
+    max_tokens: usize,
+    max_results: usize,
+    content_type: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let response = remote_context_response(
+        project_root,
+        config,
+        query,
+        library_scope,
+        max_tokens,
+        max_results,
+        content_type,
+    )?;
+    warn_stale_response(&response.stale_libraries);
+    if response.degraded {
+        eprintln!(
+            "oz: retrieval degraded ({})",
+            response.retrieval_mode.as_deref().unwrap_or("unknown")
+        );
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
-        remote_search_with_pulls(project_root, config, query, library_scope, 20)?
-    };
-    if response.results.is_empty() && library_scope.is_some() {
-        let scope = library_scope.expect("checked is_some");
-        if let Some(resolved_scope) = pull_scope_or_suggest(project_root, config, query, scope)? {
-            response =
-                remote_search_with_pulls(project_root, config, query, Some(&resolved_scope), 20)?;
+        for snippet in &response.results {
+            println!(
+                "{}:{}{}\n{}\n",
+                snippet.path,
+                snippet.line.unwrap_or(1),
+                snippet
+                    .content_type
+                    .as_deref()
+                    .map(|kind| format!(" [{kind}]"))
+                    .unwrap_or_default(),
+                snippet.snippet
+            );
         }
     }
-    warn_stale_response(&response.stale_libraries);
-    Ok(response
-        .results
-        .into_iter()
-        .map(|row| (row.path, row.line.unwrap_or(1)))
-        .collect())
+    emit_telemetry(
+        config,
+        "context_query",
+        serde_json::json!({
+            "query_length": query.len(),
+            "result_count": response.results.len(),
+            "library_scope": library_scope,
+        }),
+    );
+    Ok(())
+}
+
+fn remote_context_response(
+    project_root: &Path,
+    config: &OzConfig,
+    query: &str,
+    library_scope: Option<&str>,
+    max_tokens: usize,
+    max_results: usize,
+    content_type: Option<&str>,
+) -> Result<ContextResponse> {
+    let lock = read_lock(project_root)?;
+    let response: ContextResponse = api_post_json(
+        config,
+        "/context",
+        serde_json::json!({
+            "query": query,
+            "project_fingerprint": lock.project_fingerprint,
+            "library_scope": library_scope,
+            "max_tokens": max_tokens,
+            "max_results": clamp_max_results(max_results, 1, 20),
+            "content_types": content_type.map(|value| vec![value.to_string()]),
+            "installed_libraries": installed_libraries_payload(&lock),
+        }),
+    )?;
+    for library in &response.libraries_to_pull {
+        let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
+        pull_library_impl(project_root, &spec, true)?;
+    }
+    Ok(response)
 }
 
 pub(crate) fn remote_search_with_pulls(
@@ -308,6 +474,7 @@ pub(crate) fn remote_search_with_pulls(
     query: &str,
     library_scope: Option<&str>,
     max_results: usize,
+    content_type: Option<&str>,
 ) -> Result<SearchResponse> {
     let lock = read_lock(project_root)?;
     let mut response: SearchResponse = api_post_json(
@@ -318,7 +485,8 @@ pub(crate) fn remote_search_with_pulls(
             "project_fingerprint": lock.project_fingerprint,
             "installed_libraries": installed_libraries_payload(&lock),
             "library_scope": library_scope,
-            "max_results": max_results,
+            "max_results": clamp_max_results(max_results, 1, 50),
+            "content_types": content_type.map(|value| vec![value.to_string()]),
         }),
     )?;
     for library in &response.libraries_to_pull {
@@ -362,15 +530,17 @@ pub(crate) fn remote_suggestions(
 fn auto_select_suggestion(suggestions: &[SuggestResult]) -> Option<&SuggestResult> {
     let first = suggestions.first()?;
     let first_score = score_as_f64(&first.score);
+    let minimum_score = if first_score <= 1.0 { 0.78 } else { 8.0 };
     if suggestions.len() == 1 {
-        return (first_score > 0.0).then_some(first);
+        return (first_score >= minimum_score).then_some(first);
     }
     let second_score = suggestions
         .get(1)
         .map(|suggestion| score_as_f64(&suggestion.score))
         .unwrap_or(0.0);
-    let normalized_confident = first_score <= 1.0 && first_score >= 0.75;
-    let clearly_separated = first_score > 0.0 && first_score >= second_score * 1.25;
+    let normalized_confident =
+        first_score <= 1.0 && first_score >= minimum_score && first_score >= second_score + 0.12;
+    let clearly_separated = first_score >= minimum_score && first_score >= second_score * 1.35;
     if normalized_confident || clearly_separated {
         Some(first)
     } else {
@@ -384,6 +554,25 @@ fn score_as_f64(value: &serde_json::Value) -> f64 {
         .or_else(|| value.as_i64().map(|item| item as f64))
         .or_else(|| value.as_u64().map(|item| item as f64))
         .unwrap_or(0.0)
+}
+
+fn clamp_max_results(value: usize, min: usize, max: usize) -> usize {
+    value.clamp(min, max)
+}
+
+fn content_type_matches(actual: &str, requested: Option<&str>) -> bool {
+    requested
+        .map(|requested| actual == requested)
+        .unwrap_or(true)
+}
+
+fn warn_degraded_response(response: &SearchResponse) {
+    if response.degraded {
+        eprintln!(
+            "oz: retrieval degraded ({})",
+            response.retrieval_mode.as_deref().unwrap_or("unknown")
+        );
+    }
 }
 
 fn actionable_suggestions(query: &str, suggestions: &[SuggestResult]) -> Vec<serde_json::Value> {
@@ -448,6 +637,7 @@ fn local_search_response(
     terms: &[String],
     library_scope: Option<&str>,
     max_results: usize,
+    content_type: Option<&str>,
 ) -> Result<SearchResponse> {
     let scope = library_scope.map(parse_library_scope).transpose()?;
     let mut hits =
@@ -468,8 +658,9 @@ fn local_search_response(
     let mut seen_paths = HashSet::new();
     let results = hits
         .into_iter()
+        .filter(|hit| content_type_matches(&hit.content_type, content_type))
         .filter(|hit| seen_paths.insert(hit.path.clone()))
-        .take(max_results)
+        .take(clamp_max_results(max_results, 1, 50))
         .map(|hit| {
             let (library, version) = library_from_path(project_root, &hit.path);
             SearchResult {
@@ -478,6 +669,15 @@ fn local_search_response(
                 score: serde_json::json!(hit.score),
                 library,
                 version,
+                vendor: None,
+                matched_path: None,
+                source_anchor: None,
+                content_type: Some(hit.content_type),
+                heading_path: Vec::new(),
+                symbols: Vec::new(),
+                token_count: None,
+                retrieval_mode: Some("local_grep".to_string()),
+                degraded: false,
             }
         })
         .collect();
@@ -485,6 +685,8 @@ fn local_search_response(
         results,
         libraries_to_pull: Vec::new(),
         stale_libraries: Vec::new(),
+        retrieval_mode: Some("local_grep".to_string()),
+        degraded: false,
     })
 }
 
@@ -508,7 +710,9 @@ fn local_context_hits(
     project_root: &Path,
     terms: &[String],
     library_scope: Option<&str>,
-) -> Result<Vec<(String, usize)>> {
+    max_results: usize,
+    content_type: Option<&str>,
+) -> Result<Vec<LocalContextHit>> {
     let scope = library_scope.map(parse_library_scope).transpose()?;
     let mut hits =
         search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
@@ -528,36 +732,54 @@ fn local_context_hits(
     let mut seen = HashSet::new();
     Ok(hits
         .into_iter()
+        .filter(|hit| content_type_matches(&hit.content_type, content_type))
         .filter(|hit| seen.insert(hit.path.clone()))
-        .take(20)
-        .map(|hit| (to_project_path(project_root, &hit.path), hit.line))
+        .take(clamp_max_results(max_results, 1, 20))
+        .map(|hit| LocalContextHit {
+            path: to_project_path(project_root, &hit.path),
+            line: hit.line,
+            snippet: hit.snippet,
+            content_type: hit.content_type,
+        })
         .collect())
+}
+
+struct LocalContextHit {
+    path: String,
+    line: usize,
+    snippet: Option<String>,
+    content_type: String,
 }
 
 fn context_snippets(
     project_root: &Path,
-    hits: &[(String, usize)],
+    hits: &[LocalContextHit],
     max_tokens: usize,
 ) -> Result<Vec<serde_json::Value>> {
     let mut remaining = max_tokens.max(1);
     let mut output = Vec::new();
-    for (path, line) in hits {
+    for hit in hits {
         if remaining == 0 {
             break;
         }
-        let file_path = project_root.join(path);
-        if !file_path.exists() {
-            continue;
-        }
-        let snippet = snippet_at_line(&file_path, *line, remaining)?;
+        let snippet = if let Some(snippet) = &hit.snippet {
+            trim_snippet_to_budget(&strip_frontmatter_and_source(snippet), remaining)
+        } else {
+            let file_path = project_root.join(&hit.path);
+            if !file_path.exists() {
+                continue;
+            }
+            snippet_at_line(&file_path, hit.line, remaining)?
+        };
         let tokens = approximate_tokens(&snippet);
         if tokens == 0 {
             continue;
         }
         remaining = remaining.saturating_sub(tokens);
         output.push(serde_json::json!({
-            "path": path,
-            "line": line,
+            "path": hit.path,
+            "line": hit.line,
+            "content_type": hit.content_type,
             "token_count": tokens,
             "snippet": snippet,
         }));
@@ -565,9 +787,34 @@ fn context_snippets(
     Ok(output)
 }
 
+fn trim_snippet_to_budget(snippet: &str, max_tokens: usize) -> String {
+    if approximate_tokens(snippet) <= max_tokens {
+        return snippet.trim().to_string();
+    }
+    let mut selected = Vec::new();
+    let mut tokens = 0;
+    let mut in_fence = false;
+    for line in snippet.lines() {
+        let line_tokens = approximate_tokens(line);
+        if tokens > 0 && !in_fence && tokens + line_tokens > max_tokens {
+            break;
+        }
+        selected.push(line);
+        tokens += line_tokens;
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+        }
+    }
+    if in_fence {
+        selected.push("```");
+    }
+    selected.join("\n").trim().to_string()
+}
+
 fn snippet_at_line(path: &Path, line: usize, max_tokens: usize) -> Result<String> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let content = strip_frontmatter_and_source(&content);
     let lines = content.lines().collect::<Vec<_>>();
     if lines.is_empty() {
         return Ok(String::new());
@@ -576,15 +823,68 @@ fn snippet_at_line(path: &Path, line: usize, max_tokens: usize) -> Result<String
     let start = center.saturating_sub(8);
     let mut selected = Vec::new();
     let mut tokens = 0;
+    let mut in_fence = false;
     for item in lines.iter().skip(start) {
         let line_tokens = approximate_tokens(item);
-        if tokens > 0 && tokens + line_tokens > max_tokens.min(420) {
+        if tokens > 0 && !in_fence && tokens + line_tokens > max_tokens.min(900) {
             break;
         }
         selected.push(*item);
         tokens += line_tokens;
+        if item.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+        }
+        if tokens >= max_tokens && !in_fence {
+            break;
+        }
+    }
+    if in_fence {
+        selected.push("```");
     }
     Ok(selected.join("\n").trim().to_string())
+}
+
+fn strip_frontmatter_and_source(content: &str) -> String {
+    let mut lines = content.lines().collect::<Vec<_>>();
+    if let Some(start) = lines.iter().take(12).position(|line| line.trim() == "---") {
+        if let Some(end) = lines
+            .iter()
+            .skip(start + 1)
+            .position(|line| line.trim() == "---")
+        {
+            lines.drain(start..=start + end + 1);
+        }
+    }
+    let filtered = lines
+        .into_iter()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("Source:")
+                && !trimmed.starts_with("**Source:**")
+                && !trimmed.starts_with("title:")
+                && !trimmed.starts_with("description:")
+                && !trimmed.starts_with("url:")
+                && !trimmed.starts_with("version:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    collapse_repeated_heading(&filtered)
+}
+
+fn collapse_repeated_heading(content: &str) -> String {
+    let mut output = Vec::new();
+    let mut last_heading = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            if trimmed == last_heading {
+                continue;
+            }
+            last_heading = trimmed.to_string();
+        }
+        output.push(line);
+    }
+    output.join("\n").trim().to_string()
 }
 
 fn approximate_tokens(text: &str) -> usize {
@@ -678,6 +978,15 @@ fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) 
             path: library_root.join(relative_path),
             line,
             score,
+            content_type: row
+                .get("content_type")
+                .and_then(|value| value.as_str())
+                .unwrap_or("guide")
+                .to_string(),
+            snippet: row
+                .get("text")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
             preview: row
                 .get("text")
                 .and_then(|value| value.as_str())
@@ -738,6 +1047,8 @@ fn collect_symbol_hits(
             path: entry.path().to_path_buf(),
             line: 1,
             score,
+            content_type: "api_reference".to_string(),
+            snippet: Some(content.clone()),
             preview: content
                 .lines()
                 .next()
@@ -791,6 +1102,8 @@ fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -
                 path: path.to_path_buf(),
                 line: idx + 1,
                 score,
+                content_type: "guide".to_string(),
+                snippet: None,
                 preview: line.trim().chars().take(160).collect(),
             });
         }
@@ -860,14 +1173,25 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         "index" => 0,
         _ => 0,
     };
+    let specific_query = terms.len() >= 3;
+    let overview_penalty = if specific_query && shallow_overview_path(&path) {
+        28
+    } else {
+        0
+    };
     let score = (text_hits.min(80))
         + (distinct_text_hits * 18)
         + coverage_bonus
-        + (path_hits * 10)
+        + (path_hits * 25)
         + (heading_hits * 16)
-        + (symbol_hits * 35)
+        + (symbol_hits * 70)
         + type_bonus;
-    score.saturating_sub(path_penalty)
+    score.saturating_sub(path_penalty + overview_penalty)
+}
+
+fn shallow_overview_path(path: &str) -> bool {
+    let segments = path.split('/').filter(|part| !part.is_empty()).count();
+    (path.starts_with("guides/") || path.starts_with("api-reference/")) && segments <= 2
 }
 
 fn json_string(row: &serde_json::Value, key: &str) -> String {

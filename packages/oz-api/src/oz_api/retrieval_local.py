@@ -41,6 +41,7 @@ def search_from_fixtures(
     *,
     library_scope: str | None,
     max_results: int,
+    content_types: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     terms = normalize_query(query)
     scope = parse_versioned_scope(library_scope)
@@ -56,6 +57,8 @@ def search_from_fixtures(
         chunk_path = fixture / "_chunks.jsonl"
         if chunk_path.exists():
             for row in read_jsonl(chunk_path):
+                if content_types and str(row.get("content_type") or "guide") not in content_types:
+                    continue
                 score = local_chunk_score(row, terms)
                 if score <= 0:
                     continue
@@ -67,9 +70,19 @@ def search_from_fixtures(
                         "library": f"{vendor}/{library}",
                         "vendor": vendor,
                         "version": version,
+                        "matched_path": row.get("path"),
+                        "source_anchor": row.get("source_anchor") or row.get("source_url"),
+                        "content_type": row.get("content_type", "guide"),
+                        "heading_path": row.get("heading_path", []),
+                        "symbols": row.get("symbols", []),
+                        "token_count": int(row.get("token_count") or 0),
+                        "_matched_text": row.get("text", ""),
+                        "_parent_text": row.get("text", ""),
                     }
                 )
             for row in symbol_rows(fixture):
+                if content_types and str(row.get("content_type") or "api_reference") not in content_types:
+                    continue
                 score = local_chunk_score(row, terms)
                 if score <= 0:
                     continue
@@ -81,10 +94,20 @@ def search_from_fixtures(
                         "library": f"{vendor}/{library}",
                         "vendor": vendor,
                         "version": version,
+                        "matched_path": row.get("path"),
+                        "source_anchor": row.get("source_anchor") or row.get("source_url"),
+                        "content_type": row.get("content_type", "api_reference"),
+                        "heading_path": row.get("heading_path", []),
+                        "symbols": row.get("symbols", []),
+                        "token_count": int(row.get("token_count") or 0),
+                        "_matched_text": row.get("text", ""),
+                        "_parent_text": row.get("text", ""),
                     }
                 )
             continue
         for path in fixture.rglob("*.md"):
+            if content_types and "guide" not in content_types:
+                continue
             relative = path.relative_to(fixture)
             content = path.read_text(encoding="utf-8")
             score = local_markdown_score(content, relative.as_posix(), terms)
@@ -98,6 +121,14 @@ def search_from_fixtures(
                     "library": f"{vendor}/{library}",
                     "vendor": vendor,
                     "version": version,
+                    "matched_path": relative.as_posix(),
+                    "source_anchor": None,
+                    "content_type": "guide",
+                    "heading_path": [],
+                    "symbols": [],
+                    "token_count": 0,
+                    "_matched_text": content,
+                    "_parent_text": content,
                 }
             )
 

@@ -24,9 +24,12 @@ def maybe_rerank(
     query: str,
     fingerprint: str,
     rows: list[dict[str, Any]],
+    *,
+    strip_private: bool = True,
 ) -> list[dict[str, Any]]:
     if len(rows) < 2 or clear_winner(rows):
-        return strip_private_fields(boost_query_matches(query, rows))
+        boosted = boost_query_matches(query, rows)
+        return strip_private_fields(boosted) if strip_private else boosted
 
     cache_key = rerank_cache_key(route, query, fingerprint, rows)
     cached = get_rerank_cache(cache_key)
@@ -39,7 +42,8 @@ def maybe_rerank(
     if len(reranked) < len(rows):
         seen = {id(row) for row in reranked}
         reranked.extend(row for row in rows if id(row) not in seen)
-    cleaned = strip_private_fields(boost_query_matches(query, reranked))
+    boosted = boost_query_matches(query, reranked)
+    cleaned = strip_private_fields(boosted) if strip_private else boosted
     put_rerank_cache(cache_key, cleaned)
     return cleaned
 

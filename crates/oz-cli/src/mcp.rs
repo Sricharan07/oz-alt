@@ -105,7 +105,23 @@ fn mcp_tools() -> Vec<serde_json::Value> {
                 "properties": {
                     "query": {"type": "string"},
                     "library": {"type": "string", "description": "Optional vendor/library scope, for example vercel/next.js"},
-                    "max_results": {"type": "integer", "minimum": 1, "maximum": 50}
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "content_type": {"type": "string", "description": "Optional filter such as code_example or api_reference"}
+                },
+                "required": ["query"]
+            }
+        }),
+        serde_json::json!({
+            "name": "oz_context",
+            "description": "Return capped inline Oz snippets only when the agent cannot efficiently read local files. Prefer oz_search first because it uses less context.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "library": {"type": "string", "description": "Optional vendor/library scope, for example vercel/next.js"},
+                    "max_tokens": {"type": "integer", "minimum": 100, "maximum": 8000},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 20},
+                    "content_type": {"type": "string", "description": "Optional filter such as code_example or api_reference"}
                 },
                 "required": ["query"]
             }
@@ -145,17 +161,29 @@ fn call_mcp_tool(project_root: &Path, params: serde_json::Value) -> Result<serde
                 .and_then(|value| value.as_str())
                 .context("oz_search requires query")?;
             let library = arguments.get("library").and_then(|value| value.as_str());
+            let content_type = arguments
+                .get("content_type")
+                .and_then(|value| value.as_str());
             let max_results = arguments
                 .get("max_results")
                 .and_then(|value| value.as_u64())
                 .unwrap_or(10)
                 .clamp(1, 50) as usize;
-            let response = search_docs_response(project_root, query, library, max_results)?;
+            let response =
+                search_docs_response(project_root, query, library, max_results, content_type)?;
             let mut lines = response
                 .results
                 .iter()
                 .map(|result| match result.line {
-                    Some(line) => format!("{}:{line}", result.path),
+                    Some(line) => format!(
+                        "{}:{line}{}",
+                        result.path,
+                        result
+                            .content_type
+                            .as_deref()
+                            .map(|kind| format!(" [{kind}]"))
+                            .unwrap_or_default()
+                    ),
                     None => result.path.clone(),
                 })
                 .collect::<Vec<_>>();
@@ -163,6 +191,55 @@ fn call_mcp_tool(project_root: &Path, params: serde_json::Value) -> Result<serde
                 lines.push("no matching Oz docs found".to_string());
             }
             Ok(text_tool_result(lines.join("\n")))
+        }
+        "oz_context" => {
+            let query = arguments
+                .get("query")
+                .and_then(|value| value.as_str())
+                .context("oz_context requires query")?;
+            let library = arguments.get("library").and_then(|value| value.as_str());
+            let content_type = arguments
+                .get("content_type")
+                .and_then(|value| value.as_str());
+            let max_tokens = arguments
+                .get("max_tokens")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(2000)
+                .clamp(100, 8000) as usize;
+            let max_results = arguments
+                .get("max_results")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(8)
+                .clamp(1, 20) as usize;
+            let response = context_docs_response(
+                project_root,
+                query,
+                library,
+                max_tokens,
+                max_results,
+                content_type,
+            )?;
+            let mut blocks = response
+                .results
+                .iter()
+                .map(|snippet| {
+                    format!(
+                        "{}:{}{}\n{}",
+                        snippet.path,
+                        snippet.line.unwrap_or(1),
+                        snippet
+                            .content_type
+                            .as_deref()
+                            .map(|kind| format!(" [{kind}]"))
+                            .unwrap_or_default(),
+                        snippet.snippet
+                    )
+                })
+                .collect::<Vec<_>>();
+            if blocks.is_empty() {
+                blocks.push("no matching Oz context found".to_string());
+            }
+            Ok(text_tool_result(blocks.join("\n\n")))
         }
         "oz_pull" => {
             let library = arguments
@@ -227,6 +304,9 @@ mod tests {
                     .map(str::to_string)
             })
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["oz_search", "oz_pull", "oz_status"]);
+        assert_eq!(
+            names,
+            vec!["oz_search", "oz_context", "oz_pull", "oz_status"]
+        );
     }
 }

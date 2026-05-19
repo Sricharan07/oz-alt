@@ -58,6 +58,7 @@ the library is not indexed or the needed docs are not available.
    - `oz_search`: returns local file paths and line numbers.
    - `oz_pull`: materializes docs under `.codo/vendors`.
    - `oz_status`: lists pulled libraries.
+   - `oz_context`: returns capped inline snippets only when native file reads are unavailable.
    Even through MCP, prefer `oz_search` path results and then read files with
    native file tools.
 

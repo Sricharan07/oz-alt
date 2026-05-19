@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use oz_objects::{
     ingest_directory, ingest_pack, ingest_pack_bytes, materialize_tree, sha256_hex, write_pack,
 };
@@ -72,6 +72,10 @@ enum Command {
         /// Do not install agent instructions.
         #[arg(long)]
         skip_install: bool,
+
+        /// Which agent integrations to install.
+        #[arg(long, value_enum, default_value_t = AgentInstallMode::Detected)]
+        agents: AgentInstallMode,
     },
 
     /// Log in to an Oz registry API and store a local token.
@@ -108,6 +112,14 @@ enum Command {
         /// Optional library scope, for example vercel/next.js.
         library: Option<String>,
 
+        /// Maximum number of path results to return.
+        #[arg(long, default_value_t = 20)]
+        max_results: usize,
+
+        /// Restrict results to one content type, for example code_example or api_reference.
+        #[arg(long = "type")]
+        content_type: Option<String>,
+
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -124,6 +136,14 @@ enum Command {
         /// Maximum approximate tokens to print.
         #[arg(long, default_value_t = 2000)]
         max_tokens: usize,
+
+        /// Maximum number of snippets to return.
+        #[arg(long, default_value_t = 8)]
+        max_results: usize,
+
+        /// Restrict snippets to one content type, for example code_example or api_reference.
+        #[arg(long = "type")]
+        content_type: Option<String>,
 
         /// Print machine-readable JSON.
         #[arg(long)]
@@ -211,6 +231,16 @@ enum RegistryCommand {
 
     /// Build .ozpack files for every local fixture and refresh the catalog.
     BuildPacks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum AgentInstallMode {
+    /// Install only detected agent integrations; if none are detected, install Codex instructions.
+    Detected,
+    /// Install every supported agent integration.
+    All,
+    /// Do not install agent integrations.
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -309,6 +339,8 @@ struct SearchHit {
     line: usize,
     score: usize,
     preview: String,
+    content_type: String,
+    snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -349,6 +381,10 @@ struct SearchResponse {
     results: Vec<SearchResult>,
     libraries_to_pull: Vec<LibraryToPull>,
     stale_libraries: Vec<StaleLibrary>,
+    #[serde(default)]
+    retrieval_mode: Option<String>,
+    #[serde(default)]
+    degraded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +394,65 @@ struct SearchResult {
     score: serde_json::Value,
     library: String,
     version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    matched_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    heading_path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retrieval_mode: Option<String>,
+    #[serde(default)]
+    degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContextResponse {
+    results: Vec<ContextResult>,
+    #[serde(default)]
+    libraries_to_pull: Vec<LibraryToPull>,
+    #[serde(default)]
+    stale_libraries: Vec<StaleLibrary>,
+    #[serde(default)]
+    retrieval_mode: Option<String>,
+    #[serde(default)]
+    degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContextResult {
+    path: String,
+    line: Option<usize>,
+    #[serde(default)]
+    score: serde_json::Value,
+    #[serde(default)]
+    library: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    matched_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    heading_path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<String>,
+    token_count: usize,
+    snippet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retrieval_mode: Option<String>,
+    #[serde(default)]
+    degraded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,7 +503,14 @@ fn main() -> Result<()> {
             api_url,
             skip_login,
             skip_install,
-        } => setup(&project_root, api_url.as_deref(), skip_login, skip_install)?,
+            agents,
+        } => setup(
+            &project_root,
+            api_url.as_deref(),
+            skip_login,
+            skip_install,
+            agents,
+        )?,
         Command::Login { api_url } => login(api_url.as_deref())?,
         Command::Init => init_project(&project_root)?,
         Command::Pull { libraries } => {
@@ -423,14 +525,33 @@ fn main() -> Result<()> {
         Command::Search {
             query,
             library,
+            max_results,
+            content_type,
             json,
-        } => search_docs(&project_root, &query, library.as_deref(), json)?,
+        } => search_docs(
+            &project_root,
+            &query,
+            library.as_deref(),
+            max_results,
+            content_type.as_deref(),
+            json,
+        )?,
         Command::Context {
             query,
             library,
             max_tokens,
+            max_results,
+            content_type,
             json,
-        } => context_docs(&project_root, &query, library.as_deref(), max_tokens, json)?,
+        } => context_docs(
+            &project_root,
+            &query,
+            library.as_deref(),
+            max_tokens,
+            max_results,
+            content_type.as_deref(),
+            json,
+        )?,
         Command::Status => print_status(&project_root)?,
         Command::Mcp => run_mcp_server(&project_root)?,
         Command::Update { library } => update_libraries(&project_root, library.as_deref())?,
@@ -628,5 +749,34 @@ mod tests {
     fn parses_mcp_command() {
         let cli = Cli::try_parse_from(["oz", "mcp"]).unwrap();
         assert!(matches!(cli.command, Command::Mcp));
+    }
+
+    #[test]
+    fn parses_search_controls() {
+        let cli = Cli::try_parse_from([
+            "oz",
+            "search",
+            "cookies",
+            "vercel/next.js",
+            "--max-results",
+            "5",
+            "--type",
+            "code_example",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Search {
+                max_results,
+                content_type,
+                json,
+                ..
+            } => {
+                assert_eq!(max_results, 5);
+                assert_eq!(content_type.as_deref(), Some("code_example"));
+                assert!(json);
+            }
+            _ => panic!("expected search command"),
+        }
     }
 }
