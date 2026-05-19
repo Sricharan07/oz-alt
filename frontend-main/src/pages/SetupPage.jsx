@@ -38,9 +38,9 @@ Then read files under .codo/vendors with rg, glob, and read.`}
         <CommandBlock
           lines={[
             'oz suggest "stripe webhook signature verification"',
-            "oz pull stripe/stripe-node",
-            'oz search "verify webhook signature express" stripe/stripe-node',
-            "rg \"constructEvent\" .codo/vendors/stripe/stripe-node@*/"
+            "oz pull stripe/stripe",
+            'oz search "verify webhook signature express" stripe/stripe',
+            "rg \"constructEvent\" .codo/vendors/stripe/stripe@*/"
           ]}
         />
       </Panel>
@@ -51,9 +51,10 @@ Then read files under .codo/vendors with rg, glob, and read.`}
           {`- uses: Sricharan07/oz/.github/actions/setup-oz@v0.1.5
   with:
     api-url: https://api.tryoz.dev
+    auth-token: \${{ secrets.OZ_AUTH_TOKEN }}
     pull: vercel/next.js facebook/react
-  env:
-    OZ_AUTH_TOKEN: \${{ secrets.OZ_AUTH_TOKEN }}`}
+    search: "middleware cookies"
+    search-library: vercel/next.js`}
         </CodeBlock>
       </Panel>
     </Page>

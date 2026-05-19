@@ -11,7 +11,7 @@ import {
   SimpleTable,
   SkeletonRows
 } from "../components/ui/index.js";
-import { bytes, compactNumber, dateText, integer, percent } from "../format.js";
+import { bytesOrUnknown, compactNumber, dateText, integer, percent } from "../format.js";
 import { useAsync } from "../hooks/useAsync.js";
 
 export function LibraryDetailPage() {
@@ -60,7 +60,7 @@ export function LibraryDetailPage() {
             rows={[
               ["Indexed", dateText(data.indexed_at)],
               ["Last crawled", dateText(data.last_crawled_at)],
-              ["Pack size", bytes(data.pack_bytes)],
+              ["Pack size", bytesOrUnknown(data.pack_bytes)],
               ["Benchmark", percent(data.benchmark_score)],
               ["Trust", percent(data.trust_score)],
               ["Ref", data.ref_sha || "Not recorded"]
@@ -81,7 +81,7 @@ export function LibraryDetailPage() {
           <SectionHeader title="Versions" />
           <SimpleTable
             columns={["Version", "Chunks", "Indexed"]}
-            rows={(data.versions || []).map((row) => [row.version, integer(row.chunk_count), dateText(row.indexed_at)])}
+            rows={(data.versions || []).map((row) => [row.version, integer(row.chunk_count), dateText(row.indexed_at || row.last_crawled_at)])}
           />
         </Panel>
       </div>

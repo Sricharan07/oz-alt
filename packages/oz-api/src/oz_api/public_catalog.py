@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from oz_api.auth_store import AuthStore
 from oz_api.storage import RegistryStorage
 from oz_api.versions import available_versions, resolve_catalog_entry
 
+LOGGER = logging.getLogger(__name__)
+
 
 def public_library_rows(storage: RegistryStorage) -> list[dict[str, Any]]:
     rows = db_rows(
         """
         select v.name as vendor, l.name as library, l.description, l.source_url,
-               lv.version, lv.ref_sha, lv.indexed_at::text as indexed_at,
+               lv.version, lv.ref_sha, coalesce(lv.indexed_at, lv.last_crawled_at)::text as indexed_at,
                lv.last_crawled_at::text as last_crawled_at,
                lv.benchmark_score, coalesce(ts.value, 0) as trust_score,
                count(c.id)::bigint as chunk_count,
@@ -32,7 +35,8 @@ def public_library_rows(storage: RegistryStorage) -> list[dict[str, Any]]:
         group by v.name, l.name, l.description, l.source_url, lv.version, lv.ref_sha,
                  lv.indexed_at, lv.last_crawled_at, lv.benchmark_score, ts.value
         order by v.name, l.name
-        """
+        """,
+        {"version": ""},
     )
     if rows:
         return [normalize_counts(row) for row in rows]
@@ -47,7 +51,7 @@ def public_library_detail(
 ) -> dict[str, Any] | None:
     detail = db_library_detail(vendor, library, version)
     if detail is not None:
-        return detail
+        return hydrate_pack_bytes(storage, detail)
     return catalog_detail(storage, vendor, library, version)
 
 
@@ -56,7 +60,8 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
         """
         select l.id as library_id, v.name as vendor, l.name as library, l.description, l.source_url,
                l.version_strategy, lv.id as version_id, lv.version, lv.ref_sha, lv.pack_key,
-               lv.indexed_at::text as indexed_at, lv.last_crawled_at::text as last_crawled_at,
+               coalesce(lv.indexed_at, lv.last_crawled_at)::text as indexed_at,
+               lv.last_crawled_at::text as last_crawled_at,
                lv.pull_count, lv.benchmark_score, lv.drift_score,
                coalesce(ts.value, 0) as trust_score,
                count(c.id)::bigint as chunk_count,
@@ -86,7 +91,7 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
     version_id = row.get("version_id")
     row["versions"] = db_rows(
         """
-        select lv.version, lv.ref_sha, lv.indexed_at::text as indexed_at,
+        select lv.version, lv.ref_sha, coalesce(lv.indexed_at, lv.last_crawled_at)::text as indexed_at,
                lv.last_crawled_at::text as last_crawled_at, lv.benchmark_score,
                lv.archived_at::text as archived_at,
                count(c.id)::bigint as chunk_count,
@@ -219,6 +224,7 @@ def db_rows(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, An
     try:
         return store.execute(sql, params or {})
     except Exception:
+        LOGGER.exception("public_catalog_query_failed")
         return []
 
 
@@ -247,3 +253,23 @@ def first_source(entry: dict[str, Any]) -> str:
     if isinstance(sources, list) and sources:
         return str(sources[0])
     return ""
+
+
+def hydrate_pack_bytes(storage: RegistryStorage, row: dict[str, Any]) -> dict[str, Any]:
+    if int(row.get("pack_bytes") or 0) > 0:
+        return row
+    vendor = str(row.get("vendor") or "")
+    library = str(row.get("library") or "")
+    version = str(row.get("version") or "latest")
+    if not vendor or not library:
+        return row
+    try:
+        pack_body = storage.get_pack_bytes(vendor, library, version)
+    except Exception:
+        LOGGER.exception("public_catalog_pack_size_lookup_failed")
+        return row
+    if pack_body is None:
+        return row
+    output = dict(row)
+    output["pack_bytes"] = len(pack_body)
+    return output

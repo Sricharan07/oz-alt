@@ -433,18 +433,20 @@ def record_pack_build(entry: dict[str, Any], job: dict[str, Any]) -> None:
     pack_key = clean(entry.get("pack_path"))
     pack_sha = clean(entry.get("ref_sha"))
     signature_key_id = clean(job.get("signing_key_id")) or os.environ.get("OZ_PACK_SIGNING_KEY_ID", "")
+    byte_size = entry.get("pack_byte_size")
     if not pack_key or not pack_sha:
         raise RuntimeError("pack_key and ref_sha are required before recording pack build")
     store.execute(
         """
-        insert into pack_builds (library_id, version, pack_sha, pack_key, signature_key_id)
-        select l.id, :version, :pack_sha, :pack_key, :signature_key_id
+        insert into pack_builds (library_id, version, pack_sha, pack_key, signature_key_id, byte_size)
+        select l.id, :version, :pack_sha, :pack_key, :signature_key_id, cast(:byte_size as bigint)
         from libraries l
         join vendors v on v.id = l.vendor_id
         where v.name = :vendor and l.name = :library
         on conflict (library_id, version, pack_sha) do update
         set pack_key = excluded.pack_key,
-            signature_key_id = excluded.signature_key_id
+            signature_key_id = excluded.signature_key_id,
+            byte_size = coalesce(excluded.byte_size, pack_builds.byte_size)
         """,
         {
             "vendor": clean(entry.get("vendor")),
@@ -453,6 +455,7 @@ def record_pack_build(entry: dict[str, Any], job: dict[str, Any]) -> None:
             "pack_sha": pack_sha,
             "pack_key": pack_key,
             "signature_key_id": clean(signature_key_id) or None,
+            "byte_size": int(byte_size) if isinstance(byte_size, int) and byte_size >= 0 else None,
         },
     )
 

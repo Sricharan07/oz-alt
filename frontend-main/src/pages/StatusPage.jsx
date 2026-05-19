@@ -24,12 +24,7 @@ export function StatusPage() {
             <SectionHeader title="Components" />
             <SimpleTable
               columns={["Component", "Status"]}
-              rows={Object.entries(components).map(([key, value]) => [
-                key,
-                <span key={key} className={`state ${statusClass(value?.status || (value?.open ? "warn" : "up"))}`}>
-                  {value?.status || JSON.stringify(value)}
-                </span>
-              ])}
+              rows={Object.entries(components).map(([key, value]) => componentRow(key, value))}
             />
           </Panel>
           <Panel>
@@ -48,4 +43,46 @@ export function StatusPage() {
       ) : null}
     </Page>
   );
+}
+
+function componentRow(key, value) {
+  const status = componentStatus(value);
+  return [
+    key,
+    <span key={key} className={`state ${statusClass(status)}`}>
+      {componentLabel(key, value)}
+    </span>
+  ];
+}
+
+function componentStatus(value) {
+  if (value?.status) {
+    return value.status;
+  }
+  if (typeof value?.open === "number") {
+    return value.open > 0 ? "warn" : "up";
+  }
+  if (typeof value?.fresh_verified === "boolean") {
+    return value.fresh_verified ? "up" : "warn";
+  }
+  return "up";
+}
+
+function componentLabel(key, value) {
+  if (value?.status) {
+    return value.status;
+  }
+  if (key === "catalog") {
+    return `${integer(value?.libraries)} libraries`;
+  }
+  if (key === "crawler") {
+    return `${integer(value?.queued)} queued, ${integer(value?.running)} running`;
+  }
+  if (key === "alerts") {
+    return `${integer(value?.open)} open`;
+  }
+  if (key === "backups") {
+    return value?.fresh_verified ? "verified" : "needs verification";
+  }
+  return "up";
 }

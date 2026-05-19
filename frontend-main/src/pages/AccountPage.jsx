@@ -67,7 +67,7 @@ export function AccountPage() {
         <Metric label="Searches" value={integer(totals.searches)} icon={LogIn} />
         <Metric label="Pulls" value={integer(totals.pulls)} icon={KeyRound} />
         <Metric label="Suggestions" value={integer(totals.suggests)} icon={UserRound} />
-        <Metric label="Libraries used" value={integer(totals.libraries)} icon={Shield} />
+        <Metric label="Library scopes" value={integer(totals.libraries)} icon={Shield} />
       </section>
 
       <div className="two-column">

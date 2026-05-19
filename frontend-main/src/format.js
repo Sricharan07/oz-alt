@@ -49,6 +49,14 @@ export function bytes(value) {
   return `${(number / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+export function bytesOrUnknown(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) {
+    return "Not recorded";
+  }
+  return bytes(number);
+}
+
 export function libraryId(row) {
   return `${row.vendor}/${row.library}`;
 }

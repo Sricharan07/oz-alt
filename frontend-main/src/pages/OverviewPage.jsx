@@ -13,7 +13,6 @@ import { Checklist, CommandBlock, LibraryTable, Metric, Page, Panel, SectionHead
 import { compactNumber, integer } from "../format.js";
 import { useAsync } from "../hooks/useAsync.js";
 import { useConsoleAccount } from "../hooks/useConsoleAccount.js";
-import { useMotionProgress } from "../hooks/useMotionProgress.js";
 import { summarizeLibraries, topLibraries } from "./pageData.js";
 
 export function OverviewPage() {
@@ -27,16 +26,14 @@ export function OverviewPage() {
 
   return (
     <Page title="Overview" description="A console for authenticated CLI access, curated library packs, and local docs for agents.">
-      <CatalogHealthCard rows={topRows} totals={totals} operational={operational} loading={librariesLoading} />
-
-      <AccountSnapshot account={account} />
-
       <section className="summary-grid" aria-label="Catalog summary">
         <Metric label="Libraries" value={librariesLoading ? "Loading" : integer(totals.libraries)} icon={Library} />
         <Metric label="Chunks" value={compactNumber(totals.chunks)} icon={FileText} />
         <Metric label="Tokens" value={compactNumber(totals.tokens)} icon={Database} />
         <Metric label="System" value={operational ? "Operational" : "Check status"} icon={operational ? CheckCircle2 : CircleAlert} tone={operational ? "ok" : "warn"} />
       </section>
+
+      <AccountSnapshot account={account} />
 
       <div className="two-column">
         <Panel>
@@ -67,8 +64,15 @@ export function OverviewPage() {
       </div>
 
       <Panel>
-        <SectionHeader title="Recent catalog" action={<Link to="/libraries">Browse all <ChevronRight size={15} /></Link>} />
-        <LibraryTable rows={rows.slice(0, 8)} loading={librariesLoading} compact />
+        <SectionHeader title="Catalog" action={<Link to="/libraries">Browse all <ChevronRight size={15} /></Link>} />
+        <div className="catalog-overview">
+          <div className="catalog-overview-summary">
+            <StatPair label="Indexed files" value={integer(rows.reduce((sum, row) => sum + Number(row.file_count || 0), 0))} />
+            <StatPair label="Largest pack" value={topRows[0] ? `${topRows[0].vendor}/${topRows[0].library}` : "Not recorded"} />
+            <StatPair label="API base" value="api.tryoz.dev" />
+          </div>
+          <LibraryTable rows={topRows.length ? topRows : rows.slice(0, 8)} loading={librariesLoading} compact />
+        </div>
       </Panel>
     </Page>
   );
@@ -105,72 +109,5 @@ function AccountSnapshot({ account }) {
         <StatPair label="Pulls" value={integer(totals.pulls)} />
       </div>
     </Panel>
-  );
-}
-
-function CatalogHealthCard({ rows, totals, operational, loading }) {
-  const progress = useMotionProgress(`${rows.length}:${totals.chunks}:${loading}`);
-  const maxChunks = Math.max(...rows.map((row) => Number(row.chunk_count || 0)), 1);
-
-  return (
-    <section className="overview-usage-card" aria-label="Catalog health">
-      <div className="overview-usage-header">
-        <div>
-          <h2>Catalog health</h2>
-          <span>{operational ? "Production registry is serving current packs" : "Status endpoint needs attention"}</span>
-        </div>
-        <Link className="overview-usage-link" to="/status">
-          Status
-          <ChevronRight size={14} aria-hidden="true" />
-        </Link>
-      </div>
-      <div className="overview-usage-body">
-        <div className="overview-usage-left">
-          <div className="overview-metrics-row">
-            <div className="overview-metric-block">
-              <div className="overview-metric-circle circle-solid">{integer(Math.round(totals.libraries * progress))}</div>
-              <div className="overview-metric-info">
-                <h3>Libraries</h3>
-                <p>Promoted packs</p>
-              </div>
-            </div>
-            <div className="overview-metric-block">
-              <div className="overview-metric-circle circle-dashed">{compactNumber(Math.round(totals.chunks * progress))}</div>
-              <div className="overview-metric-info">
-                <h3>Chunks</h3>
-                <p>Searchable docs</p>
-              </div>
-            </div>
-          </div>
-          <div className="overview-usage-totals">
-            <StatPair label="Token corpus" value={compactNumber(Math.round(totals.tokens * progress))} />
-            <StatPair label="API base" value="api.tryoz.dev" />
-            <StatPair label="Agent mode" value="Path-first" />
-          </div>
-        </div>
-        <div className="overview-usage-right">
-          <div className="overview-chart-container" aria-label="Top libraries by chunks">
-            {rows.map((row) => {
-              const height = Math.max(10, Math.round((Number(row.chunk_count || 0) / maxChunks) * 100 * progress));
-              return (
-                <Link
-                  key={`${row.vendor}/${row.library}`}
-                  to={`/libraries/${encodeURIComponent(row.vendor)}/${String(row.library).split("/").map(encodeURIComponent).join("/")}`}
-                  className="overview-chart-bar"
-                  style={{ height: `${height}%`, "--bar-alpha": String(Math.max(0.18, height / 140)) }}
-                  data-tooltip={`${row.vendor}/${row.library}: ${integer(row.chunk_count)} chunks`}
-                  aria-label={`${row.vendor}/${row.library}`}
-                />
-              );
-            })}
-          </div>
-          <div className="overview-chart-labels">
-            <span>smaller</span>
-            <span>top indexed packs</span>
-            <span>larger</span>
-          </div>
-        </div>
-      </div>
-    </section>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytes, compactNumber, libraryPath, statusClass } from "../format.js";
+import { bytes, bytesOrUnknown, compactNumber, libraryPath, statusClass } from "../format.js";
 
 describe("format helpers", () => {
   it("formats catalog counts for compact display", () => {
@@ -8,6 +8,7 @@ describe("format helpers", () => {
 
   it("formats byte counts", () => {
     expect(bytes(1536)).toBe("1.5 KB");
+    expect(bytesOrUnknown(0)).toBe("Not recorded");
   });
 
   it("builds stable library routes", () => {

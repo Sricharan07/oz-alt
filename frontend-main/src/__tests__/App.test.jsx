@@ -92,7 +92,7 @@ describe("Oz console", () => {
     );
 
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("facebook/react")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("facebook/react").length).toBeGreaterThan(0));
     expect(screen.getByText("Operational")).toBeInTheDocument();
   });
 
@@ -175,6 +175,19 @@ describe("Oz console", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Approve device" })).toBeInTheDocument());
     expect(screen.getByDisplayValue("ABCD-EFGH")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve device" })).toBeInTheDocument();
+  });
+
+  it("renders setup commands that match the live catalog and action inputs", async () => {
+    render(
+      <MemoryRouter initialEntries={["/setup"]}>
+        <App />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Setup" })).toBeInTheDocument());
+    expect(screen.getAllByText(/stripe\/stripe/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/stripe-node/)).not.toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("auth-token: ${{ secrets.OZ_AUTH_TOKEN }}"))).toBeInTheDocument();
   });
 });
 

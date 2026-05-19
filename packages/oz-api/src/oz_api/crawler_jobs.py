@@ -145,6 +145,7 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
         fixture_path=target,
         pack_key=pack_key,
         ref_sha=str(manifest["tree_sha256"]),
+        pack_byte_size=len(pack_body),
         crawler_job_id=job.get("db_job_id"),
     )
     with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "index", "library": f"{vendor}/{library}"}):
@@ -190,6 +191,7 @@ def catalog_entry_for_job(
     fixture_path: Path,
     pack_key: str,
     ref_sha: str,
+    pack_byte_size: int | None = None,
     crawler_job_id: Any | None = None,
 ) -> dict[str, Any]:
     description = f"Documentation crawled from {source_url}."
@@ -204,6 +206,7 @@ def catalog_entry_for_job(
         "fixture_path": fixture_value,
         "pack_path": pack_key,
         "ref_sha": ref_sha,
+        "pack_byte_size": pack_byte_size,
         "indexed_at": datetime.now(timezone.utc).isoformat(),
         "crawler_job_id": crawler_job_id,
     }
