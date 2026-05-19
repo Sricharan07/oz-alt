@@ -223,9 +223,14 @@
     {
       "library": "vercel/sdk",
       "allowed_hosts": ["vercel.com"],
-      "allowed_paths": ["/docs"],
-      "denied_paths": ["/customers", "/pricing", "/blog"],
-      "required_topics": ["api", "sdk", "deployment"],
+      "allowed_paths": ["/docs/rest-api"],
+      "denied_paths": ["/customers", "/pricing", "/blog", ".md"],
+      "preferred_urls": [
+        "https://vercel.com/docs/rest-api/sdk/deployments/create-a-new-deployment",
+        "https://vercel.com/docs/rest-api/sdk/projects/create-one-or-more-environment-variables",
+        "https://vercel.com/docs/rest-api/sdk/projects/edit-an-environment-variable"
+      ],
+      "required_topics": ["api", "sdk", "deployment", "environment variables"],
       "expected_symbols": []
     },
     {

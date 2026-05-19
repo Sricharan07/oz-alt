@@ -7,9 +7,9 @@
       "query": "Vercel SDK create deployment project environment variables",
       "patterns": ["deployment", "project", "environment variables"],
       "expected_files": [
-        "guides/environment-variables/system-environment-variables.md",
-        "guides/environment-variables/sensitive-environment-variables.md",
-        "api-reference/integrations/create-integration/marketplace-api/vercel.md"
+        "rest-api/sdk/deployments/create-a-new-deployment.md",
+        "rest-api/sdk/projects/create-one-or-more-environment-variables.md",
+        "rest-api/sdk/projects/edit-an-environment-variable.md"
       ],
       "must_include": ["deployment", "environment"],
       "banned_content": ["customer story", "contact sales"]
