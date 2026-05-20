@@ -18,6 +18,7 @@ from oz_api.retrieval_postgres import (
 )
 from oz_api.rerank import boost_named_suggestions, maybe_rerank, strip_private_fields
 from oz_api.token_counting import token_count
+from oz_api.versions import parse_versioned_scope
 
 CONTEXT_MIN_TOKENS = 18
 VALID_CONTENT_TYPES = {"prose", "guide", "code_example", "api_reference", "config", "cli", "error_ref", "types", "example", "index"}
@@ -104,23 +105,31 @@ def context(
 ) -> dict[str, Any]:
     normalized_types = normalize_content_types(content_types)
     candidate_pool = max(max_results * 4, 24)
-    snippet_rows = context_snippets_from_postgres(
-        ctx,
-        query,
-        library_scope,
-        candidate_pool,
-        fingerprint,
-        content_types=normalized_types,
-    )
-    search_rows = search(
-        ctx,
-        query,
-        library_scope=library_scope,
-        max_results=candidate_pool,
-        fingerprint=fingerprint,
-        content_types=normalized_types,
-        keep_private=True,
-    )
+    scopes = context_candidate_scopes(ctx, library_scope, query)
+    snippet_rows: list[dict[str, Any]] = []
+    search_rows: list[dict[str, Any]] = []
+    for scope in scopes:
+        scoped_snippets = context_snippets_from_postgres(
+            ctx,
+            query,
+            scope,
+            candidate_pool,
+            fingerprint,
+            content_types=normalized_types,
+        )
+        if scoped_snippets:
+            snippet_rows.extend(scoped_snippets)
+        scoped_search = search(
+            ctx,
+            query,
+            library_scope=scope,
+            max_results=candidate_pool,
+            fingerprint=fingerprint,
+            content_types=normalized_types,
+            keep_private=True,
+        )
+        if scoped_search:
+            search_rows.extend(scoped_search)
     search_rows_are_fixture_fallback = bool(search_rows) and all(
         str(row.get("retrieval_mode") or "") == "fixture_fallback" for row in search_rows
     )
@@ -210,6 +219,102 @@ def context(
         "candidate_retrieval_modes": candidate_modes,
         "degraded": degraded,
     }
+
+
+RELATED_LIBRARY_LIMIT = 4
+
+
+def context_candidate_scopes(ctx: RetrievalContext, library_scope: str | None, query: str) -> list[str | None]:
+    if not library_scope:
+        return [None]
+    scopes: list[str | None] = [library_scope]
+    for related in related_library_scopes(ctx, library_scope, query):
+        if related not in scopes:
+            scopes.append(related)
+    return scopes
+
+
+def related_library_scopes(ctx: RetrievalContext, library_scope: str, query: str) -> list[str]:
+    parsed = parse_versioned_scope(library_scope)
+    if not parsed.vendor or not parsed.library:
+        return []
+    if parsed.version:
+        return []
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return []
+    query_terms = set(query_library_terms(query))
+    if not query_terms:
+        return []
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select l.name, lv.version, coalesce(l.aliases, '[]'::jsonb), coalesce(l.description, '')
+                    from libraries l
+                    join vendors v on v.id = l.vendor_id
+                    join refs r on r.library_id = l.id and r.channel = 'latest'
+                    join library_versions lv on lv.id = coalesce(l.default_version_id, r.version_id)
+                         and lv.archived_at is null
+                    where v.name = %s and l.name <> %s
+                    """,
+                    (parsed.vendor, parsed.library),
+                )
+                rows = cursor.fetchall()
+    except Exception:
+        return []
+    scored: list[tuple[int, str]] = []
+    for name, version, aliases, description in rows:
+        terms = library_specific_terms(parsed.vendor, str(name), aliases, str(description or ""))
+        if not terms:
+            continue
+        hits = query_terms & terms
+        if not hits:
+            continue
+        scope = f"{parsed.vendor}/{name}"
+        scored.append((len(hits), scope))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [scope for _score, scope in scored[:RELATED_LIBRARY_LIMIT]]
+
+
+GENERIC_LIBRARY_TERMS = {
+    "api",
+    "client",
+    "core",
+    "docs",
+    "documentation",
+    "example",
+    "examples",
+    "guide",
+    "library",
+    "main",
+    "node",
+    "python",
+    "sdk",
+    "source",
+    "types",
+}
+
+
+def query_library_terms(query: str) -> list[str]:
+    return [
+        term
+        for term in re.findall(r"[a-z][a-z0-9]+", query.lower())
+        if len(term) >= 3 and term not in GENERIC_LIBRARY_TERMS
+    ]
+
+
+def library_specific_terms(vendor: str, library: str, aliases: Any, description: str) -> set[str]:
+    vendor_terms = set(query_library_terms(vendor.replace("-", " ").replace("/", " ")))
+    raw_aliases = aliases if isinstance(aliases, list) else []
+    values = [library, *[str(item) for item in raw_aliases], description]
+    terms: set[str] = set()
+    for value in values:
+        for term in query_library_terms(str(value).replace("-", " ").replace("/", " ").replace(".", " ")):
+            if term not in vendor_terms:
+                terms.add(term)
+    return terms
 
 
 def merge_context_candidates(snippet_rows: list[dict[str, Any]], search_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
