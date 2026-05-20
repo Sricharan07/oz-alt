@@ -869,10 +869,10 @@ class PostgresWriter(IndexWriter):
                      array_agg(
                        id order by
                          case
-                           when path like '_symbols/%' then 0
-                           when path like 'api-reference/%' then 1
-                           when path like 'guides/%' then 2
-                           when path like 'examples/%' then 3
+                           when path like '_symbols/%%' then 0
+                           when path like 'api-reference/%%' then 1
+                           when path like 'guides/%%' then 2
+                           when path like 'examples/%%' then 3
                            else 9
                          end asc,
                          quality_score desc,
@@ -911,35 +911,35 @@ class PostgresWriter(IndexWriter):
                      case
                        when (
                          case
-                           when c.path like '_symbols/%' then 0
-                           when c.path like 'api-reference/%' then 1
-                           when c.path like 'guides/%' then 2
-                           when c.path like 'examples/%' then 3
+                           when c.path like '_symbols/%%' then 0
+                           when c.path like 'api-reference/%%' then 1
+                           when c.path like 'guides/%%' then 2
+                           when c.path like 'examples/%%' then 3
                            else 9
                          end
                        ) < (
                          case
-                           when n.path like '_symbols/%' then 0
-                           when n.path like 'api-reference/%' then 1
-                           when n.path like 'guides/%' then 2
-                           when n.path like 'examples/%' then 3
+                           when n.path like '_symbols/%%' then 0
+                           when n.path like 'api-reference/%%' then 1
+                           when n.path like 'guides/%%' then 2
+                           when n.path like 'examples/%%' then 3
                            else 9
                          end
                        ) then c.id
                        when (
                          case
-                           when c.path like '_symbols/%' then 0
-                           when c.path like 'api-reference/%' then 1
-                           when c.path like 'guides/%' then 2
-                           when c.path like 'examples/%' then 3
+                           when c.path like '_symbols/%%' then 0
+                           when c.path like 'api-reference/%%' then 1
+                           when c.path like 'guides/%%' then 2
+                           when c.path like 'examples/%%' then 3
                            else 9
                          end
                        ) > (
                          case
-                           when n.path like '_symbols/%' then 0
-                           when n.path like 'api-reference/%' then 1
-                           when n.path like 'guides/%' then 2
-                           when n.path like 'examples/%' then 3
+                           when n.path like '_symbols/%%' then 0
+                           when n.path like 'api-reference/%%' then 1
+                           when n.path like 'guides/%%' then 2
+                           when n.path like 'examples/%%' then 3
                            else 9
                          end
                        ) then n.id
