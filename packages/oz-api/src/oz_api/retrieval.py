@@ -717,6 +717,7 @@ def context_packet(
         code_snippets.append(card)
         if remaining <= 0 or len(code_snippets) >= max_code:
             break
+    has_composite = any(str(card.get("codeId") or "").startswith("oz:composite:") for card in code_snippets)
     for row in ordered:
         if remaining <= 0:
             break
@@ -728,6 +729,10 @@ def context_packet(
             continue
         title_lower = str(row.get("title") or "").lower()
         if has_setup_composite and any(term in title_lower for term in ("installation", "dependencies")):
+            continue
+        if has_composite and implementation_fragment_penalty(row, text) >= 1200 and not any(
+            term in query.lower() for term in ("schema", "request body", "source", "implementation", "class")
+        ):
             continue
         code_blocks = extract_code_blocks(text)
         if code_blocks:
@@ -948,7 +953,8 @@ def synthesis_controls_card(rows: list[dict[str, Any]], query: str, budget: int)
 def error_recovery_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
     block = best_code_block(
         rows,
-        lambda block, row, text: error_handling_block(block["code"], text, query),
+        lambda block, row, text: str(block.get("language") or "").lower() not in {"log", "logs", "promql"}
+        and error_handling_block(block["code"], text, query),
         lambda block, row, text: packet_row_score(row, query)
         + error_block_score(block["code"], text)
         - query_domain_mismatch_penalty(row, query),
@@ -1755,6 +1761,10 @@ def usable_code_block(block: dict[str, str], query: str) -> bool:
         return False
     lowered = code.lower()
     query_lower = query.lower()
+    if str(block.get("language") or "").lower() in {"log", "logs", "promql"}:
+        return False
+    if "websocketapp" in lowered and "stream" not in query_lower and "websocket" not in query_lower:
+        return False
     if lowered.startswith(":param") or lowered.startswith("parameters") or "\n:param " in lowered[:800]:
         return False
     if lowered.count(":param") >= 2 and not any(term in query_lower for term in ("constructor", "class", "parameters", "schema", "request body")):
