@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from oz_api.token_counting import token_count
 
 MAX_SECTION_TOKENS = 1800
 MAX_SNIPPET_TOKENS = 900
@@ -75,7 +76,43 @@ ENTITY_STOPWORDS = {
     "functions",
     "config",
     "configuration",
+    "about",
+    "after",
+    "before",
+    "can",
+    "compare",
+    "could",
+    "difference",
+    "do",
+    "does",
+    "how",
+    "into",
+    "should",
+    "use",
+    "using",
+    "when",
+    "where",
+    "which",
+    "why",
+    "would",
 }
+
+PHRASE_FACET_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("usecache", r"\buse cache\b"),
+    ("useclient", r"\buse client\b"),
+    ("useserver", r"\buse server\b"),
+    ("dynamicroutes", r"\bdynamic routes?\b"),
+    ("routehandlers", r"\broute handlers?\b"),
+    ("routesegment", r"\broute segments?\b"),
+    ("serveractions", r"\bserver actions?\b"),
+    ("servercomponents", r"\bserver components?\b"),
+    ("clientcomponents", r"\bclient components?\b"),
+    ("searchparams", r"\bsearch params?\b"),
+    ("errorboundary", r"\berror boundar(?:y|ies)\b"),
+    ("webvitals", r"\bweb vitals\b"),
+    ("opentelemetry", r"\bopen telemetry\b|\bopentelemetry\b"),
+    ("opengraphimage", r"\bopengraph image\b|\bog image\b"),
+)
 
 
 @dataclass(frozen=True)
@@ -292,6 +329,8 @@ def select_context_snippets(rows: list[dict[str, Any]], query: str, *, max_resul
             tokens = approximate_tokens(text)
         if not text.strip() or tokens <= 0:
             continue
+        if text != str(row.get("_matched_text") or row.get("content") or "").strip():
+            row = {**row, "_matched_text": text, "content": text, "token_count": tokens}
         selected.append(row)
         remaining -= tokens
         path = str(row.get("matched_path") or row.get("path") or "")
@@ -314,16 +353,21 @@ def assembly_score(
     score = float(row.get("score") or 0)
     row_coverage = row_facets(row, facets)
     new_coverage = row_coverage - covered
-    score += len(new_coverage) * 140.0
+    uncovered = facets - covered
+    if uncovered and not new_coverage:
+        score -= 1000.0
+    score += len(new_coverage) * 420.0
     if new_coverage:
-        score += 60.0
+        score += 160.0
     role = str(row.get("role") or row.get("content_type") or "")
     if role in {"code_example", "api_reference", "workflow"}:
         score += 25.0
     path = str(row.get("matched_path") or row.get("path") or "")
-    score -= used_paths.get(path, 0) * 85.0
+    path_count = used_paths.get(path, 0)
+    if path_count:
+        score -= path_count * (520.0 if uncovered and not new_coverage else 140.0)
     if str(row.get("title") or "").lower() in used_titles:
-        score -= 55.0
+        score -= 220.0 if uncovered and not new_coverage else 80.0
     token_count = int(row.get("token_count") or 0)
     if token_count < 35:
         score -= 35.0
@@ -335,6 +379,9 @@ def assembly_score(
 def query_facets(query: str) -> set[str]:
     lowered = query.lower()
     facets: set[str] = set()
+    for facet, pattern in PHRASE_FACET_PATTERNS:
+        if re.search(pattern, lowered, re.I):
+            facets.add(facet)
     for tag, pattern in TASK_PATTERNS + APPLIES_PATTERNS:
         if re.search(pattern, lowered, re.I):
             facets.add(normalize_facet(tag))
@@ -555,6 +602,8 @@ def trim_to_token_budget(text: str, max_tokens: int) -> str:
     in_fence = False
     for line in text.splitlines():
         line_tokens = approximate_tokens(line)
+        if not output and not in_fence and line_tokens > max_tokens:
+            return trim_long_line(line, max_tokens)
         if output and not in_fence and tokens + line_tokens > max_tokens:
             break
         output.append(line)
@@ -566,6 +615,21 @@ def trim_to_token_budget(text: str, max_tokens: int) -> str:
     if in_fence:
         output.append("```")
     return "\n".join(output).strip()
+
+
+def trim_long_line(line: str, max_tokens: int) -> str:
+    parts = re.findall(r"\S+\s*", line)
+    output: list[str] = []
+    tokens = 0
+    for part in parts:
+        part_tokens = approximate_tokens(part)
+        if output and tokens + part_tokens > max_tokens:
+            break
+        output.append(part.rstrip())
+        tokens += part_tokens
+        if tokens >= max_tokens:
+            break
+    return " ".join(item.strip() for item in output if item.strip()).strip()
 
 
 def strip_code_fences(text: str) -> str:
@@ -634,6 +698,4 @@ def unique_strings(values: Iterable[str]) -> list[str]:
 
 
 def approximate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, len(re.findall(r"\w+|[^\w\s]", text)))
+    return token_count(text)

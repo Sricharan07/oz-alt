@@ -17,6 +17,7 @@ from oz_api.retrieval_postgres import (
     vector_literal,
 )
 from oz_api.rerank import boost_named_suggestions, maybe_rerank, strip_private_fields
+from oz_api.token_counting import token_count
 
 CONTEXT_MIN_TOKENS = 18
 VALID_CONTENT_TYPES = {"prose", "guide", "code_example", "api_reference", "config", "cli", "error_ref", "types", "example", "index"}
@@ -312,6 +313,8 @@ def trim_to_token_budget(text: str, budget: int) -> str:
     tokens = 0
     for line in text.splitlines():
         line_tokens = approximate_tokens(line)
+        if not selected and not in_fence and line_tokens > budget:
+            return trim_long_line(line, budget)
         if selected and not in_fence and tokens + line_tokens > budget:
             break
         selected.append(line)
@@ -325,8 +328,23 @@ def trim_to_token_budget(text: str, budget: int) -> str:
     return "\n".join(selected).strip()
 
 
+def trim_long_line(line: str, budget: int) -> str:
+    parts = re.findall(r"\S+\s*", line)
+    selected: list[str] = []
+    tokens = 0
+    for part in parts:
+        part_tokens = approximate_tokens(part)
+        if selected and tokens + part_tokens > budget:
+            break
+        selected.append(part.rstrip())
+        tokens += part_tokens
+        if tokens >= budget:
+            break
+    return " ".join(value.strip() for value in selected if value.strip()).strip()
+
+
 def approximate_tokens(text: str) -> int:
-    return max(1, len(re.findall(r"\w+|[^\w\s]", text)))
+    return token_count(text)
 
 
 def bounded_string(value: Any, max_chars: int) -> str:

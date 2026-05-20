@@ -1055,6 +1055,106 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertIn("Reference: cookies (Server Components)", titles)
         self.assertIn("Example: cookies (Server Actions)", titles)
 
+    def test_context_facets_ignore_question_words_and_keep_doc_phrases(self) -> None:
+        facets = query_facets("When should I use redirect, notFound, unauthorized, and forbidden?")
+        self.assertIn("redirect", facets)
+        self.assertIn("notfound", facets)
+        self.assertIn("unauthorized", facets)
+        self.assertIn("forbidden", facets)
+        self.assertNotIn("use", facets)
+        self.assertNotIn("when", facets)
+
+        self.assertIn("dynamicroutes", query_facets("generateStaticParams for dynamic routes"))
+        self.assertIn("usecache", query_facets("how do use cache, cacheLife, and cacheTag work?"))
+
+    def test_context_assembly_prefers_uncovered_facets_over_duplicate_high_scores(self) -> None:
+        rows = [
+            {
+                "score": 1200,
+                "path": "redirect.md",
+                "matched_path": "redirect.md",
+                "line": 1,
+                "title": "Reference: redirect",
+                "role": "api_reference",
+                "entities": ["redirect"],
+                "applies_to": ["App Router"],
+                "task_tags": ["routing"],
+                "token_count": 400,
+                "_matched_text": "Use redirect to redirect a user.",
+            },
+            {
+                "score": 1180,
+                "path": "redirect.md",
+                "matched_path": "redirect.md",
+                "line": 50,
+                "title": "Reference: redirect details",
+                "role": "api_reference",
+                "entities": ["redirect"],
+                "applies_to": ["App Router"],
+                "task_tags": ["routing"],
+                "token_count": 400,
+                "_matched_text": "More redirect examples.",
+            },
+            {
+                "score": 640,
+                "path": "unauthorized.md",
+                "matched_path": "unauthorized.md",
+                "line": 1,
+                "title": "Workflow: unauthorized",
+                "role": "api_reference",
+                "entities": ["unauthorized"],
+                "applies_to": ["App Router"],
+                "task_tags": ["authentication"],
+                "token_count": 180,
+                "_matched_text": "Use unauthorized for unauthenticated requests.",
+            },
+            {
+                "score": 620,
+                "path": "forbidden.md",
+                "matched_path": "forbidden.md",
+                "line": 1,
+                "title": "Workflow: forbidden",
+                "role": "api_reference",
+                "entities": ["forbidden"],
+                "applies_to": ["App Router"],
+                "task_tags": ["authentication"],
+                "token_count": 180,
+                "_matched_text": "Use forbidden for authorization failures.",
+            },
+        ]
+
+        selected = select_context_snippets(
+            rows,
+            "When should I use redirect, unauthorized, and forbidden?",
+            max_results=3,
+            max_tokens=1200,
+        )
+
+        paths = [row["matched_path"] for row in selected]
+        self.assertEqual(paths, ["redirect.md", "unauthorized.md", "forbidden.md"])
+
+    def test_context_assembly_persists_trimmed_text_for_budget(self) -> None:
+        rows = [
+            {
+                "score": 10,
+                "path": "large.md",
+                "matched_path": "large.md",
+                "line": 1,
+                "title": "Large",
+                "role": "api_reference",
+                "entities": ["Large"],
+                "applies_to": [],
+                "task_tags": [],
+                "token_count": 2000,
+                "_matched_text": " ".join(f"token{index}" for index in range(300)),
+            }
+        ]
+
+        selected = select_context_snippets(rows, "Large", max_results=1, max_tokens=40)
+
+        self.assertLessEqual(token_count(selected[0]["_matched_text"]), 40)
+        self.assertLessEqual(selected[0]["token_count"], 40)
+
 
 if __name__ == "__main__":
     unittest.main()
