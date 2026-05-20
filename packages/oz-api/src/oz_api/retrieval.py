@@ -723,11 +723,34 @@ def context_packet(
         "oz:composite:default-client",
         "oz:composite:custom-host",
         "oz:composite:version-pin",
+        "oz:composite:model-selection",
+        "oz:composite:voice-selection",
+        "oz:composite:synthesis-controls",
     }
     first_code_id = str(code_snippets[0].get("codeId") or "") if code_snippets else ""
     compact_setup = first_code_id in compact_ids and any(
         term in query_lower
-        for term in ("install", "setup", "initialize", "initialise", "default configuration", "custom host", "host endpoint", "api key", "environment", "requirements", "pin")
+        for term in (
+            "install",
+            "setup",
+            "initialize",
+            "initialise",
+            "default configuration",
+            "custom host",
+            "host endpoint",
+            "api key",
+            "environment",
+            "requirements",
+            "pin",
+            "model",
+            "voice",
+            "voiceid",
+            "voice id",
+            "controls",
+            "speed",
+            "consistency",
+            "enhancement",
+        )
     )
     if compact_setup:
         return {
@@ -907,6 +930,9 @@ def model_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
     guidance = model_tradeoff_guidance(rows)
     if guidance and guidance not in {item["code"] for item in code_list}:
         code_list.insert(0, {"language": "text", "code": guidance})
+    usage = model_selection_usage_block(rows)
+    if usage and usage["code"] not in {item["code"] for item in code_list}:
+        code_list.insert(1 if guidance else 0, usage)
     return code_list_card(
         title="List and choose a model",
         description="Combines the documented model-listing call with the nearest source-backed model-selection guidance.",
@@ -948,6 +974,9 @@ def voice_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
     guidance = voice_selection_guidance(rows)
     if guidance:
         code_list.insert(0, {"language": "text", "code": guidance})
+    usage = voice_selection_usage_block(rows)
+    if usage and usage["code"] not in {item["code"] for item in code_list}:
+        code_list.insert(1, usage)
     return code_list_card(
         title="Choose and set a voice",
         description="Shows how the docs expose available voices and where the selected voice identifier is passed into synthesis.",
@@ -1066,7 +1095,7 @@ def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, An
         tokens = approximate_tokens(usage["code"])
         return {
             "codeTitle": "Configure a custom API host",
-            "codeDescription": "Minimal host override path inferred from the documented Configuration host parameter and adjacent client initialization examples.",
+            "codeDescription": "Uses the documented Configuration host field and passes that configuration object into the client constructor.",
             "codeId": "oz:composite:custom-host",
             "codeLanguage": usage.get("language") or "python",
             "codeTokens": tokens,
@@ -1101,7 +1130,7 @@ def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, An
         tokens = approximate_tokens(content)
     return {
         "codeTitle": "Configure a custom API host",
-        "codeDescription": "Shows the source-backed configuration host override and the adjacent client-configuration pattern when available.",
+        "codeDescription": "Shows the documented configuration host override and adjacent client-configuration pattern.",
         "codeId": "oz:composite:custom-host",
         "codeLanguage": code_list[0].get("language") if code_list else "",
         "codeTokens": tokens,
@@ -1151,7 +1180,19 @@ def default_client_card(rows: list[dict[str, Any]], query: str, budget: int) -> 
     if not block:
         return None
     focused = focused_block_for_context(block, query, token_budget=min(max(budget, 1), 420))
-    description = "Minimal default-client initialization. The adjacent docs indicate credentials are read from the documented environment variable when no explicit configuration is passed."
+    env_vars = env_var_names(rows, query=query)
+    if env_vars and not any(name in focused["code"] for name in env_vars[:1]):
+        focused = {
+            **focused,
+            "code": "\n".join(
+                [
+                    f'export {env_vars[0]}="<your-{env_vars[0].lower().replace("_", "-")}>"',
+                    "",
+                    focused["code"],
+                ]
+            ),
+        }
+    description = "Minimal default-client initialization. With the documented environment variable exported, the zero-argument client constructor uses default configuration."
     return simple_code_card(
         title="Initialize the client with defaults",
         description=description,
@@ -1334,16 +1375,61 @@ def model_names_from_rows(rows: list[dict[str, Any]]) -> set[str]:
     names: set[str] = set()
     for row in rows[:100]:
         text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
-        for name in re.findall(r"\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+\b", text.lower()):
-            if "_" in name or any(noise in name for noise in ("voice", "voices", "models", "schema", "request", "response")):
-                continue
-            if any(term in name for term in ("model", "lightning", "large", "turbo", "flash", "pro", "ultra")):
-                names.add(name)
+        for match in re.finditer(r"\bmodel\b.{0,100}?['\"]([A-Za-z][A-Za-z0-9_.-]{2,})['\"]", text, flags=re.I | re.S):
+            add_model_name(names, match.group(1))
+        for match in re.finditer(r"\bmodel\s*[:=]\s*([A-Za-z][A-Za-z0-9_.-]{2,})", text, flags=re.I):
+            add_model_name(names, match.group(1))
         for quoted in re.findall(r"['\"]([A-Za-z][A-Za-z0-9_.-]{2,})['\"]", text):
             lowered = quoted.lower()
-            if any(term in lowered for term in ("lightning", "large", "turbo", "flash", "pro", "ultra")):
+            if any(term in lowered for term in ("lightning", "turbo", "flash")) and not any(noise in lowered for noise in ("voice", "voices", "schema", "request", "response")):
                 names.add(quoted)
     return names
+
+
+def add_model_name(names: set[str], value: str) -> None:
+    cleaned = value.strip().strip("`'\".,)")
+    lowered = cleaned.lower()
+    if not cleaned or any(noise in lowered for noise in ("voice", "voices", "schema", "request", "response", "models")):
+        return
+    if any(term in lowered for term in ("lightning", "large", "turbo", "flash", "pro", "ultra")):
+        names.add(cleaned)
+
+
+def model_selection_usage_block(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    names = sorted(model_names_from_rows(rows))
+    if not names:
+        return None
+    fast = next((name for name in names if "large" not in name.lower()), names[0])
+    quality = next((name for name in names if "large" in name.lower()), "")
+    client_name = "Client"
+    import_line = ""
+    for row in rows[:80]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        if "synthesize" not in text.lower() and "get_models" not in text.lower():
+            continue
+        for block in extract_code_blocks(text):
+            for line in block["code"].splitlines():
+                if re.match(r"\s*from\s+[\w.]+\s+import\s+\w*Client\b", line):
+                    import_line = line.strip()
+                    match = re.search(r"import\s+(\w*Client)\b", line)
+                    if match:
+                        client_name = match.group(1)
+                    break
+            if import_line:
+                break
+        if import_line:
+            break
+    if not import_line:
+        return None
+    variable = re.sub(r"(?<!^)(?=[A-Z])", "_", client_name).lower()
+    lines = [
+        import_line,
+        "",
+        f'{variable} = {client_name}(api_key="SMALLEST_API_KEY", model="{fast}")',
+    ]
+    if quality and quality != fast:
+        lines.append(f'{quality.replace("-", "_")}_client = {client_name}(api_key="SMALLEST_API_KEY", model="{quality}")')
+    return {"language": "python", "code": "\n".join(lines)}
 
 
 def voice_selection_guidance(rows: list[dict[str, Any]]) -> str:
@@ -1363,6 +1449,46 @@ def voice_selection_guidance(rows: list[dict[str, Any]]) -> str:
             "- For cloned/custom voices, use the model required by the voice-cloning docs before synthesizing.",
         ]
     )
+
+
+def voice_selection_usage_block(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    client_name = "WavesClient"
+    import_line = ""
+    for row in rows[:100]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        if "get_voices" not in text.lower() and "voice_id" not in text.lower() and "voiceid" not in text:
+            continue
+        for block in extract_code_blocks(text):
+            for line in block["code"].splitlines():
+                if re.match(r"\s*from\s+[\w.]+\s+import\s+\w*Client\b", line):
+                    import_line = line.strip()
+                    match = re.search(r"import\s+(\w*Client)\b", line)
+                    if match:
+                        client_name = match.group(1)
+                    break
+            if import_line:
+                break
+        if import_line:
+            break
+    if not import_line:
+        return None
+    model = next((name for name in sorted(model_names_from_rows(rows)) if "large" not in name.lower()), "lightning-v3.1")
+    variable = re.sub(r"(?<!^)(?=[A-Z])", "_", client_name).lower()
+    code = "\n".join(
+        [
+            import_line,
+            "",
+            f'{variable} = {client_name}(api_key="SMALLEST_API_KEY")',
+            f'voices = {variable}.get_voices(model="{model}")',
+            'voice_id = voices[0]["voiceId"] if isinstance(voices[0], dict) else voices[0]',
+            f'{variable}.synthesize(',
+            '    "Hello from the selected voice.",',
+            "    voice_id=voice_id,",
+            '    save_as="speech.wav",',
+            ")",
+        ]
+    )
+    return {"language": "python", "code": code}
 
 
 def controls_block_score(code: str) -> float:
