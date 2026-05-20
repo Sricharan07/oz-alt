@@ -142,15 +142,15 @@ def path_scope_prior(path: str, plan: QueryIntent) -> float:
     score = 0.0
     if "pages router" in query_text or "pages" in plan.important_terms:
         if "/pages/" in path or "/pages/api-reference/" in path:
-            score += 45.0
+            score += 140.0
         if "/app/" in path or "/app/api-reference/" in path:
-            score -= 15.0
+            score -= 60.0
         return score
     if "app router" in query_text or "/pages/api-reference/" in path or "/app/api-reference/" in path:
         if "/app/" in path or "/app/api-reference/" in path:
-            score += 35.0
+            score += 140.0
         if "/pages/" in path or "/pages/api-reference/" in path:
-            score -= 45.0
+            score -= 140.0
     return score
 
 
