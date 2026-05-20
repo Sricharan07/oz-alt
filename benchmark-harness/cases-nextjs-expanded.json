@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "description": "Expanded Next.js retrieval comparison set covering App Router, API reference, config, metadata, caching, routing, runtime, Pages Router, and edge cases.",
+  "libraries": [
+    {
+      "library": "vercel/next.js",
+      "version": "15",
+      "cases": [
+        {
+          "id": "nextjs-middleware-auth-cookies",
+          "query": "How do I implement authentication in Next.js middleware using cookies and NextRequest?",
+          "intent": "how_to",
+          "expected_paths": ["guides/app/guides/authentication.md", "guides/app/getting-started/proxy.md", "guides/app/building-your-application/routing/middleware.md", "api-reference/app/api-reference/functions/next-request.md", "api-reference/app/api-reference/functions/cookies.md", "_symbols/NextRequest.md"],
+          "required_terms": ["NextRequest", "cookies", "Proxy"],
+          "banned_terms": ["customer story", "contact sales"]
+        },
+        {
+          "id": "nextjs-route-handler-post-json",
+          "query": "How does a Next.js App Router route handler read a POST body and return JSON?",
+          "intent": "code_example",
+          "expected_paths": ["guides/app/getting-started/route-handlers.md", "api-reference/app/api-reference/file-conventions/route.md", "guides/app/building-your-application/routing/route-handlers.md"],
+          "required_terms": ["Route Handler", "POST", "Response.json"]
+        },
+        {
+          "id": "nextjs-server-action-revalidate",
+          "query": "How do Server Actions mutate data and revalidate a path or cache tag?",
+          "intent": "how_to",
+          "expected_paths": ["guides/app/getting-started/mutating-data.md", "guides/app/getting-started/revalidating.md", "_symbols/revalidatePath.md", "_symbols/revalidateTag.md", "guides/app/building-your-application/data-fetching/server-actions-and-mutations.md", "api-reference/app/api-reference/functions/revalidatepath.md", "api-reference/app/api-reference/functions/revalidatetag.md"],
+          "required_terms": ["Server Actions", "revalidatePath", "revalidateTag"]
+        },
+        {
+          "id": "nextjs-image-remote-patterns",
+          "query": "How do I configure next/image remotePatterns for external image domains?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/components/image.md", "api-reference/app/api-reference/config/next-config-js/images.md"],
+          "required_terms": ["remotePatterns", "images", "next.config"]
+        },
+        {
+          "id": "nextjs-generate-metadata-dynamic",
+          "query": "How does generateMetadata work with dynamic route params in the App Router?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/generate-metadata.md", "_symbols/generateMetadata.md"],
+          "required_terms": ["generateMetadata", "params", "metadata"]
+        },
+        {
+          "id": "nextjs-cookies-server-component",
+          "query": "How do I read and set cookies in Next.js Server Components and Server Actions?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/cookies.md", "_symbols/cookies.md"],
+          "required_terms": ["cookies", "Server Component", "Server Action"]
+        },
+        {
+          "id": "nextjs-redirect-notfound-unauthorized",
+          "query": "When should I use redirect, notFound, unauthorized, and forbidden in Next.js?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/redirect.md", "api-reference/app/api-reference/functions/not-found.md", "api-reference/app/api-reference/functions/unauthorized.md", "api-reference/app/api-reference/functions/forbidden.md"],
+          "required_terms": ["redirect", "notFound", "unauthorized"]
+        },
+        {
+          "id": "nextjs-route-groups-layouts",
+          "query": "How do route groups affect layouts and URL paths in the App Router?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/route-groups.md", "api-reference/app/api-reference/file-conventions/layout.md"],
+          "required_terms": ["route groups", "layout", "URL"]
+        },
+        {
+          "id": "nextjs-fetch-cache-revalidate-tags",
+          "query": "How do fetch cache options, revalidate, and cache tags work in Next.js?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/functions/fetch.md", "api-reference/app/api-reference/functions/revalidatetag.md", "api-reference/app/api-reference/functions/cachetag.md"],
+          "required_terms": ["fetch", "revalidate", "tags"]
+        },
+        {
+          "id": "nextjs-userouter-searchparams",
+          "query": "How do I navigate on the client and read search params with useRouter and useSearchParams?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/use-router.md", "api-reference/app/api-reference/functions/use-search-params.md", "_symbols/useRouter.md"],
+          "required_terms": ["useRouter", "useSearchParams", "Client Component"]
+        },
+        {
+          "id": "nextjs-generate-static-params-dynamic-route",
+          "query": "How do I use generateStaticParams for dynamic route segments in the App Router?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/generate-static-params.md", "api-reference/app/api-reference/file-conventions/dynamic-routes.md"],
+          "required_terms": ["generateStaticParams", "params", "dynamic routes"]
+        },
+        {
+          "id": "nextjs-draft-mode-preview",
+          "query": "How does draftMode enable preview or draft content in Next.js?",
+          "intent": "how_to",
+          "expected_paths": ["api-reference/app/api-reference/functions/draft-mode.md", "guides/app/guides/draft-mode.md"],
+          "required_terms": ["draftMode", "preview", "cookies"]
+        },
+        {
+          "id": "nextjs-route-segment-dynamic-revalidate",
+          "query": "How do route segment config options dynamic, revalidate, and dynamicParams work?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/route-segment-config.md", "api-reference/app/api-reference/file-conventions/route-segment-config/dynamicparams.md", "api-reference/app/api-reference/functions/fetch.md"],
+          "required_terms": ["dynamic", "revalidate", "dynamicParams"]
+        },
+        {
+          "id": "nextjs-parallel-intercepting-routes",
+          "query": "How do parallel routes, slots, and intercepting routes work in the App Router?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/parallel-routes.md", "api-reference/app/api-reference/file-conventions/intercepting-routes.md"],
+          "required_terms": ["parallel routes", "slots", "intercepting routes"]
+        },
+        {
+          "id": "nextjs-loading-error-boundaries",
+          "query": "How do loading.js and error.js handle loading UI and recoverable route errors?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/loading.md", "api-reference/app/api-reference/file-conventions/error.md", "guides/app/getting-started/error-handling.md"],
+          "required_terms": ["loading.js", "error.js", "reset"]
+        },
+        {
+          "id": "nextjs-env-public-server",
+          "query": "How should I use environment variables in Next.js, including NEXT_PUBLIC variables and server-only secrets?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/config/next-config-js/env.md", "guides/app/guides/environment-variables.md"],
+          "required_terms": ["NEXT_PUBLIC", "process.env", "server"]
+        },
+        {
+          "id": "nextjs-rewrites-redirects-headers",
+          "query": "How do I configure rewrites, redirects, and custom headers in next.config.js?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/config/next-config-js/rewrites.md", "api-reference/app/api-reference/config/next-config-js/redirects.md", "api-reference/app/api-reference/config/next-config-js/headers.md"],
+          "required_terms": ["rewrites", "redirects", "headers"]
+        },
+        {
+          "id": "nextjs-font-optimization",
+          "query": "How do I use next/font for Google fonts and local fonts in the App Router?",
+          "intent": "how_to",
+          "expected_paths": ["api-reference/app/api-reference/components/font.md", "guides/app/getting-started/fonts.md"],
+          "required_terms": ["next/font", "localFont", "Google"]
+        },
+        {
+          "id": "nextjs-script-strategy",
+          "query": "How do Script component loading strategies beforeInteractive, afterInteractive, and lazyOnload work?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/components/script.md", "guides/app/guides/scripts.md"],
+          "required_terms": ["beforeInteractive", "afterInteractive", "lazyOnload"]
+        },
+        {
+          "id": "nextjs-instrumentation-otel",
+          "query": "How do I set up instrumentation.js for OpenTelemetry in Next.js?",
+          "intent": "how_to",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/instrumentation.md", "guides/app/guides/instrumentation.md", "_symbols/instrumentation.js.md"],
+          "required_terms": ["instrumentation", "register", "OpenTelemetry"]
+        },
+        {
+          "id": "nextjs-server-client-components-boundary",
+          "query": "How do Server Components and Client Components interact with the use client boundary?",
+          "intent": "concept",
+          "expected_paths": ["guides/app/getting-started/server-and-client-components.md", "api-reference/app/api-reference/directives/use-client.md", "api-reference/app/api-reference/directives/use-server.md"],
+          "required_terms": ["Server Components", "Client Components", "use client"]
+        },
+        {
+          "id": "nextjs-form-server-actions",
+          "query": "How does the Next.js Form component work with Server Actions for submissions?",
+          "intent": "code_example",
+          "expected_paths": ["api-reference/app/api-reference/components/form.md", "guides/app/guides/forms.md"],
+          "required_terms": ["Form", "Server Action", "action"]
+        },
+        {
+          "id": "nextjs-opengraph-image-metadata",
+          "query": "How do I generate Open Graph images with opengraph-image and ImageResponse?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/metadata/opengraph-image.md", "guides/app/getting-started/metadata-and-og-images.md", "api-reference/app/api-reference/functions/image-response.md"],
+          "required_terms": ["opengraph-image", "ImageResponse", "metadata"]
+        },
+        {
+          "id": "nextjs-robots-sitemap-metadata",
+          "query": "How do robots.txt, sitemap.xml, and generateSitemaps work in Next.js metadata routes?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/metadata/robots.md", "api-reference/app/api-reference/file-conventions/metadata/sitemap.md", "api-reference/app/api-reference/functions/generate-sitemaps.md"],
+          "required_terms": ["robots", "sitemap", "generateSitemaps"]
+        },
+        {
+          "id": "nextjs-use-cache-directives",
+          "query": "How do the use cache directives, cacheLife, and cacheTag work in Next.js?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/directives/use-cache.md", "api-reference/app/api-reference/functions/cachelife.md", "api-reference/app/api-reference/functions/cachetag.md"],
+          "required_terms": ["use cache", "cacheLife", "cacheTag"]
+        },
+        {
+          "id": "nextjs-pages-data-fetching",
+          "query": "In the Pages Router, when should I use getStaticProps, getServerSideProps, and getStaticPaths?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/pages/api-reference/functions/get-static-props.md", "api-reference/pages/api-reference/functions/get-server-side-props.md", "api-reference/pages/api-reference/functions/get-static-paths.md"],
+          "required_terms": ["getStaticProps", "getServerSideProps", "getStaticPaths"]
+        },
+        {
+          "id": "nextjs-typescript-typed-routes",
+          "query": "How do I configure TypeScript and typed routes in Next.js?",
+          "intent": "config",
+          "expected_paths": ["api-reference/app/api-reference/config/typescript.md", "api-reference/app/api-reference/config/next-config-js/typescript.md"],
+          "required_terms": ["TypeScript", "typedRoutes", "next.config"]
+        },
+        {
+          "id": "nextjs-mdx-components",
+          "query": "How do I configure mdx-components.js and useMDXComponents in Next.js?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/file-conventions/mdx-components.md", "_symbols/useMDXComponents.md"],
+          "required_terms": ["mdx-components", "useMDXComponents", "MDX"]
+        },
+        {
+          "id": "nextjs-web-vitals",
+          "query": "How do I report web vitals metrics with useReportWebVitals in Next.js?",
+          "intent": "api_reference",
+          "expected_paths": ["api-reference/app/api-reference/functions/use-report-web-vitals.md", "_symbols/useReportWebVitals.md"],
+          "required_terms": ["useReportWebVitals", "metric", "web vitals"]
+        },
+        {
+          "id": "nextjs-client-navigation-link",
+          "query": "How do Link prefetching and client navigation work in Next.js?",
+          "intent": "concept",
+          "expected_paths": ["api-reference/app/api-reference/components/link.md", "guides/app/getting-started/linking-and-navigating.md"],
+          "required_terms": ["Link", "prefetch", "navigation"]
+        }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,15 @@ create index if not exists chunks_source_document_idx on chunks(source_document_
 create index if not exists chunks_version_path_idx on chunks (version_id, path);
 alter table chunks add column if not exists content_sha text;
 create index if not exists chunks_content_sha_idx on chunks(content_sha);
+create index if not exists source_sections_version_path_idx on source_sections(version_id, path, start_line);
+create index if not exists source_sections_document_idx on source_sections(source_document_id);
+create index if not exists source_sections_search_idx on source_sections using gin(search_document);
+create index if not exists context_snippets_version_role_idx on context_snippets(version_id, role, path);
+create index if not exists context_snippets_section_idx on context_snippets(source_section_id);
+create index if not exists context_snippets_chunk_idx on context_snippets(primary_chunk_id);
+create index if not exists context_snippets_search_idx on context_snippets using gin(search_document);
+create index if not exists context_snippets_entities_idx on context_snippets using gin(entities);
+create index if not exists context_snippets_task_tags_idx on context_snippets using gin(task_tags);
 create index if not exists library_versions_library_version_idx on library_versions (library_id, version);
 create index if not exists refs_library_channel_idx on refs (library_id, channel);
 create index if not exists index_requests_status_updated_idx on index_requests (status, updated_at desc);

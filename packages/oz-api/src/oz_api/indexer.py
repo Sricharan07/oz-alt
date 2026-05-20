@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag
 
+from oz_api.context_cards import build_context_snippets, build_source_sections
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
 from oz_api.observability import observe_duration
@@ -143,11 +144,13 @@ def write_catalog_and_chunks(
             )
         writer.delete_stale_chunks(version_id, current_chunk_shas)
         writer.resolve_parent_chunks(version_id)
+        writer.rebuild_context_index(version_id)
         result = writer.ensure_embeddings(version_id, crawler_job_id=optional_int(entry.get("crawler_job_id")))
         embedding_results.append(result)
         if result.complete:
             writer.resolve_parent_chunks(version_id)
             writer.rebuild_dedupe_clusters(version_id)
+            writer.rebuild_context_index(version_id)
             writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
     return embedding_results
 
@@ -625,6 +628,9 @@ class IndexWriter:
     def rebuild_dedupe_clusters(self, version_id: int) -> None:
         raise NotImplementedError
 
+    def rebuild_context_index(self, version_id: int) -> None:
+        raise NotImplementedError
+
     def set_benchmark_score(self, version_id: int, score: float) -> None:
         raise NotImplementedError
 
@@ -1000,6 +1006,178 @@ class PostgresWriter(IndexWriter):
             """,
             (version_id, version_id, version_id),
         )
+
+    def rebuild_context_index(self, version_id: int) -> None:
+        rows = self.context_chunk_rows(version_id)
+        sections = build_source_sections(rows)
+        snippets = build_context_snippets(rows, self.replace_source_sections(version_id, sections))
+        self.replace_context_snippets(version_id, snippets)
+
+    def context_chunk_rows(self, version_id: int) -> list[dict[str, Any]]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select c.id, c.source_document_id, c.path, c.start_line, c.end_line, c.source_url,
+                       c.ordinal, c.chunk_key, c.parent_chunk_key, c.chunk_sha, c.content_sha,
+                       c.heading_path, c.symbols, c.content_type, c.quality_score, c.token_count,
+                       c.source_anchor, c.content, c.dedupe_canonical,
+                       coalesce(sd.title, '') as source_title,
+                       coalesce(sd.source_kind, '') as source_kind,
+                       coalesce(sd.source_priority, 50) as source_priority
+                from chunks c
+                left join source_documents sd on sd.id = c.source_document_id
+                where c.version_id = %s
+                order by c.path asc, c.start_line asc, c.ordinal asc, c.id asc
+                """,
+                (version_id,),
+            )
+            rows = cursor.fetchall()
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            output.append(
+                {
+                    "id": row[0],
+                    "source_document_id": row[1],
+                    "path": row[2],
+                    "start_line": row[3],
+                    "end_line": row[4],
+                    "source_url": row[5],
+                    "ordinal": row[6],
+                    "chunk_key": row[7],
+                    "parent_chunk_key": row[8],
+                    "chunk_sha": row[9],
+                    "content_sha": row[10],
+                    "heading_path": row[11] or [],
+                    "symbols": row[12] or [],
+                    "content_type": row[13],
+                    "quality_score": row[14],
+                    "token_count": row[15],
+                    "source_anchor": row[16],
+                    "content": row[17],
+                    "dedupe_canonical": row[18],
+                    "source_title": row[19],
+                    "source_kind": row[20],
+                    "source_priority": row[21],
+                }
+            )
+        return output
+
+    def replace_source_sections(self, version_id: int, sections: list[Any]) -> dict[str, int]:
+        self.execute("delete from context_snippets where version_id = %s", (version_id,))
+        self.execute("delete from source_sections where version_id = %s", (version_id,))
+        section_ids: dict[str, int] = {}
+        for section in sections:
+            section_id = self.scalar(
+                """
+                insert into source_sections(
+                  version_id, source_document_id, section_key, path, source_url, source_anchor,
+                  title, heading_path, content_type, start_line, end_line, content, token_count,
+                  quality_score
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                on conflict (version_id, section_key) do update
+                  set source_document_id = excluded.source_document_id,
+                      path = excluded.path,
+                      source_url = excluded.source_url,
+                      source_anchor = excluded.source_anchor,
+                      title = excluded.title,
+                      heading_path = excluded.heading_path,
+                      content_type = excluded.content_type,
+                      start_line = excluded.start_line,
+                      end_line = excluded.end_line,
+                      content = excluded.content,
+                      token_count = excluded.token_count,
+                      quality_score = excluded.quality_score
+                returning id
+                """,
+                (
+                    version_id,
+                    section.source_document_id,
+                    section.section_key,
+                    section.path,
+                    section.source_url,
+                    section.source_anchor,
+                    section.title,
+                    json.dumps(section.heading_path),
+                    section.content_type,
+                    section.start_line,
+                    section.end_line,
+                    section.content,
+                    section.token_count,
+                    section.quality_score,
+                ),
+            )
+            section_ids[section.section_key] = section_id
+        return section_ids
+
+    def replace_context_snippets(self, version_id: int, snippets: list[Any]) -> None:
+        self.execute("delete from context_snippets where version_id = %s", (version_id,))
+        for snippet in snippets:
+            self.execute(
+                """
+                insert into context_snippets(
+                  version_id, source_section_id, primary_chunk_id, snippet_key, path, source_url,
+                  source_anchor, title, description, role, applies_to, entities, task_tags,
+                  heading_path, symbols, code_language, code, constraints, related_chunk_ids,
+                  start_line, end_line, content, token_count, quality_score
+                )
+                values (
+                  %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb,
+                  %s, %s, %s, %s, %s
+                )
+                on conflict (version_id, snippet_key) do update
+                  set source_section_id = excluded.source_section_id,
+                      primary_chunk_id = excluded.primary_chunk_id,
+                      path = excluded.path,
+                      source_url = excluded.source_url,
+                      source_anchor = excluded.source_anchor,
+                      title = excluded.title,
+                      description = excluded.description,
+                      role = excluded.role,
+                      applies_to = excluded.applies_to,
+                      entities = excluded.entities,
+                      task_tags = excluded.task_tags,
+                      heading_path = excluded.heading_path,
+                      symbols = excluded.symbols,
+                      code_language = excluded.code_language,
+                      code = excluded.code,
+                      constraints = excluded.constraints,
+                      related_chunk_ids = excluded.related_chunk_ids,
+                      start_line = excluded.start_line,
+                      end_line = excluded.end_line,
+                      content = excluded.content,
+                      token_count = excluded.token_count,
+                      quality_score = excluded.quality_score
+                """,
+                (
+                    version_id,
+                    snippet.source_section_id,
+                    snippet.primary_chunk_id,
+                    snippet.snippet_key,
+                    snippet.path,
+                    snippet.source_url,
+                    snippet.source_anchor,
+                    snippet.title,
+                    snippet.description,
+                    snippet.role,
+                    json.dumps(snippet.applies_to),
+                    json.dumps(snippet.entities),
+                    json.dumps(snippet.task_tags),
+                    json.dumps(snippet.heading_path),
+                    json.dumps(snippet.symbols),
+                    snippet.code_language,
+                    snippet.code,
+                    json.dumps(snippet.constraints),
+                    json.dumps(snippet.related_chunk_ids),
+                    snippet.start_line,
+                    snippet.end_line,
+                    snippet.content,
+                    snippet.token_count,
+                    snippet.quality_score,
+                ),
+            )
 
     def scalar_int(self, sql: str, params: tuple[Any, ...]) -> int:
         with self.connection.cursor() as cursor:

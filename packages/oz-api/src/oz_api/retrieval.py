@@ -4,12 +4,14 @@ import json
 import re
 from typing import Any
 
+from oz_api.context_cards import select_context_snippets
 from oz_api.retrieval_cache import get_cached_results, put_cached_results
 from oz_api.retrieval_common import dedupe_search_results, latest_entry, unique_libraries_to_pull
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_experiments import rerank_enabled, retrieval_variant
 from oz_api.retrieval_local import search_from_fixtures, suggest_from_catalog
 from oz_api.retrieval_postgres import (
+    context_snippets_from_postgres,
     postgres_connection,
     search_from_postgres,
     suggest_from_postgres,
@@ -100,15 +102,27 @@ def context(
     fingerprint: str = "",
     content_types: list[str] | None = None,
 ) -> dict[str, Any]:
-    rows = search(
+    normalized_types = normalize_content_types(content_types)
+    snippet_rows = context_snippets_from_postgres(
         ctx,
         query,
-        library_scope=library_scope,
-        max_results=max_results,
-        fingerprint=fingerprint,
-        content_types=content_types,
-        keep_private=True,
+        library_scope,
+        max(max_results * 4, 24),
+        fingerprint,
+        content_types=normalized_types,
     )
+    if snippet_rows:
+        rows = select_context_snippets(snippet_rows, query, max_results=max_results, max_tokens=max_tokens)
+    else:
+        rows = search(
+            ctx,
+            query,
+            library_scope=library_scope,
+            max_results=max_results,
+            fingerprint=fingerprint,
+            content_types=normalized_types,
+            keep_private=True,
+        )
     snippets: list[dict[str, Any]] = []
     remaining = max(max_tokens, 1)
     retrieval_mode = first_retrieval_mode(rows)
@@ -122,6 +136,7 @@ def context(
         metadata = {
             "path": row.get("path"),
             "line": row.get("line"),
+            "end_line": row.get("end_line"),
             "score": row.get("score"),
             "library": row.get("library"),
             "vendor": row.get("vendor"),
@@ -129,6 +144,12 @@ def context(
             "matched_path": row.get("matched_path"),
             "source_anchor": bounded_string(row.get("source_anchor"), 240),
             "content_type": row.get("content_type"),
+            "role": row.get("role") or row.get("content_type"),
+            "title": bounded_string(row.get("title"), 180),
+            "description": bounded_string(row.get("description"), 320),
+            "applies_to": bounded_list(row.get("applies_to") or [], 120),
+            "entities": bounded_list(row.get("entities") or [], 120),
+            "task_tags": bounded_list(row.get("task_tags") or [], 120),
             "heading_path": bounded_list(row.get("heading_path") or [], 160),
             "symbols": row.get("symbols") or [],
             "retrieval_mode": row.get("retrieval_mode", retrieval_mode),
@@ -185,6 +206,8 @@ def first_retrieval_mode(rows: list[dict[str, Any]]) -> str:
 def context_source_text(row: dict[str, Any]) -> str:
     matched = clean_context_text(str(row.get("_matched_text") or ""))
     parent = clean_context_text(str(row.get("_parent_text") or ""))
+    if row.get("retrieval_mode") == "context_snippets":
+        return format_context_card_text(row, matched)
     content_type = str(row.get("content_type") or "")
     if matched and useful_context_text(matched, row):
         return matched
@@ -193,6 +216,24 @@ def context_source_text(row: dict[str, Any]) -> str:
     if content_type == "api_reference" and matched and row.get("symbols"):
         return matched
     return matched or parent
+
+
+def format_context_card_text(row: dict[str, Any], matched: str) -> str:
+    title = str(row.get("title") or "").strip()
+    description = str(row.get("description") or "").strip()
+    constraints = [str(item).strip() for item in row.get("constraints") or [] if str(item).strip()]
+    parts: list[str] = []
+    if title and title.lower() not in matched[:240].lower():
+        parts.append(f"## {title}")
+    if description and description.lower() not in matched[:400].lower():
+        parts.append(description)
+    if matched:
+        parts.append(matched)
+    if constraints:
+        constraint_text = "\n".join(f"- {item}" for item in constraints[:3])
+        if constraint_text.lower() not in "\n".join(parts).lower():
+            parts.append("Constraints:\n" + constraint_text)
+    return clean_context_text("\n\n".join(parts))
 
 
 def clean_context_text(text: str) -> str:

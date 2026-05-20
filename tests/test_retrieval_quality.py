@@ -25,6 +25,7 @@ from oz_api.crawler_jobs import (
 )
 from oz_api.intent import classify_query, plan_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
+from oz_api.context_cards import build_context_snippets, build_source_sections, query_facets, select_context_snippets
 from oz_api.indexer import add_parent_chunks, chunk_rows, enrich_chunk_row, limit_to_token_budget
 from oz_api.ranking import local_chunk_score, planned_chunk_score
 from oz_api.queue import queued_crawler_job_event
@@ -951,6 +952,108 @@ class RetrievalQualityTests(unittest.TestCase):
                 chunks = chunk_markdown(clean_markdown(sample), source_url="https://docs.example/fuzz", max_tokens=300)
                 self.assertTrue(all(chunk.text.strip() for chunk in chunks))
                 self.assertTrue(all(token_count(chunk.text) <= 1200 for chunk in chunks))
+
+    def test_context_cards_create_agent_units_with_facets(self) -> None:
+        rows = [
+            {
+                "id": 1,
+                "source_document_id": 10,
+                "path": "api-reference/app/api-reference/functions/cookies.md",
+                "start_line": 12,
+                "end_line": 28,
+                "source_url": "https://nextjs.org/docs/app/api-reference/functions/cookies",
+                "source_anchor": "https://nextjs.org/docs/app/api-reference/functions/cookies#read-cookies-_snippet_1",
+                "ordinal": 1,
+                "chunk_key": "cookies#1",
+                "heading_path": ["cookies", "Reading cookies"],
+                "symbols": ["cookies"],
+                "content_type": "api_reference",
+                "quality_score": 1.0,
+                "token_count": 50,
+                "content": "## Reading cookies\n\nUse cookies() in a Server Component to read request cookies.",
+                "dedupe_canonical": True,
+            },
+            {
+                "id": 2,
+                "source_document_id": 10,
+                "path": "api-reference/app/api-reference/functions/cookies.md",
+                "start_line": 30,
+                "end_line": 48,
+                "source_url": "https://nextjs.org/docs/app/api-reference/functions/cookies",
+                "source_anchor": "https://nextjs.org/docs/app/api-reference/functions/cookies#set-cookies-_snippet_2",
+                "ordinal": 2,
+                "chunk_key": "cookies#2",
+                "heading_path": ["cookies", "Setting cookies"],
+                "symbols": ["cookies"],
+                "content_type": "code_example",
+                "quality_score": 1.0,
+                "token_count": 90,
+                "content": "## Setting cookies\n\nYou can set cookies in a Server Action.\n\n```tsx\n'use server'\nimport { cookies } from 'next/headers'\nexport async function action() { (await cookies()).set('name', 'lee') }\n```",
+                "dedupe_canonical": True,
+            },
+        ]
+
+        sections = build_source_sections(rows)
+        snippets = build_context_snippets(rows, {section.section_key: index + 1 for index, section in enumerate(sections)})
+
+        self.assertGreaterEqual(len(sections), 2)
+        self.assertTrue(any("Server Actions" in snippet.applies_to for snippet in snippets))
+        self.assertTrue(any(snippet.role == "code_example" and snippet.code_language == "tsx" for snippet in snippets))
+        self.assertIn("cookies", query_facets("How do I read and set cookies in Server Components and Server Actions?"))
+
+    def test_context_assembly_diversifies_required_facets(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "path": "cookies.md",
+                "matched_path": "cookies.md",
+                "line": 1,
+                "title": "Reference: cookies (Server Components)",
+                "role": "api_reference",
+                "entities": ["cookies"],
+                "applies_to": ["Server Components"],
+                "task_tags": ["cookies"],
+                "token_count": 50,
+                "_matched_text": "Read cookies in a Server Component with cookies().",
+            },
+            {
+                "score": 90,
+                "path": "cookies.md",
+                "matched_path": "cookies.md",
+                "line": 40,
+                "title": "Example: cookies (Server Actions)",
+                "role": "code_example",
+                "entities": ["cookies"],
+                "applies_to": ["Server Actions"],
+                "task_tags": ["cookies"],
+                "token_count": 80,
+                "_matched_text": "Set cookies in a Server Action with cookies().set().",
+            },
+            {
+                "score": 95,
+                "path": "proxy.md",
+                "matched_path": "proxy.md",
+                "line": 5,
+                "title": "Reference: Proxy",
+                "role": "api_reference",
+                "entities": ["Proxy"],
+                "applies_to": ["Proxy"],
+                "task_tags": ["cookies"],
+                "token_count": 75,
+                "_matched_text": "Read cookies in Proxy.",
+            },
+        ]
+
+        selected = select_context_snippets(
+            rows,
+            "How do I read and set cookies in Server Components and Server Actions?",
+            max_results=2,
+            max_tokens=500,
+        )
+
+        titles = [row["title"] for row in selected]
+        self.assertIn("Reference: cookies (Server Components)", titles)
+        self.assertIn("Example: cookies (Server Actions)", titles)
 
 
 if __name__ == "__main__":

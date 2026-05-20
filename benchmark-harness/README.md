@@ -30,6 +30,15 @@ Run deterministic Oz retrieval only:
 python3 benchmark-harness/harness.py run --mode retrieval --limit 3
 ```
 
+Run the expanded Next.js edge-case suite:
+
+```bash
+python3 benchmark-harness/harness.py run \
+  --cases benchmark-harness/cases-nextjs-expanded.json \
+  --mode retrieval \
+  --library vercel/next.js
+```
+
 Run against the published npm-installed binary:
 
 ```bash
@@ -85,6 +94,17 @@ Summarize a run:
 
 ```bash
 python3 benchmark-harness/harness.py summarize benchmark-harness/runs/<run-id>
+```
+
+Compare the same case set against the Context7 context API:
+
+```bash
+CONTEXT7_API_KEY=... python3 benchmark-harness/context7_compare.py \
+  --cases benchmark-harness/cases-nextjs-expanded.json \
+  --library vercel/next.js \
+  --context7-library-id /vercel/next.js \
+  --oz-summary benchmark-harness/runs/<run-id>/summary.json \
+  --out benchmark-harness/runs/<run-id>
 ```
 
 ## Modes

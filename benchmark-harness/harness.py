@@ -113,8 +113,8 @@ def validate_cases(spec: dict[str, Any]) -> list[str]:
         cases = lib.get("cases")
         if not re.fullmatch(r"[^/\s]+/[^@\s]+", library):
             errors.append(f"invalid library id: {library}")
-        if not isinstance(cases, list) or len(cases) != 10:
-            errors.append(f"{library} must have exactly 10 cases")
+        if not isinstance(cases, list) or len(cases) < 10:
+            errors.append(f"{library} must have at least 10 cases")
             continue
         for case in cases:
             case_id = str(case.get("id", ""))

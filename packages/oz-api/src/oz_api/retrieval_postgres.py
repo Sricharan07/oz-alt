@@ -332,6 +332,152 @@ def search_from_postgres(
         return None
 
 
+def context_snippets_from_postgres(
+    ctx: RetrievalContext,
+    query: str,
+    library_scope: str | None,
+    max_results: int,
+    fingerprint: str,
+    *,
+    content_types: list[str] | None = None,
+) -> list[dict[str, Any]] | None:
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return None
+    query_plan = plan_query(query)
+    terms = normalized_tsquery(query_plan.important_terms or query)
+    intent = query_plan.content_type
+    compact_terms = [
+        compact_key(value)
+        for value in [*query_plan.symbols, *query_plan.phrases, *query_plan.slugs, *query_plan.important_terms]
+        if compact_key(value)
+    ]
+    exact_keys = compact_terms or ["__oz_no_context_match__"]
+    exact_patterns = [f"%{key}%" for key in exact_keys]
+    scope = parse_versioned_scope(library_scope)
+    scope_vendor, scope_library = scope.vendor, scope.library
+    scope_version_id: int | None = None
+    if scope_vendor and scope_library:
+        scope_version_id = resolve_db_version_id(connection, scope_vendor, scope_library, scope.version)
+    where_scope = (
+        "and v.name = %s and l.name = %s and lv.id = %s"
+        if scope_vendor
+        else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
+    )
+    content_filter = "and cs.role = any(%s)" if content_types else ""
+    params: list[Any] = [
+        terms,
+        intent,
+        exact_keys,
+        exact_keys,
+        exact_keys,
+        exact_keys,
+        exact_patterns,
+        terms,
+        exact_patterns,
+        exact_patterns,
+        exact_keys,
+        exact_keys,
+        exact_keys,
+        exact_keys,
+    ]
+    if scope_vendor:
+        params.extend([scope_vendor, scope_library, scope_version_id])
+    if content_types:
+        params.append(content_types)
+    params.append(max(max_results * 8, 40))
+    sql = f"""
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || cs.path as path,
+          cs.start_line,
+          (
+            greatest(coalesce(ts_rank_cd(cs.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 45.0
+            + (content_type_score(cs.role) * 90.0)
+            + (content_type_intent_score(cs.role, %s) * 160.0)
+            + (
+              case when compact_key_sql(cs.title) = any(%s::text[]) then 140.0 else 0.0 end
+              + case when compact_basename(cs.path) = any(%s::text[]) then 120.0 else 0.0 end
+              + case when exists (
+                  select 1 from jsonb_array_elements_text(cs.entities) value
+                  where compact_key_sql(value) = any(%s::text[])
+                ) then 110.0 else 0.0 end
+              + case when exists (
+                  select 1 from jsonb_array_elements_text(cs.task_tags) value
+                  where compact_key_sql(value) = any(%s::text[])
+                ) then 80.0 else 0.0 end
+              + case when compact_key_sql(cs.path) ilike any(%s::text[]) then 65.0 else 0.0 end
+            )
+            + greatest(coalesce(cs.quality_score, 1), 0) * 8.0
+            + least(coalesce(cs.token_count, 0), 1000) / 50.0
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          cs.path as relative_path,
+          cs.heading_path,
+          cs.symbols,
+          cs.role,
+          cs.quality_score,
+          cs.content,
+          cs.path as matched_path,
+          cs.source_anchor,
+          cs.token_count,
+          cs.title,
+          cs.description,
+          cs.applies_to,
+          cs.entities,
+          cs.task_tags,
+          cs.code_language,
+          cs.code,
+          cs.constraints,
+          cs.end_line
+        from context_snippets cs
+        join library_versions lv on lv.id = cs.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        where (
+            cs.search_document @@ websearch_to_tsquery('english', %s)
+            or compact_key_sql(cs.title) ilike any(%s::text[])
+            or compact_key_sql(cs.path) ilike any(%s::text[])
+            or exists (
+              select 1 from jsonb_array_elements_text(cs.entities) value
+              where compact_key_sql(value) = any(%s::text[])
+            )
+            or exists (
+              select 1 from jsonb_array_elements_text(cs.task_tags) value
+              where compact_key_sql(value) = any(%s::text[])
+            )
+            or exists (
+              select 1 from jsonb_array_elements_text(cs.symbols) value
+              where compact_key_sql(value) = any(%s::text[])
+            )
+            or exists (
+              select 1 from jsonb_array_elements_text(cs.heading_path) value
+              where compact_key_sql(value) = any(%s::text[])
+            )
+          )
+          {where_scope}
+          {content_filter}
+        order by score desc, cs.path asc, cs.start_line asc
+        limit %s
+    """
+    try:
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "context_snippets", "mode": "fts"}):
+            with connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"set local statement_timeout = {retrieval_statement_timeout_ms()}")
+                    cursor.execute(sql, tuple(params))
+                    rows = cursor.fetchall()
+                    mark_context_versions_requested(cursor, rows)
+        return score_context_snippet_rows(rows)
+    except VersionResolutionError:
+        raise
+    except Exception as exc:
+        LOGGER.warning("postgres context snippets failed: %s", exc)
+        return None
+
+
 def candidate_select(fts_score: str, vector_score: str, exact_score: str) -> str:
     return f"""
         select
@@ -498,6 +644,55 @@ def score_postgres_rows(
     return scored
 
 
+def score_context_snippet_rows(rows: list[Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        output.append(
+            {
+                "path": row[0],
+                "line": row[1],
+                "end_line": row[23],
+                "score": round(float(row[2] or 0), 4),
+                "library": row[3],
+                "vendor": row[4],
+                "version": row[5],
+                "relative_path": row[6],
+                "heading_path": row[7] or [],
+                "symbols": row[8] or [],
+                "content_type": row[9],
+                "role": row[9],
+                "quality_score": row[10],
+                "matched_path": row[12],
+                "source_anchor": row[13],
+                "token_count": int(row[14] or 0),
+                "title": row[15] or "",
+                "description": row[16] or "",
+                "applies_to": row[17] or [],
+                "entities": row[18] or [],
+                "task_tags": row[19] or [],
+                "code_language": row[20],
+                "code": row[21],
+                "constraints": row[22] or [],
+                "retrieval_mode": "context_snippets",
+                "degraded": False,
+                "_matched_text": row[11] or "",
+                "_parent_text": "",
+                "_rerank_text": "\n".join(
+                    [
+                        f"title: {row[15] or ''}",
+                        f"description: {row[16] or ''}",
+                        f"path: {row[6] or ''}",
+                        f"role: {row[9] or ''}",
+                        f"entities: {row[18] or []}",
+                        str(row[11] or ""),
+                    ]
+                ),
+            }
+        )
+    output.sort(key=lambda item: (-float(item["score"]), str(item["path"]), int(item.get("line") or 1)))
+    return output
+
+
 def rerank_text(row: Any) -> str:
     return "\n".join(
         [
@@ -512,6 +707,31 @@ def rerank_text(row: Any) -> str:
 
 
 def mark_search_versions_requested(cursor: Any, rows: list[Any]) -> None:
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows[:20]:
+        vendor = str(row[4] or "")
+        library_full = str(row[3] or "")
+        version = str(row[5] or "")
+        library = library_full.split("/", 1)[1] if "/" in library_full else library_full
+        if vendor and library and version:
+            seen.add((vendor, library, version))
+    for vendor, library, version in seen:
+        cursor.execute(
+            """
+            update library_versions lv
+            set last_requested_at = now()
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            where lv.library_id = l.id
+              and v.name = %s
+              and l.name = %s
+              and lv.version = %s
+            """,
+            (vendor, library, version),
+        )
+
+
+def mark_context_versions_requested(cursor: Any, rows: list[Any]) -> None:
     seen: set[tuple[str, str, str]] = set()
     for row in rows[:20]:
         vendor = str(row[4] or "")
