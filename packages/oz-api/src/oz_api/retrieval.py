@@ -124,14 +124,17 @@ def context(
     search_rows_are_fixture_fallback = bool(search_rows) and all(
         str(row.get("retrieval_mode") or "") == "fixture_fallback" for row in search_rows
     )
+    candidate_rows: list[dict[str, Any]]
     if snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
+        candidate_rows = merge_context_candidates(snippet_rows or [], search_rows or [])
         rows = select_context_snippets(
-            merge_context_candidates(snippet_rows or [], search_rows or []),
+            candidate_rows,
             query,
             max_results=max(max_results * 3, 12),
             max_tokens=max(max_tokens * 2, max_tokens),
         )
     else:
+        candidate_rows = []
         rows = context_snippets_from_fixtures(
             ctx.storage,
             query,
@@ -142,7 +145,14 @@ def context(
         )
     snippets: list[dict[str, Any]] = []
     remaining = max(max_tokens, 1)
-    retrieval_mode = context_retrieval_mode(rows)
+    retrieval_mode = context_retrieval_mode(candidate_rows or rows)
+    candidate_modes = sorted(
+        {
+            str(row.get("retrieval_mode") or "").strip()
+            for row in (candidate_rows or rows)
+            if str(row.get("retrieval_mode") or "").strip()
+        }
+    )
     degraded = any(bool(row.get("degraded")) for row in rows)
     for row in rows:
         if remaining <= 0:
@@ -196,6 +206,7 @@ def context(
         **packet,
         "results": snippets,
         "retrieval_mode": retrieval_mode,
+        "candidate_retrieval_modes": candidate_modes,
         "degraded": degraded,
     }
 
@@ -299,13 +310,14 @@ def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) ->
 def setup_composite_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
     install = first_code_block(rows, lambda block, row, text: install_command(block["code"]))
     env_vars = env_var_names(rows, query=query)
-    init = first_code_block(
+    init = best_code_block(
         rows,
         lambda block, row, text: (
             bool(re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", block["code"]))
             or bool(re.search(r"\b\w*Client\s*\(", block["code"]))
         )
         and not generated_context_path(str(row.get("matched_path") or row.get("path") or "").lower()),
+        lambda block, row, text: setup_init_block_score(block, row, query, rows),
     )
     if not install and not env_vars and not init:
         return None
@@ -382,6 +394,113 @@ def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, st
             if predicate(block, row, text):
                 return {**block, "source": source_id(row)}
     return None
+
+
+def best_code_block(rows: list[dict[str, Any]], predicate: Any, scorer: Any) -> dict[str, str] | None:
+    best: tuple[float, dict[str, str]] | None = None
+    for row in rows:
+        text = str(row.get("snippet") or "").strip()
+        if not text:
+            continue
+        for block in extract_code_blocks(text):
+            if not predicate(block, row, text):
+                continue
+            scored = (float(scorer(block, row, text)), {**block, "source": source_id(row)})
+            if best is None or scored[0] > best[0]:
+                best = scored
+    return best[1] if best else None
+
+
+PROVIDER_CLIENT_TERMS = {
+    "anthropic",
+    "azure",
+    "bedrock",
+    "cohere",
+    "gemini",
+    "google",
+    "groq",
+    "mistral",
+    "openai",
+    "vertex",
+}
+
+
+def setup_init_block_score(block: dict[str, str], row: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> float:
+    code = block["code"]
+    code_lower = code.lower()
+    query_lower = query.lower()
+    path = str(row.get("matched_path") or row.get("path") or "").lower()
+    title = str(row.get("title") or "").lower()
+    source = source_id(row).lower()
+    metadata = row.get("source_metadata") if isinstance(row.get("source_metadata"), dict) else row.get("metadata_json")
+    metadata_text = " ".join(str(value).lower() for value in (metadata or {}).values())
+    score = packet_row_score(row, query)
+    if re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", code):
+        score += 420
+    if re.search(r"\b\w*Client\s*\(", code):
+        score += 220
+    if re.search(r"\bConfiguration\s*\(", code) or re.search(r"\bConfig\w*\s*\(", code):
+        score += 120
+    if "api_key" in code_lower or "access_token" in code_lower or "token" in code_lower:
+        score += 160
+    if "readme" in path or "quickstart" in path or "getting-started" in path:
+        score += 420
+    scope_terms = library_scope_terms(rows, query)
+    own_hits = sum(1 for term in scope_terms if term and term in code_lower)
+    if own_hits:
+        score += 520 + own_hits * 80
+    elif scope_terms and any(term in f"{path} {source} {metadata_text}" for term in scope_terms):
+        score += 120
+    provider_hits = {term for term in PROVIDER_CLIENT_TERMS if term in f"{code_lower} {path} {title}"}
+    unrequested_provider_hits = {term for term in provider_hits if term not in query_lower}
+    if unrequested_provider_hits:
+        score -= 900
+    if provider_hits and provider_hits.issubset(unrequested_provider_hits) and not own_hits:
+        score -= 500
+    if "basellmclient" in code_lower or "standalone openai client" in code_lower:
+        score -= 420
+    return score
+
+
+GENERIC_SCOPE_TERMS = {
+    "api",
+    "client",
+    "docs",
+    "documentation",
+    "examples",
+    "guide",
+    "library",
+    "latest",
+    "main",
+    "python",
+    "sdk",
+    "source",
+}
+
+
+def library_scope_terms(rows: list[dict[str, Any]], query: str) -> set[str]:
+    terms: set[str] = set()
+    for row in rows[:12]:
+        for value in (row.get("library"), row.get("vendor")):
+            text = str(value or "").lower()
+            for term in re.findall(r"[a-z][a-z0-9]+", text.replace(".", " ").replace("-", " ").replace("/", " ")):
+                if len(term) >= 4 and term not in GENERIC_SCOPE_TERMS:
+                    terms.add(term)
+        metadata = row.get("source_metadata") if isinstance(row.get("source_metadata"), dict) else row.get("metadata_json")
+        if isinstance(metadata, dict):
+            for key in ("product", "package", "module", "framework"):
+                for term in re.findall(r"[a-z][a-z0-9]+", str(metadata.get(key) or "").lower()):
+                    if len(term) >= 4 and term not in GENERIC_SCOPE_TERMS:
+                        terms.add(term)
+    for term in re.findall(r"[a-z][a-z0-9]+", query.lower()):
+        if len(term) >= 4 and term not in GENERIC_SCOPE_TERMS and term not in PROVIDER_CLIENT_TERMS:
+            terms.add(term)
+    expanded = set(terms)
+    for term in terms:
+        if term.endswith("ai") and len(term) > 4:
+            expanded.add(term[:-2])
+        expanded.add(term.replace("_", ""))
+    return expanded
 
 
 def install_command(code: str) -> bool:

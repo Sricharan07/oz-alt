@@ -569,10 +569,6 @@ fn remote_context_response(
             "installed_libraries": installed_libraries_payload(&lock),
         }),
     )?;
-    for library in &response.libraries_to_pull {
-        let spec = format!("{}/{}@{}", library.vendor, library.library, library.version);
-        pull_library_impl(project_root, &spec, true)?;
-    }
     Ok(response)
 }
 
