@@ -717,6 +717,15 @@ def context_packet(
         code_snippets.append(card)
         if remaining <= 0 or len(code_snippets) >= max_code:
             break
+    query_lower = query.lower()
+    setup_only = has_setup_composite and any(term in query_lower for term in ("install", "setup", "initialize", "initialise", "authenticate", "api key", "environment")) and not any(
+        term in query_lower for term in ("custom host", "host endpoint", "verify", "valid", "model", "voice", "synthesize", "speech", "audio")
+    )
+    if setup_only:
+        return {
+            "codeSnippets": code_snippets[:1],
+            "infoSnippets": [],
+        }
     has_composite = any(str(card.get("codeId") or "").startswith("oz:composite:") for card in code_snippets)
     for row in ordered:
         if remaining <= 0:
@@ -775,6 +784,10 @@ def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) ->
             output.append(card)
     if any(term in query_lower for term in ("verify", "validate", "valid")) and any(term in query_lower for term in ("api key", "credential", "token")):
         card = verify_credentials_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("default configuration", "default config", "initialize", "initialise")) and "client" in query_lower:
+        card = default_client_card(rows, query, budget)
         if card:
             output.append(card)
     if audio_file_query(query_lower):
@@ -883,6 +896,9 @@ def model_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
         code_list.append({"language": "text", "code": info})
     elif info:
         code_list.append({"language": "text", "code": trim_to_token_budget(info, 220)})
+    guidance = model_tradeoff_guidance(rows)
+    if guidance and guidance not in {item["code"] for item in code_list}:
+        code_list.insert(0, {"language": "text", "code": guidance})
     return code_list_card(
         title="List and choose a model",
         description="Combines the documented model-listing call with the nearest source-backed model-selection guidance.",
@@ -921,6 +937,9 @@ def voice_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
         code = focused["code"]
         if code and code not in {item["code"] for item in code_list}:
             code_list.append({"language": focused.get("language") or block.get("language") or "python", "code": code})
+    guidance = voice_selection_guidance(rows)
+    if guidance:
+        code_list.insert(0, {"language": "text", "code": guidance})
     return code_list_card(
         title="Choose and set a voice",
         description="Shows how the docs expose available voices and where the selected voice identifier is passed into synthesis.",
@@ -940,7 +959,7 @@ def synthesis_controls_card(rows: list[dict[str, Any]], query: str, budget: int)
     )
     if not block:
         return None
-    code_block = focused_block_for_context(block, query, token_budget=min(max(budget, 1), 620))
+    code_block = synthesis_controls_usage_block(rows, query, min(max(budget, 1), 620)) or focused_block_for_context(block, query, token_budget=min(max(budget, 1), 620))
     return simple_code_card(
         title="Pass optional synthesis controls",
         description="The most direct source-backed example for setting optional synthesis parameters.",
@@ -1112,6 +1131,28 @@ def verify_credentials_card(rows: list[dict[str, Any]], query: str, budget: int)
     }
 
 
+def default_client_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    block = best_code_block(
+        rows,
+        lambda block, row, text: (
+            re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", block["code"]) is not None
+            and re.search(r"\b\w*Client\s*\(\s*\)", block["code"]) is not None
+        ),
+        lambda block, row, text: setup_init_block_score(block, row, query, rows) - implementation_fragment_penalty(row, block["code"]),
+    )
+    if not block:
+        return None
+    focused = focused_block_for_context(block, query, token_budget=min(max(budget, 1), 420))
+    description = "Minimal default-client initialization. The adjacent docs indicate credentials are read from the documented environment variable when no explicit configuration is passed."
+    return simple_code_card(
+        title="Initialize the client with defaults",
+        description=description,
+        code_id="oz:composite:default-client",
+        page_title="Default configuration",
+        block={**block, **focused},
+    )
+
+
 def simple_code_card(
     *,
     title: str,
@@ -1266,6 +1307,54 @@ def model_info_snippet(rows: list[dict[str, Any]]) -> str:
     return "\n\n".join(unique[:2])
 
 
+def model_tradeoff_guidance(rows: list[dict[str, Any]]) -> str:
+    model_names = sorted(model_names_from_rows(rows))
+    if not model_names:
+        return ""
+    fast = [name for name in model_names if any(term in name.lower() for term in ("flash", "fast", "turbo", "lightning")) and "large" not in name.lower()]
+    quality = [name for name in model_names if any(term in name.lower() for term in ("large", "pro", "ultra", "max"))]
+    lines = ["Model selection rule:"]
+    if fast:
+        lines.append(f"- Prefer `{fast[-1]}` for lower latency or default real-time paths.")
+    if quality:
+        lines.append(f"- Prefer `{quality[-1]}` when quality matters more than latency, or when the docs require a larger model for cloned/custom voices.")
+    lines.append("- Call `get_models()` in the target environment before hard-coding a model name.")
+    return "\n".join(lines)
+
+
+def model_names_from_rows(rows: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for row in rows[:100]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        for name in re.findall(r"\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+\b", text.lower()):
+            if any(term in name for term in ("model", "lightning", "large", "turbo", "flash", "pro", "ultra")):
+                names.add(name)
+        for quoted in re.findall(r"['\"]([A-Za-z][A-Za-z0-9_.-]{2,})['\"]", text):
+            lowered = quoted.lower()
+            if any(term in lowered for term in ("lightning", "large", "turbo", "flash", "pro", "ultra")):
+                names.add(quoted)
+    return names
+
+
+def voice_selection_guidance(rows: list[dict[str, Any]]) -> str:
+    field_names = set()
+    for row in rows[:80]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        if "voice_id" in text:
+            field_names.add("voice_id")
+        if "voiceId" in text:
+            field_names.add("voiceId")
+    preferred = "voice_id" if "voice_id" in field_names else ("voiceId" if "voiceId" in field_names else "voice_id")
+    return "\n".join(
+        [
+            "Voice selection rule:",
+            "- Call the documented voices/list method for the target model.",
+            f"- Pick the returned voice identifier and pass it as `{preferred}` in the synthesis request.",
+            "- For cloned/custom voices, use the model required by the voice-cloning docs before synthesizing.",
+        ]
+    )
+
+
 def controls_block_score(code: str) -> float:
     lowered = code.lower()
     score = 0.0
@@ -1285,6 +1374,59 @@ def controls_block_score(code: str) -> float:
     if "dashboard" in lowered or "prometheus" in lowered:
         score -= 1200
     return score
+
+
+def synthesis_controls_usage_block(rows: list[dict[str, Any]], query: str, token_budget: int) -> dict[str, str] | None:
+    params = synthesis_control_params(rows)
+    if not params:
+        return None
+    base = best_code_block(
+        rows,
+        lambda block, row, text: "synthesize" in block["code"].lower() and re.search(r"\b\w*Client\s*\(", block["code"]) is not None,
+        lambda block, row, text: packet_row_score(row, query) + controls_block_score(block["code"]) - implementation_fragment_penalty(row, block["code"]),
+    )
+    if not base:
+        return None
+    focused = focused_block_for_context(base, query, token_budget=360)
+    imports = [line for line in focused["code"].splitlines() if re.match(r"\s*(from\s+[\w.]+\s+import\s+.+|import\s+[\w.]+)", line)]
+    client_line = next((line.strip() for line in focused["code"].splitlines() if re.search(r"\b\w*Client\s*\(", line)), "")
+    client_var = client_line.split("=", 1)[0].strip() if "=" in client_line else "client"
+    values = {
+        "speed": "1.2",
+        "sample_rate": "24000",
+        "consistency": "0.5",
+        "similarity": "0.0",
+        "enhancement": "True",
+    }
+    control_lines = [f"        {name}={values.get(name, '<value>')}," for name in params if name in values]
+    if not control_lines:
+        return None
+    code = "\n".join(
+        compact_code_lines(
+            [
+                *imports[:3],
+                "",
+                client_line or 'client = Client(api_key="YOUR_API_KEY")',
+                "",
+                f"{client_var}.synthesize(",
+                '        "Hello, this is a controlled synthesis request.",',
+                "        save_as=\"speech.wav\",",
+                *control_lines,
+                ")",
+            ]
+        )
+    )
+    return {"language": focused.get("language") or "python", "code": trim_to_token_budget(code, token_budget)}
+
+
+def synthesis_control_params(rows: list[dict[str, Any]]) -> list[str]:
+    wanted = ["speed", "sample_rate", "consistency", "similarity", "enhancement"]
+    found: list[str] = []
+    blob = "\n".join((context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")) for row in rows[:100]).lower()
+    for name in wanted:
+        if name in blob and name not in found:
+            found.append(name)
+    return found
 
 
 def error_handling_block(code: str, text: str, query: str) -> bool:
@@ -1960,10 +2102,22 @@ def host_usage_code(rows: list[dict[str, Any]]) -> dict[str, str] | None:
             *imports,
             "",
             'config = Configuration(host="https://your-api-host")',
-            f"{variable} = {client_name}(config)",
+            f"{variable} = {client_name}({client_configuration_argument(rows, client_name)}config)",
         ]
     )
     return {"language": "python", "code": code, "source": composite_sources_from_rows(rows, {"Configuration", client_name})}
+
+
+def client_configuration_argument(rows: list[dict[str, Any]], client_name: str) -> str:
+    needle = client_name.lower()
+    for row in rows[:120]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        lowered = text.lower()
+        if needle not in lowered and "configuration" not in lowered:
+            continue
+        if re.search(r"def\s+__init__\s*\([^)]*\bconfiguration\b", text, flags=re.S) or re.search(r"\bconfiguration\s*[:=]", text):
+            return "configuration="
+    return ""
 
 
 def requested_client_name(rows: list[dict[str, Any]]) -> str:
