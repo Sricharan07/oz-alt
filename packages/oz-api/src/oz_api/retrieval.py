@@ -1180,7 +1180,7 @@ def default_client_card(rows: list[dict[str, Any]], query: str, budget: int) -> 
     if not block:
         return None
     focused = focused_block_for_context(block, query, token_budget=min(max(budget, 1), 420))
-    env_vars = env_var_names(rows, query=query)
+    env_vars = env_var_names(rows, query=query) if any(term in query.lower() for term in ("api key", "environment", "auth", "credential")) else []
     if env_vars and not any(name in focused["code"] for name in env_vars[:1]):
         focused = {
             **focused,
@@ -1364,7 +1364,7 @@ def model_tradeoff_guidance(rows: list[dict[str, Any]]) -> str:
     quality = [name for name in model_names if any(term in name.lower() for term in ("large", "pro", "ultra", "max"))]
     lines = ["Model selection rule:"]
     if fast:
-        lines.append(f"- Prefer `{fast[-1]}` for lower latency or default real-time paths.")
+        lines.append(f"- Prefer `{preferred_fast_model(fast)}` for lower latency or default real-time paths.")
     if quality:
         lines.append(f"- Prefer `{quality[-1]}` when quality matters more than latency, or when the docs require a larger model for cloned/custom voices.")
     lines.append("- Call `get_models()` in the target environment before hard-coding a model name.")
@@ -1399,7 +1399,7 @@ def model_selection_usage_block(rows: list[dict[str, Any]]) -> dict[str, str] | 
     names = sorted(model_names_from_rows(rows))
     if not names:
         return None
-    fast = next((name for name in names if "large" not in name.lower()), names[0])
+    fast = preferred_fast_model([name for name in names if "large" not in name.lower()]) or names[0]
     quality = next((name for name in names if "large" in name.lower()), "")
     client_name = "Client"
     import_line = ""
@@ -1430,6 +1430,13 @@ def model_selection_usage_block(rows: list[dict[str, Any]]) -> dict[str, str] | 
     if quality and quality != fast:
         lines.append(f'{quality.replace("-", "_")}_client = {client_name}(api_key="SMALLEST_API_KEY", model="{quality}")')
     return {"language": "python", "code": "\n".join(lines)}
+
+
+def preferred_fast_model(names: list[str]) -> str:
+    if not names:
+        return ""
+    versioned = [name for name in names if re.search(r"\bv?\d+(?:\.\d+)+", name)]
+    return sorted(versioned or names)[-1]
 
 
 def voice_selection_guidance(rows: list[dict[str, Any]]) -> str:
