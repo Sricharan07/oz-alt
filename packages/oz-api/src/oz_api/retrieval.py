@@ -962,8 +962,6 @@ def env_var_names(rows: list[dict[str, Any]], query: str = "") -> list[str]:
 
 def composite_sources(blocks: list[dict[str, str] | None], rows: list[dict[str, Any]]) -> str:
     sources = [str(block.get("source") or "").strip() for block in blocks if block]
-    if not sources:
-        sources = [source_id(row) for row in rows[:3] if source_id(row)]
     return ", ".join(dict.fromkeys(source for source in sources if source))
 
 
