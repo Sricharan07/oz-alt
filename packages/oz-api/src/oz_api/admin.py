@@ -191,6 +191,28 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             limit 200
             """
         ),
+        "agent_context_stats": db_rows(
+            """
+            select v.name as vendor, l.name as library, lv.version,
+                   count(distinct ao.id)::bigint as operation_count,
+                   count(distinct ae.id)::bigint as example_count,
+                   count(distinct ar.id)::bigint as recipe_count,
+                   count(distinct ao.id) filter (where ao.embedding is not null)::bigint as embedded_operations,
+                   count(distinct ar.id) filter (where ar.embedding is not null)::bigint as embedded_recipes,
+                   round(avg(ar.confidence)::numeric, 3) as avg_recipe_confidence,
+                   round(avg(ar.quality_score)::numeric, 3) as avg_recipe_quality
+            from libraries l
+            join vendors v on v.id = l.vendor_id
+            left join refs r on r.library_id = l.id and r.channel = 'latest'
+            left join library_versions lv on lv.id = coalesce(l.default_version_id, r.version_id)
+            left join agent_operations ao on ao.version_id = lv.id
+            left join agent_operation_examples ae on ae.version_id = lv.id
+            left join agent_recipes ar on ar.version_id = lv.id
+            group by v.name, l.name, lv.version
+            order by v.name asc, l.name asc
+            limit 200
+            """
+        ),
         "pack_builds": db_rows(
             """
             select v.name as vendor, l.name as library, p.version, p.pack_sha, p.pack_key,
@@ -334,6 +356,7 @@ def enrich_admin_snapshot(snapshot: dict[str, list[dict[str, Any]]]) -> None:
         "quality_runs",
         "eval_runs",
         "search_quality_runs",
+        "agent_context_stats",
         "pack_builds",
     ):
         for row in snapshot.get(section, []):

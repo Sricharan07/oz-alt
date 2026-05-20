@@ -17,10 +17,13 @@ def public_library_rows(storage: RegistryStorage) -> list[dict[str, Any]]:
                lv.version, lv.ref_sha, coalesce(lv.indexed_at, lv.last_crawled_at)::text as indexed_at,
                lv.last_crawled_at::text as last_crawled_at,
                lv.benchmark_score, coalesce(ts.value, 0) as trust_score,
-               count(c.id)::bigint as chunk_count,
-               coalesce(sum(c.token_count), 0)::bigint as token_count,
-               count(distinct c.path)::bigint as file_count,
-               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
+	               count(c.id)::bigint as chunk_count,
+	               coalesce(sum(c.token_count), 0)::bigint as token_count,
+	               count(distinct c.path)::bigint as file_count,
+	               (select count(*) from agent_operations ao where ao.version_id = lv.id)::bigint as operation_count,
+	               (select count(*) from agent_operation_examples ae where ae.version_id = lv.id)::bigint as example_count,
+	               (select count(*) from agent_recipes ar where ar.version_id = lv.id)::bigint as recipe_count,
+	               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
         from libraries l
         join vendors v on v.id = l.vendor_id
         left join refs r on r.library_id = l.id and r.channel = 'latest'
@@ -64,10 +67,13 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
                lv.last_crawled_at::text as last_crawled_at,
                lv.pull_count, lv.benchmark_score, lv.drift_score,
                coalesce(ts.value, 0) as trust_score,
-               count(c.id)::bigint as chunk_count,
-               coalesce(sum(c.token_count), 0)::bigint as token_count,
-               count(distinct c.path)::bigint as file_count,
-               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
+	               count(c.id)::bigint as chunk_count,
+	               coalesce(sum(c.token_count), 0)::bigint as token_count,
+	               count(distinct c.path)::bigint as file_count,
+	               (select count(*) from agent_operations ao where ao.version_id = lv.id)::bigint as operation_count,
+	               (select count(*) from agent_operation_examples ae where ae.version_id = lv.id)::bigint as example_count,
+	               (select count(*) from agent_recipes ar where ar.version_id = lv.id)::bigint as recipe_count,
+	               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
         from libraries l
         join vendors v on v.id = l.vendor_id
         left join refs r on r.library_id = l.id and r.channel = 'latest'
@@ -134,6 +140,32 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
         """,
         {"version_id": version_id},
     )
+    row["agent_context"] = db_rows(
+        """
+        select 'operations' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
+        from agent_operations
+        where version_id = :version_id
+        union all
+        select 'examples' as kind, count(*)::bigint as count, 0::bigint as embedded_count
+        from agent_operation_examples
+        where version_id = :version_id
+        union all
+        select 'recipes' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
+        from agent_recipes
+        where version_id = :version_id
+        """,
+        {"version_id": version_id},
+    )
+    row["top_operations"] = db_rows(
+        """
+        select operation_name, operation_kind, sdk_class, sdk_method, endpoint, confidence, quality_score
+        from agent_operations
+        where version_id = :version_id
+        order by quality_score desc, confidence desc, operation_name asc
+        limit 25
+        """,
+        {"version_id": version_id},
+    )
     row["quality"] = db_rows(
         """
         select passed, metrics, created_at::text as created_at
@@ -173,8 +205,11 @@ def catalog_rows(storage: RegistryStorage) -> list[dict[str, Any]]:
                     "last_crawled_at": entry.get("indexed_at"),
                     "chunk_count": 0,
                     "token_count": 0,
-                    "file_count": 0,
-                    "pack_bytes": 0,
+	                    "file_count": 0,
+	                    "operation_count": 0,
+	                    "example_count": 0,
+	                    "recipe_count": 0,
+	                    "pack_bytes": 0,
                     "benchmark_score": 0,
                     "trust_score": 0,
                 }
@@ -208,8 +243,10 @@ def catalog_detail(storage: RegistryStorage, vendor: str, library: str, version:
             "versions": [{"version": item.get("version"), "ref_sha": item.get("ref_sha")} for item in matches],
             "sources": [{"source_url": source, "source_type": "catalog", "enabled": True} for source in entry.get("source_urls", [])],
             "content_types": [],
-            "top_files": [],
-            "quality": [],
+	            "top_files": [],
+	            "agent_context": [],
+	            "top_operations": [],
+	            "quality": [],
             "evals": [],
             "available_versions": available_versions(matches),
         }
@@ -235,7 +272,7 @@ def one_row(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
 
 def normalize_counts(row: dict[str, Any]) -> dict[str, Any]:
     output = dict(row)
-    for key in ("chunk_count", "token_count", "file_count", "pack_bytes", "pull_count"):
+    for key in ("chunk_count", "token_count", "file_count", "operation_count", "example_count", "recipe_count", "pack_bytes", "pull_count"):
         try:
             output[key] = int(output.get(key) or 0)
         except (TypeError, ValueError):

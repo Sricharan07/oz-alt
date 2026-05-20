@@ -11,10 +11,16 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
+
+try:
+    import tiktoken
+except Exception:  # pragma: no cover - optional dependency in benchmark-only envs
+    tiktoken = None  # type: ignore[assignment]
 
 
 EVAL_DIR = Path(__file__).resolve().parent
@@ -506,8 +512,24 @@ def oz_json_to_text(text: str) -> str:
     return "\n\n".join(parts).strip()
 
 
+@lru_cache(maxsize=8)
+def token_encoder(model: str = "cl100k_base") -> Any:
+    if tiktoken is None:
+        return None
+    try:
+        return tiktoken.get_encoding(model)
+    except Exception:
+        return None
+
+
 def estimate_tokens(text: str) -> int:
-    return max(1, round(len(text) / 4))
+    encoder = token_encoder()
+    if encoder is not None:
+        try:
+            return max(1, len(encoder.encode(text or "")))
+        except Exception:
+            pass
+    return max(1, round(len(text or "") / 4))
 
 
 def clean_output(text: str) -> str:

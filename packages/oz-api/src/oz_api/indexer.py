@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urldefrag
 
+from oz_api.agent_embeddings import ensure_agent_card_embeddings
 from oz_api.context_cards import build_context_snippets, build_source_sections
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
 from oz_api.observability import observe_duration
+from oz_api.operation_cards import build_agent_operation_examples, build_agent_operations, build_agent_recipes
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
@@ -151,7 +153,7 @@ def write_catalog_and_chunks(
         if result.complete:
             writer.resolve_parent_chunks(version_id)
             writer.rebuild_dedupe_clusters(version_id)
-            writer.rebuild_context_index(version_id)
+            writer.rebuild_context_index(version_id, embed_agent_cards=True)
             writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
     return embedding_results
 
@@ -639,7 +641,7 @@ class IndexWriter:
     def rebuild_dedupe_clusters(self, version_id: int) -> None:
         raise NotImplementedError
 
-    def rebuild_context_index(self, version_id: int) -> None:
+    def rebuild_context_index(self, version_id: int, *, embed_agent_cards: bool = False) -> None:
         raise NotImplementedError
 
     def set_benchmark_score(self, version_id: int, score: float) -> None:
@@ -1023,11 +1025,19 @@ class PostgresWriter(IndexWriter):
             (version_id, version_id, version_id),
         )
 
-    def rebuild_context_index(self, version_id: int) -> None:
+    def rebuild_context_index(self, version_id: int, *, embed_agent_cards: bool = False) -> None:
         rows = self.context_chunk_rows(version_id)
         sections = build_source_sections(rows)
         snippets = build_context_snippets(rows, self.replace_source_sections(version_id, sections))
         self.replace_context_snippets(version_id, snippets)
+        operations = build_agent_operations(rows)
+        operation_ids = self.replace_agent_operations(version_id, operations)
+        examples = build_agent_operation_examples(rows, operations)
+        self.replace_agent_operation_examples(version_id, examples, operation_ids)
+        recipes = build_agent_recipes(rows, operations, examples)
+        self.replace_agent_recipes(version_id, recipes, operation_ids)
+        if embed_agent_cards:
+            ensure_agent_card_embeddings(self.connection, version_id)
 
     def context_chunk_rows(self, version_id: int) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
@@ -1199,6 +1209,176 @@ class PostgresWriter(IndexWriter):
                     snippet.token_count,
                     snippet.quality_score,
                     json.dumps(snippet.metadata_json, sort_keys=True),
+                ),
+            )
+
+    def replace_agent_operations(self, version_id: int, operations: list[Any]) -> dict[str, int]:
+        self.execute("delete from agent_recipes where version_id = %s", (version_id,))
+        self.execute("delete from agent_operation_examples where version_id = %s", (version_id,))
+        self.execute("delete from agent_operations where version_id = %s", (version_id,))
+        operation_ids: dict[str, int] = {}
+        for operation in operations:
+            operation_id = self.scalar(
+                """
+                insert into agent_operations(
+                  version_id, operation_key, product, operation_name, operation_kind,
+                  sdk_class, sdk_method, import_path, language, endpoint, http_method, route,
+                  required_params, optional_params, request_schema, response_schema, errors,
+                  auth_requirements, source_urls, source_chunk_ids, confidence, quality_score,
+                  content, metadata_json
+                )
+                values (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s, %s, %s,
+                  %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s::jsonb, %s::jsonb, %s, %s,
+                  %s, %s::jsonb
+                )
+                on conflict (version_id, operation_key) do update
+                  set product = excluded.product,
+                      operation_name = excluded.operation_name,
+                      operation_kind = excluded.operation_kind,
+                      sdk_class = excluded.sdk_class,
+                      sdk_method = excluded.sdk_method,
+                      import_path = excluded.import_path,
+                      language = excluded.language,
+                      endpoint = excluded.endpoint,
+                      http_method = excluded.http_method,
+                      route = excluded.route,
+                      required_params = excluded.required_params,
+                      optional_params = excluded.optional_params,
+                      request_schema = excluded.request_schema,
+                      response_schema = excluded.response_schema,
+                      errors = excluded.errors,
+                      auth_requirements = excluded.auth_requirements,
+                      source_urls = excluded.source_urls,
+                      source_chunk_ids = excluded.source_chunk_ids,
+                      confidence = excluded.confidence,
+                      quality_score = excluded.quality_score,
+                      content = excluded.content,
+                      metadata_json = excluded.metadata_json
+                returning id
+                """,
+                (
+                    version_id,
+                    operation.operation_key,
+                    operation.product,
+                    operation.operation_name,
+                    operation.operation_kind,
+                    operation.sdk_class,
+                    operation.sdk_method,
+                    operation.import_path,
+                    operation.language,
+                    operation.endpoint,
+                    operation.http_method,
+                    operation.route,
+                    json.dumps(operation.required_params, sort_keys=True),
+                    json.dumps(operation.optional_params, sort_keys=True),
+                    json.dumps(operation.request_schema, sort_keys=True),
+                    json.dumps(operation.response_schema, sort_keys=True),
+                    json.dumps(operation.errors, sort_keys=True),
+                    json.dumps(operation.auth_requirements, sort_keys=True),
+                    json.dumps(operation.source_urls),
+                    json.dumps(operation.source_chunk_ids),
+                    operation.confidence,
+                    operation.quality_score,
+                    operation.content,
+                    json.dumps(operation.metadata_json, sort_keys=True),
+                ),
+            )
+            operation_ids[operation.operation_key] = operation_id
+        return operation_ids
+
+    def replace_agent_operation_examples(self, version_id: int, examples: list[Any], operation_ids: dict[str, int]) -> dict[str, int]:
+        self.execute("delete from agent_operation_examples where version_id = %s", (version_id,))
+        example_ids: dict[str, int] = {}
+        for example in examples:
+            example_id = self.scalar(
+                """
+                insert into agent_operation_examples(
+                  version_id, operation_id, example_key, product, title, language,
+                  content, source_url, source_chunk_ids, token_count, quality_score, metadata_json
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb)
+                on conflict (version_id, example_key) do update
+                  set operation_id = excluded.operation_id,
+                      product = excluded.product,
+                      title = excluded.title,
+                      language = excluded.language,
+                      content = excluded.content,
+                      source_url = excluded.source_url,
+                      source_chunk_ids = excluded.source_chunk_ids,
+                      token_count = excluded.token_count,
+                      quality_score = excluded.quality_score,
+                      metadata_json = excluded.metadata_json
+                returning id
+                """,
+                (
+                    version_id,
+                    operation_ids.get(example.operation_key or ""),
+                    example.example_key,
+                    example.product,
+                    example.title,
+                    example.language,
+                    example.content,
+                    example.source_url,
+                    json.dumps(example.source_chunk_ids),
+                    example.token_count,
+                    example.quality_score,
+                    json.dumps(example.metadata_json, sort_keys=True),
+                ),
+            )
+            example_ids[example.example_key] = example_id
+        return example_ids
+
+    def replace_agent_recipes(self, version_id: int, recipes: list[Any], operation_ids: dict[str, int]) -> None:
+        self.execute("delete from agent_recipes where version_id = %s", (version_id,))
+        for recipe in recipes:
+            self.execute(
+                """
+                insert into agent_recipes(
+                  version_id, operation_id, recipe_key, product, title, task_kind,
+                  language, content, code, info, source_urls, source_chunk_ids,
+                  confidence, quality_score, token_count, metadata_json
+                )
+                values (
+                  %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s::jsonb, %s::jsonb,
+                  %s, %s, %s, %s::jsonb
+                )
+                on conflict (version_id, recipe_key) do update
+                  set operation_id = excluded.operation_id,
+                      product = excluded.product,
+                      title = excluded.title,
+                      task_kind = excluded.task_kind,
+                      language = excluded.language,
+                      content = excluded.content,
+                      code = excluded.code,
+                      info = excluded.info,
+                      source_urls = excluded.source_urls,
+                      source_chunk_ids = excluded.source_chunk_ids,
+                      confidence = excluded.confidence,
+                      quality_score = excluded.quality_score,
+                      token_count = excluded.token_count,
+                      metadata_json = excluded.metadata_json
+                """,
+                (
+                    version_id,
+                    operation_ids.get(recipe.operation_key or ""),
+                    recipe.recipe_key,
+                    recipe.product,
+                    recipe.title,
+                    recipe.task_kind,
+                    recipe.language,
+                    recipe.content,
+                    recipe.code,
+                    recipe.info,
+                    json.dumps(recipe.source_urls),
+                    json.dumps(recipe.source_chunk_ids),
+                    recipe.confidence,
+                    recipe.quality_score,
+                    recipe.token_count,
+                    json.dumps(recipe.metadata_json, sort_keys=True),
                 ),
             )
 

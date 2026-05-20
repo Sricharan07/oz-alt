@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import textwrap
 from typing import Any
@@ -11,6 +12,7 @@ from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_experiments import rerank_enabled, retrieval_variant
 from oz_api.retrieval_local import context_snippets_from_fixtures, search_from_fixtures, suggest_from_catalog
 from oz_api.retrieval_postgres import (
+    agent_context_from_postgres,
     context_snippets_from_postgres,
     postgres_connection,
     search_from_postgres,
@@ -109,9 +111,20 @@ def context(
     scopes = context_candidate_scopes(ctx, library_scope, query)
     retrieval_queries = context_retrieval_queries(query)
     snippet_rows: list[dict[str, Any]] = []
+    agent_rows: list[dict[str, Any]] = []
     search_rows: list[dict[str, Any]] = []
     for retrieval_query in retrieval_queries:
         for scope in scopes:
+            scoped_agent_rows = agent_context_from_postgres(
+                ctx,
+                retrieval_query,
+                scope,
+                candidate_pool,
+                fingerprint,
+                content_types=normalized_types,
+            )
+            if scoped_agent_rows:
+                agent_rows.extend(mark_retrieval_query(scoped_agent_rows, retrieval_query))
             scoped_snippets = context_snippets_from_postgres(
                 ctx,
                 retrieval_query,
@@ -137,8 +150,8 @@ def context(
         str(row.get("retrieval_mode") or "") == "fixture_fallback" for row in search_rows
     )
     candidate_rows: list[dict[str, Any]]
-    if snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
-        candidate_rows = merge_context_candidates(snippet_rows or [], search_rows or [])
+    if agent_rows or snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
+        candidate_rows = merge_context_candidates([*agent_rows, *(snippet_rows or [])], search_rows or [])
         candidate_rows = score_context_candidates_for_packet(candidate_rows, query)
         rows = select_context_snippets(
             candidate_rows,
@@ -807,6 +820,11 @@ def context_packet(
 
 
 def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
+    operation_cards = operation_recipe_cards(rows, query, budget)
+    if operation_cards:
+        return operation_cards
+    if not legacy_context_composites_enabled():
+        return []
     query_lower = query.lower()
     output: list[dict[str, Any]] = []
     if any(term in query_lower for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
@@ -849,6 +867,50 @@ def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) ->
         card = host_composite_card(rows, budget)
         if card:
             output.insert(0, card)
+    return output
+
+
+def legacy_context_composites_enabled() -> bool:
+    return os.environ.get("OZ_LEGACY_CONTEXT_COMPOSITES", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def operation_recipe_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in sorted(rows, key=lambda item: packet_row_score(item, query), reverse=True):
+        if str(row.get("retrieval_mode") or "") not in {"agent_recipes", "agent_operations"}:
+            continue
+        text = context_source_text(row)
+        code = str(row.get("code") or "")
+        code_blocks = extract_code_blocks(text)
+        if code and not code_blocks:
+            code_blocks = [{"language": str(row.get("code_language") or ""), "code": code}]
+        if not code_blocks:
+            continue
+        code_list = bounded_code_list(focused_code_blocks_for_query(code_blocks, query) or code_blocks, budget)
+        if not code_list:
+            continue
+        source = source_id(row)
+        key = f"{source}:{row.get('title')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        content = "\n\n".join(item["code"] for item in code_list)
+        output.append(
+            {
+                "codeTitle": context_card_title(row, default="Implementation"),
+                "codeDescription": bounded_string(str(row.get("description") or first_prose_before_code(text) or ""), 420),
+                "codeId": source or key,
+                "codeLanguage": code_list[0].get("language") or str(row.get("code_language") or ""),
+                "codeTokens": approximate_tokens(content),
+                "pageTitle": page_title(row),
+                "codeList": code_list,
+                "source": source,
+            }
+        )
+        budget -= approximate_tokens(content)
+        if budget <= 0 or len(output) >= 3:
+            break
     return output
 
 

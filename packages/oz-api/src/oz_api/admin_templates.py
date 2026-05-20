@@ -172,6 +172,7 @@ ADMIN_TEMPLATE = r"""<!doctype html>
   {{ table("Quality Runs", ["Library", "Version", "Passed", "Metrics", "Created"], snapshot.quality_runs, ["library_label", "version", "passed", "metrics", "created_at"]) }}
   {{ table("Eval Runs", ["Library", "Version", "Type", "Passed", "Metrics", "Created"], snapshot.eval_runs, ["library_label", "version", "eval_type", "passed", "metrics", "created_at"]) }}
   {{ table("Search Quality Runs", ["Library", "Version", "Passed", "P@1", "P@5", "MRR", "Materialized", "Zero", "Junk", "Created"], snapshot.search_quality_runs, ["library_label", "version", "passed", "precision_at_1", "precision_at_5", "mrr", "materialization_rate", "zero_result_rate", "junk_top5_rate", "created_at"]) }}
+  {{ table("Agent Context Index", ["Library", "Version", "Operations", "Examples", "Recipes", "Embedded Ops", "Embedded Recipes", "Recipe Confidence", "Recipe Quality"], snapshot.get("agent_context_stats", []), ["library_label", "version", "operation_count", "example_count", "recipe_count", "embedded_operations", "embedded_recipes", "avg_recipe_confidence", "avg_recipe_quality"]) }}
   {{ table("Pack Builds", ["Library", "Version", "Pack SHA", "Key", "Bytes", "Tier", "Downloads", "Last Download", "Created"], snapshot.pack_builds, ["library_label", "version", "pack_sha", "pack_key", "byte_size", "storage_tier", "download_count", "last_downloaded_at", "created_at"]) }}
 
   <h2>Embedding Jobs</h2>

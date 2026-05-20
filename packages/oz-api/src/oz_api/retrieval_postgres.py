@@ -501,6 +501,288 @@ def context_snippets_from_postgres(
         return None
 
 
+def agent_context_from_postgres(
+    ctx: RetrievalContext,
+    query: str,
+    library_scope: str | None,
+    max_results: int,
+    fingerprint: str,
+    *,
+    content_types: list[str] | None = None,
+    vector_enabled: bool = True,
+) -> list[dict[str, Any]] | None:
+    connection = postgres_connection(ctx.database_url)
+    if connection is None:
+        return None
+    query_plan = plan_query(query)
+    terms = normalized_tsquery(query_plan.important_terms or query)
+    compact_terms = [
+        compact_key(value)
+        for value in [*query_plan.symbols, *query_plan.phrases, *query_plan.slugs, *query_plan.important_terms]
+        if compact_key(value)
+    ] or ["__oz_no_agent_match__"]
+    exact_patterns = [f"%{key}%" for key in compact_terms]
+    vector = vector_literal(embedding) if vector_enabled and (embedding := embedding_for_query(query)) else None
+    scope = parse_versioned_scope(library_scope)
+    scope_vendor, scope_library = scope.vendor, scope.library
+    scope_version_id: int | None = None
+    if scope_vendor and scope_library:
+        scope_version_id = resolve_db_version_id(connection, scope_vendor, scope_library, scope.version)
+    where_scope = (
+        "and v.name = %s and l.name = %s and lv.id = %s"
+        if scope_vendor
+        else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
+    )
+    role_filter = "and ar.task_kind = any(%s)" if content_types else ""
+    recipe_vector_join = ""
+    recipe_vector_score = "0::float8"
+    recipe_vector_where = ""
+    operation_vector_join = ""
+    operation_vector_score = "0::float8"
+    operation_vector_where = ""
+    params: list[Any] = []
+    params.extend([terms, terms, query_plan.content_type, compact_terms, compact_terms, exact_patterns])
+    if vector:
+        recipe_vector_join = """
+          left join lateral (
+            select max(greatest(1 - (c.embedding <=> %s::vector), 0)) as vector_score
+            from chunks c
+            where c.version_id = ar.version_id
+              and c.embedding is not null
+              and c.id in (
+                select value::bigint
+                from jsonb_array_elements_text(ar.source_chunk_ids) value
+                where value ~ '^[0-9]+$'
+              )
+          ) vec on true
+        """
+        recipe_vector_score = "greatest(coalesce(1 - (ar.embedding <=> %s::vector), 0), coalesce(vec.vector_score, 0))::float8"
+        recipe_vector_where = "or ar.embedding is not null" if scope_vendor else ""
+        operation_vector_join = """
+          left join lateral (
+            select max(greatest(1 - (c.embedding <=> %s::vector), 0)) as vector_score
+            from chunks c
+            where c.version_id = ao.version_id
+              and c.embedding is not null
+              and c.id in (
+                select value::bigint
+                from jsonb_array_elements_text(ao.source_chunk_ids) value
+                where value ~ '^[0-9]+$'
+              )
+          ) vec on true
+        """
+        operation_vector_score = "greatest(coalesce(1 - (ao.embedding <=> %s::vector), 0), coalesce(vec.vector_score, 0))::float8"
+        operation_vector_where = "or ao.embedding is not null" if scope_vendor else ""
+        params.append(vector)
+        params.append(vector)
+    params.append(legacy_query(query))
+    params.extend([terms, terms, exact_patterns, exact_patterns])
+    if scope_vendor:
+        params.extend([scope_vendor, scope_library, scope_version_id])
+    if content_types:
+        params.append(content_types)
+    params.append(max(max_results * 8, 40))
+    params.extend([terms, query_plan.content_type, compact_terms, exact_patterns])
+    if vector:
+        params.append(vector)
+        params.append(vector)
+    params.append(legacy_query(query))
+    params.extend([terms, exact_patterns, exact_patterns])
+    if scope_vendor:
+        params.extend([scope_vendor, scope_library, scope_version_id])
+    if content_types:
+        params.append(content_types)
+    params.extend([max(max_results * 8, 40), max_results])
+    sql = f"""
+      with recipe_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(c.path, 'AGENT_RECIPES.md') as path,
+          coalesce(c.start_line, 1) as start_line,
+          (
+            greatest(coalesce(ts_rank_cd(ar.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 80.0
+            + greatest(coalesce(ts_rank_cd(coalesce(ao.search_document, to_tsvector('english', '')), websearch_to_tsquery('english', %s)), 0), 0) * 55.0
+            + case when ar.task_kind = %s then 240.0 else 0.0 end
+            + case when compact_key_sql(ar.title) = any(%s::text[]) then 180.0 else 0.0 end
+            + case when exists (
+                select 1 from jsonb_array_elements_text(coalesce(ao.required_params, '[]'::jsonb)) p
+                where compact_key_sql(p) = any(%s::text[])
+              ) then 130.0 else 0.0 end
+            + case when compact_key_sql(coalesce(ao.sdk_class, '') || coalesce(ao.sdk_method, '') || coalesce(ao.endpoint, '')) ilike any(%s::text[]) then 150.0 else 0.0 end
+            + {recipe_vector_score} * 300.0
+            + greatest(coalesce(ar.confidence, 0), 0) * 80.0
+            + greatest(coalesce(ar.quality_score, 1), 0) * 12.0
+            - case when not %s and (
+                coalesce((ar.metadata_json->>'deprecated')::boolean, false)
+                or coalesce((ar.metadata_json->>'legacy')::boolean, false)
+              ) then 320.0 else 0.0 end
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          coalesce(c.path, 'AGENT_RECIPES.md') as relative_path,
+          '[]'::jsonb as heading_path,
+          case when ao.operation_name is not null then jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) else '[]'::jsonb end as symbols,
+          ar.task_kind as role,
+          ar.quality_score,
+          ar.content,
+          coalesce(c.path, 'AGENT_RECIPES.md') as matched_path,
+          coalesce(ar.source_urls->>0, c.source_anchor, c.source_url, '') as source_anchor,
+          ar.token_count,
+          ar.title,
+          ar.info as description,
+          case when ar.product <> '' then jsonb_build_array(ar.product) else '[]'::jsonb end as applies_to,
+          case when ao.id is not null then jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) else '[]'::jsonb end as entities,
+          jsonb_build_array(ar.task_kind) as task_tags,
+          ar.language as code_language,
+          ar.code,
+          '[]'::jsonb as constraints,
+          coalesce(c.end_line, c.start_line) as end_line,
+          ar.metadata_json || jsonb_build_object(
+            'agent_recipe_id', ar.id,
+            'agent_operation_id', ao.id,
+            'operation_kind', ar.task_kind,
+            'product', ar.product,
+            'source_urls', ar.source_urls
+          ) as metadata_json
+        from agent_recipes ar
+        left join agent_operations ao on ao.id = ar.operation_id
+        join library_versions lv on lv.id = ar.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        left join lateral (
+          select c.*
+          from chunks c
+          where c.version_id = ar.version_id
+            and c.id in (
+              select value::bigint
+              from jsonb_array_elements_text(ar.source_chunk_ids) value
+              where value ~ '^[0-9]+$'
+            )
+          order by c.quality_score desc, c.id asc
+          limit 1
+        ) c on true
+        {recipe_vector_join}
+        where (
+          ar.search_document @@ websearch_to_tsquery('english', %s)
+          or coalesce(ao.search_document, to_tsvector('english', '')) @@ websearch_to_tsquery('english', %s)
+          or compact_key_sql(ar.title) ilike any(%s::text[])
+          or compact_key_sql(coalesce(ao.operation_name, '') || coalesce(ao.sdk_class, '') || coalesce(ao.sdk_method, '') || coalesce(ao.endpoint, '')) ilike any(%s::text[])
+          {recipe_vector_where}
+        )
+        {where_scope}
+        {role_filter}
+        order by score desc, ar.title asc
+        limit %s
+      ),
+      operation_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(c.path, 'AGENT_OPERATIONS.md') as path,
+          coalesce(c.start_line, 1) as start_line,
+          (
+            greatest(coalesce(ts_rank_cd(ao.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 70.0
+            + case when ao.operation_kind = %s then 180.0 else 0.0 end
+            + case when compact_key_sql(ao.operation_name) = any(%s::text[]) then 160.0 else 0.0 end
+            + case when compact_key_sql(ao.sdk_class || ao.sdk_method || ao.endpoint) ilike any(%s::text[]) then 130.0 else 0.0 end
+            + {operation_vector_score} * 220.0
+            + greatest(coalesce(ao.confidence, 0), 0) * 70.0
+            + greatest(coalesce(ao.quality_score, 1), 0) * 10.0
+            - case when not %s and (
+                coalesce((ao.metadata_json->>'deprecated')::boolean, false)
+                or coalesce((ao.metadata_json->>'legacy')::boolean, false)
+              ) then 320.0 else 0.0 end
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          coalesce(c.path, 'AGENT_OPERATIONS.md') as relative_path,
+          '[]'::jsonb as heading_path,
+          jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) as symbols,
+          ao.operation_kind as role,
+          ao.quality_score,
+          ao.content,
+          coalesce(c.path, 'AGENT_OPERATIONS.md') as matched_path,
+          coalesce(ao.source_urls->>0, c.source_anchor, c.source_url, '') as source_anchor,
+          least(1000, greatest(1, length(ao.content) / 4))::integer as token_count,
+          ao.operation_name as title,
+          ao.content as description,
+          case when ao.product <> '' then jsonb_build_array(ao.product) else '[]'::jsonb end as applies_to,
+          jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) as entities,
+          jsonb_build_array(ao.operation_kind) as task_tags,
+          ao.language as code_language,
+          null::text as code,
+          '[]'::jsonb as constraints,
+          coalesce(c.end_line, c.start_line) as end_line,
+          ao.metadata_json || jsonb_build_object(
+            'agent_operation_id', ao.id,
+            'operation_kind', ao.operation_kind,
+            'required_params', ao.required_params,
+            'optional_params', ao.optional_params,
+            'product', ao.product,
+            'source_urls', ao.source_urls
+          ) as metadata_json
+        from agent_operations ao
+        join library_versions lv on lv.id = ao.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        left join lateral (
+          select c.*
+          from chunks c
+          where c.version_id = ao.version_id
+            and c.id in (
+              select value::bigint
+              from jsonb_array_elements_text(ao.source_chunk_ids) value
+              where value ~ '^[0-9]+$'
+            )
+          order by c.quality_score desc, c.id asc
+          limit 1
+        ) c on true
+        {operation_vector_join}
+        where (
+          ao.search_document @@ websearch_to_tsquery('english', %s)
+          or compact_key_sql(ao.operation_name || ao.sdk_class || ao.sdk_method || ao.endpoint) ilike any(%s::text[])
+          or compact_key_sql(ao.required_params::text || ao.optional_params::text) ilike any(%s::text[])
+          {operation_vector_where}
+        )
+        {where_scope}
+        {role_filter.replace('ar.', 'ao.').replace('task_kind', 'operation_kind')}
+        order by score desc, ao.operation_name asc
+        limit %s
+      )
+      select * from recipe_candidates
+      union all
+      select * from operation_candidates
+      order by score desc, path asc, start_line asc
+      limit %s
+    """
+    try:
+        with observe_duration("oz_db_query_duration_seconds", {"operation": "agent_context", "mode": "hybrid" if vector else "fts"}):
+            with connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"set local statement_timeout = {retrieval_statement_timeout_ms()}")
+                    cursor.execute(sql, tuple(params))
+                    rows = cursor.fetchall()
+                    mark_context_versions_requested(cursor, rows)
+        return score_agent_context_rows(rows, degraded=not bool(vector))
+    except VersionResolutionError:
+        raise
+    except Exception as exc:
+        LOGGER.warning("postgres agent context failed: %s", exc)
+        if vector_enabled:
+            LOGGER.warning("retrying postgres agent context with FTS fallback only")
+            return agent_context_from_postgres(
+                ctx,
+                query,
+                library_scope,
+                max_results,
+                fingerprint,
+                content_types=content_types,
+                vector_enabled=False,
+            )
+        return None
+
+
 def candidate_select(fts_score: str, vector_score: str, exact_score: str) -> str:
     return f"""
         select
@@ -721,6 +1003,60 @@ def score_context_snippet_rows(rows: list[Any]) -> list[dict[str, Any]]:
                         f"role: {row[9] or ''}",
                         f"entities: {row[18] or []}",
                         str(row[11] or ""),
+                    ]
+                ),
+            }
+        )
+    output.sort(key=lambda item: (-float(item["score"]), str(item["path"]), int(item.get("line") or 1)))
+    return output
+
+
+def score_agent_context_rows(rows: list[Any], *, degraded: bool) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        metadata = row[24] if len(row) > 24 and isinstance(row[24], dict) else {}
+        role = row[9] or metadata.get("operation_kind") or "operation"
+        code = row[21]
+        content = row[11] or ""
+        output.append(
+            {
+                "path": row[0],
+                "line": row[1],
+                "end_line": row[23],
+                "score": round(float(row[2] or 0), 4),
+                "library": row[3],
+                "vendor": row[4],
+                "version": row[5],
+                "relative_path": row[6],
+                "heading_path": row[7] or [],
+                "symbols": row[8] or [],
+                "content_type": "code_example" if code else "api_reference",
+                "role": role,
+                "quality_score": row[10],
+                "matched_path": row[12],
+                "source_anchor": row[13],
+                "token_count": int(row[14] or 0),
+                "title": row[15] or "",
+                "description": row[16] or "",
+                "applies_to": row[17] or [],
+                "entities": row[18] or [],
+                "task_tags": row[19] or [],
+                "code_language": row[20],
+                "code": code,
+                "constraints": row[22] or [],
+                "metadata_json": metadata,
+                "retrieval_mode": "agent_recipes" if code else "agent_operations",
+                "degraded": degraded,
+                "_matched_text": content,
+                "_parent_text": "",
+                "_rerank_text": "\n".join(
+                    [
+                        f"title: {row[15] or ''}",
+                        f"description: {row[16] or ''}",
+                        f"path: {row[6] or ''}",
+                        f"role: {role or ''}",
+                        f"entities: {row[18] or []}",
+                        content,
                     ]
                 ),
             }

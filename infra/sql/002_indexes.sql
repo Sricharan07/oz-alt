@@ -16,6 +16,17 @@ create index if not exists context_snippets_chunk_idx on context_snippets(primar
 create index if not exists context_snippets_search_idx on context_snippets using gin(search_document);
 create index if not exists context_snippets_entities_idx on context_snippets using gin(entities);
 create index if not exists context_snippets_task_tags_idx on context_snippets using gin(task_tags);
+
+create index if not exists agent_operations_version_kind_idx on agent_operations(version_id, operation_kind, product);
+create index if not exists agent_operations_search_idx on agent_operations using gin(search_document);
+create index if not exists agent_operations_source_chunks_idx on agent_operations using gin(source_chunk_ids);
+create index if not exists agent_operations_embedding_idx on agent_operations using hnsw (embedding vector_cosine_ops);
+create index if not exists agent_operation_examples_version_language_idx on agent_operation_examples(version_id, language, product);
+create index if not exists agent_operation_examples_search_idx on agent_operation_examples using gin(search_document);
+create index if not exists agent_recipes_version_kind_idx on agent_recipes(version_id, task_kind, product);
+create index if not exists agent_recipes_search_idx on agent_recipes using gin(search_document);
+create index if not exists agent_recipes_source_chunks_idx on agent_recipes using gin(source_chunk_ids);
+create index if not exists agent_recipes_embedding_idx on agent_recipes using hnsw (embedding vector_cosine_ops);
 create index if not exists library_versions_library_version_idx on library_versions (library_id, version);
 create index if not exists refs_library_channel_idx on refs (library_id, channel);
 create index if not exists index_requests_status_updated_idx on index_requests (status, updated_at desc);

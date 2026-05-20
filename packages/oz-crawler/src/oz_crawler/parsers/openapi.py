@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover - optional dependency
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
 
-def openapi_chunks(text: str, source_url: str, *, limit: int) -> list[dict[str, str]]:
+def openapi_chunks(text: str, source_url: str, *, limit: int) -> list[dict[str, Any]]:
     parsed = parse_openapi(text)
     if not parsed:
         return []
@@ -66,6 +66,7 @@ def endpoint_doc(
     security = operation.get("security") if isinstance(operation.get("security"), list) else root_security
     if security:
         lines.extend(["## Auth", "", "```json", json.dumps(security, indent=2, sort_keys=True)[:3000], "```", ""])
+    structured_params = structured_parameters(params, components)
     if params:
         lines.extend(["## Parameters", ""])
         for param in params:
@@ -81,10 +82,13 @@ def endpoint_doc(
                 lines.append(f"- `{name}` ({location}{required}){suffix}: {desc}".strip())
         lines.append("")
     request_body = operation.get("requestBody")
+    resolved_request_body: Any = None
     if isinstance(request_body, dict):
         request_body = resolve_schema(request_body, components)
+        resolved_request_body = request_body
         lines.extend(["## Request Body", "", "```json", json.dumps(request_body, indent=2, sort_keys=True)[:4000], "```", ""])
     responses = operation.get("responses")
+    structured_responses: list[dict[str, Any]] = []
     if isinstance(responses, dict):
         lines.extend(["## Responses", ""])
         for code, response in sorted(responses.items()):
@@ -92,6 +96,14 @@ def endpoint_doc(
             desc = response.get("description") if isinstance(response, dict) else ""
             schema = response_schema(response, components) if isinstance(response, dict) else None
             type_name = schema_type(schema, components)
+            structured_responses.append(
+                {
+                    "status": str(code),
+                    "description": str(desc or ""),
+                    "schema": schema,
+                    "schema_type": type_name,
+                }
+            )
             suffix = f" `{type_name}`" if type_name else ""
             lines.append(f"- `{code}`{suffix}: {desc}")
         lines.append("")
@@ -111,8 +123,61 @@ def endpoint_doc(
             "endpoint": route,
             "operation_id": operation_id,
             "tags": tags,
+            "operation": {
+                "kind": infer_operation_kind(method, operation_id, summary, route),
+                "operation_name": operation_id or f"{method} {route}",
+                "operation_id": operation_id,
+                "http_method": method,
+                "endpoint": route,
+                "sdk_class": "",
+                "sdk_method": "",
+                "language": "",
+                "required_params": [param for param in structured_params if param.get("required")],
+                "optional_params": [param for param in structured_params if not param.get("required")],
+                "request_schema": resolved_request_body,
+                "response_schema": structured_responses,
+                "auth_requirements": security,
+                "source_type": "openapi",
+            },
         },
     }
+
+
+def structured_parameters(params: list[Any], components: dict[str, Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in params:
+        param = resolve_schema(item, components)
+        if not isinstance(param, dict):
+            continue
+        schema = resolve_schema(param.get("schema"), components)
+        output.append(
+            {
+                "name": str(param.get("name") or ""),
+                "in": str(param.get("in") or ""),
+                "required": bool(param.get("required")),
+                "description": str(param.get("description") or ""),
+                "schema": schema if isinstance(schema, dict) else None,
+                "schema_type": schema_type(schema, components),
+            }
+        )
+    return [param for param in output if param["name"]]
+
+
+def infer_operation_kind(method: str, operation_id: str, summary: str, route: str) -> str:
+    haystack = f"{method} {operation_id} {summary} {route}".lower()
+    if method == "GET":
+        return "list" if re.search(r"\b(list|search|all|index)\b", haystack) or route.endswith("s") else "retrieve"
+    if method == "POST":
+        if re.search(r"\b(upload|file|document|pdf|image|audio)\b", haystack):
+            return "upload"
+        if re.search(r"\b(stream|sse|websocket)\b", haystack):
+            return "stream"
+        return "create"
+    if method in {"PUT", "PATCH"}:
+        return "update"
+    if method == "DELETE":
+        return "delete"
+    return "operation"
 
 
 def parse_openapi(text: str) -> dict[str, Any] | None:

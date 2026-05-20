@@ -24,9 +24,10 @@ from oz_api.indexer import PostgresWriter, write_catalog_and_chunks
 from oz_api.jury import judge_search_check, jury_required, jury_requested
 from oz_api.observability import observe_duration
 from oz_api.queue import enqueue_crawler_job
-from oz_api.retrieval import RetrievalContext, postgres_connection
+from oz_api.retrieval import RetrievalContext, context as retrieval_context_packet, postgres_connection
 from oz_api.retrieval_local import search_from_fixtures
 from oz_api.storage import RegistryStorage, normalize_query
+from oz_crawler.token_counting import token_count
 from oz_crawler.crawl import CrawlOptions, crawl_single_page
 from oz_crawler.pack import build_pack_bytes
 
@@ -187,6 +188,14 @@ def process_job(storage: RegistryStorage, job: dict[str, Any]) -> None:
             embedding_job_id=waiting.job_id,
         )
         return
+    with observe_duration("oz_crawl_phase_duration_seconds", {"phase": "agent_context_eval", "library": f"{vendor}/{library}"}):
+        agent_eval = agent_context_eval_report(storage, f"{vendor}/{library}", version)
+    if agent_eval is not None:
+        record_eval_run(eval_entry, eval_type="agent_context", passed=bool(agent_eval["passed"]), metrics=agent_eval)
+        if not agent_eval["passed"]:
+            record_crawler_job_log(job, "error", "agent context eval failed", agent_eval)
+            raise RuntimeError("agent context eval failed; pack was not promoted")
+        record_crawler_job_log(job, "info", "agent context eval passed", agent_eval)
     upsert_catalog_entry(storage, catalog_entry)
     record_catalog_promotion(catalog_entry, job, quality)
     record_crawler_job_log(job, "info", "catalog promoted", {"pack_key": pack_key})
@@ -692,6 +701,121 @@ def search_eval_report(
         "jury_score": round(jury_score, 3) if use_jury else None,
         "checks": checks,
     }
+
+
+def agent_context_eval_report(storage: RegistryStorage, library: str, version: str) -> dict[str, Any] | None:
+    spec = eval_spec_for_library(storage, library, version)
+    if spec is None:
+        return None
+    checks = []
+    expected_hits = 0
+    required_hits = 0
+    grounded_hits = 0
+    banned_failures = 0
+    over_budget = 0
+    total_expected = 0
+    total_required = 0
+    ctx = RetrievalContext.from_env(storage)
+    max_tokens = int(os.environ.get("OZ_AGENT_CONTEXT_EVAL_MAX_TOKENS", "2200"))
+    for check in spec.get("checks", []):
+        query = str(check.get("query") or "")
+        if not query:
+            continue
+        expected_apis = [str(item) for item in check.get("expected_apis", []) or check.get("expected_symbols", [])]
+        required_terms = [str(item) for item in check.get("required_terms", []) or check.get("must_include", [])]
+        banned_terms = [str(item) for item in check.get("banned_terms", []) or check.get("must_not_include", []) or check.get("banned_content", [])]
+        packet = retrieval_context_packet(
+            ctx,
+            query,
+            library_scope=f"{library}@{version}",
+            max_tokens=max_tokens,
+            max_results=5,
+            fingerprint="crawler-agent-context-eval",
+        )
+        text = packet_text(packet)
+        sources = packet_sources(packet)
+        tokens = token_count(text)
+        expected_ok = compact_requirement_hit(text, expected_apis)
+        required_ok = content_requirement_hit(text.lower(), [term.lower() for term in required_terms], [])
+        banned_hit = any(term.lower() in text.lower() for term in banned_terms)
+        grounded_ok = bool(sources)
+        total_expected += int(bool(expected_apis))
+        total_required += int(bool(required_terms))
+        expected_hits += int((not expected_apis) or expected_ok)
+        required_hits += int((not required_terms) or required_ok)
+        grounded_hits += int(grounded_ok)
+        banned_failures += int(banned_hit)
+        over_budget += int(tokens > max_tokens)
+        checks.append(
+            {
+                "name": check.get("name", query),
+                "query": query,
+                "expected_apis": expected_apis,
+                "required_terms": required_terms,
+                "banned_terms": banned_terms,
+                "expected_api_hit": expected_ok,
+                "required_terms_hit": required_ok,
+                "banned_hit": banned_hit,
+                "source_grounded": grounded_ok,
+                "source_count": len(sources),
+                "token_count": tokens,
+                "code_snippets": len(packet.get("codeSnippets") or []),
+                "info_snippets": len(packet.get("infoSnippets") or []),
+            }
+        )
+    total = len(checks)
+    if total == 0:
+        return None
+    expected_rate = expected_hits / total if total else 0
+    required_rate = required_hits / total if total else 0
+    grounded_rate = grounded_hits / total if total else 0
+    banned_rate = banned_failures / total if total else 0
+    budget_rate = over_budget / total if total else 0
+    passed = (
+        expected_rate >= float(os.environ.get("OZ_AGENT_CONTEXT_MIN_EXPECTED_API_RATE", "0.85"))
+        and required_rate >= float(os.environ.get("OZ_AGENT_CONTEXT_MIN_REQUIRED_TERM_RATE", "1.0"))
+        and grounded_rate >= float(os.environ.get("OZ_AGENT_CONTEXT_MIN_GROUNDING_RATE", "1.0"))
+        and banned_rate == 0
+        and budget_rate == 0
+    )
+    return {
+        "passed": passed,
+        "expected_api_rate": round(expected_rate, 3),
+        "required_term_rate": round(required_rate, 3),
+        "source_grounding_rate": round(grounded_rate, 3),
+        "banned_hit_rate": round(banned_rate, 3),
+        "over_budget_rate": round(budget_rate, 3),
+        "checks": checks,
+    }
+
+
+def packet_text(packet: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for card in packet.get("codeSnippets") or []:
+        parts.extend(str(card.get(key) or "") for key in ("codeTitle", "codeDescription", "pageTitle"))
+        for item in card.get("codeList") or []:
+            if isinstance(item, dict):
+                parts.append(str(item.get("code") or ""))
+    for card in packet.get("infoSnippets") or []:
+        if isinstance(card, dict):
+            parts.extend(str(card.get(key) or "") for key in ("title", "content", "pageTitle"))
+    return "\n".join(part for part in parts if part)
+
+
+def packet_sources(packet: dict[str, Any]) -> list[str]:
+    output = []
+    for group in ("codeSnippets", "infoSnippets"):
+        for card in packet.get(group) or []:
+            if isinstance(card, dict) and str(card.get("source") or "").strip():
+                output.append(str(card["source"]))
+    return output
+
+
+def compact_requirement_hit(text: str, expected: list[str]) -> bool:
+    if not expected:
+        return True
+    compacted = re.sub(r"[^a-z0-9]+", "", text.lower())
+    return all(re.sub(r"[^a-z0-9]+", "", item.lower()) in compacted for item in expected)
 
 
 def content_requirement_hit(joined_content: str, required_terms: list[str], patterns: list[str]) -> bool:

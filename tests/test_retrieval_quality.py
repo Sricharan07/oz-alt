@@ -27,6 +27,7 @@ from oz_api.intent import classify_query, plan_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
 from oz_api.context_cards import build_context_snippets, build_source_sections, query_facets, select_context_snippets
 from oz_api.indexer import add_parent_chunks, chunk_rows, enrich_chunk_row, limit_to_token_budget
+from oz_api.operation_cards import build_agent_operation_examples, build_agent_operations, build_agent_recipes
 from oz_api.ranking import local_chunk_score, planned_chunk_score
 from oz_api.queue import queued_crawler_job_event
 from oz_api.retrieval import context_source_text
@@ -128,6 +129,47 @@ class RetrievalQualityTests(unittest.TestCase):
         }
 
         self.assertGreater(local_chunk_score(api_row, terms), local_chunk_score(example_row, terms))
+
+    def test_agent_operation_layer_builds_source_backed_recipe(self) -> None:
+        rows = [
+            {
+                "id": 1,
+                "path": "api-reference/openapi/post-knowledge-bases.md",
+                "start_line": 1,
+                "source_url": "https://example.test/openapi.json#post-knowledge-bases",
+                "source_anchor": "https://example.test/openapi.json#post-knowledge-bases",
+                "content_type": "api_reference",
+                "quality_score": 1.0,
+                "content": "# POST /knowledge-bases\n\nCreate a knowledge base.\n\n```python\nfrom vendor import Client\nclient = Client(api_key=\"API_KEY\")\nclient.create_knowledge_base(name=\"Docs\")\n```",
+                "symbols": ["create_knowledge_base"],
+                "heading_path": ["Knowledge bases"],
+                "metadata_json": {
+                    "product": "docs",
+                    "product_confidence": 1.0,
+                    "source_role": "api_spec",
+                    "operation": {
+                        "kind": "create",
+                        "operation_name": "create_knowledge_base",
+                        "http_method": "POST",
+                        "endpoint": "/knowledge-bases",
+                        "required_params": [{"name": "name", "required": True}],
+                        "optional_params": [{"name": "description", "required": False}],
+                    },
+                },
+            }
+        ]
+
+        operations = build_agent_operations(rows)
+        examples = build_agent_operation_examples(rows, operations)
+        recipes = build_agent_recipes(rows, operations, examples)
+
+        self.assertEqual(len(operations), 1)
+        self.assertEqual(operations[0].operation_kind, "create")
+        self.assertEqual(operations[0].product, "docs")
+        self.assertEqual(operations[0].required_params[0]["name"], "name")
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(len(recipes), 1)
+        self.assertIn("client.create_knowledge_base", recipes[0].content)
 
     def test_planned_ranking_demotes_cli_for_non_cli_query(self) -> None:
         query = "How does a Next.js App Router route handler read a POST body and return JSON?"

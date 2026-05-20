@@ -500,16 +500,19 @@ def github_file_artifacts(
             ]
     if source_path_allowed(name, profile.source_file_patterns if profile else []):
         language = source_language_for_path(name)
-        structured = source_code_chunks(text, str(download_url), language=language, limit=1)
+        structured = source_code_chunks(text, str(download_url), language=language, limit=limit)
         if structured:
-            return [SourceArtifact(
-                **artifact_payload(structured[0]),
-                source_kind="source_code",
-                canonical_url=str(structured[0].get("source_url") or download_url),
-                source_priority=source_priority_for(profile, "source_code", 15),
-                discovered_from=f"https://github.com/{owner}/{repo}",
-                metadata=source_metadata(profile, "source_code", str(structured[0].get("path") or name), str(download_url), extra=structured[0].get("metadata")),
-            )]
+            return [
+                SourceArtifact(
+                    **artifact_payload(item),
+                    source_kind="source_code",
+                    canonical_url=str(item.get("source_url") or download_url),
+                    source_priority=source_priority_for(profile, "source_code", 15),
+                    discovered_from=f"https://github.com/{owner}/{repo}",
+                    metadata=source_metadata(profile, "source_code", str(item.get("path") or name), str(download_url), extra=item.get("metadata")),
+                )
+                for item in structured[:limit]
+            ]
     return [SourceArtifact(
         path=f"guides/github-{slugify(owner + '-' + repo + '-' + name)}.md",
         title=f"{owner}/{repo} {name}",
@@ -623,7 +626,13 @@ def source_metadata(
         metadata.update(extra)
     metadata.setdefault("source_type", source_kind)
     metadata["source_kind"] = source_kind
-    metadata["product"] = infer_product(profile, path, source_url)
+    product, confidence, signals = infer_product_with_confidence(profile, path, source_url)
+    if product:
+        metadata["product"] = product
+    metadata["product_confidence"] = confidence
+    if signals:
+        metadata["product_signals"] = signals
+    metadata["source_role"] = infer_source_role(source_kind, path, source_url)
     metadata["deprecated"] = path_matches_any(path, source_url, generic_deprecated_patterns(profile))
     metadata["legacy"] = path_matches_any(path, source_url, generic_legacy_patterns(profile))
     metadata["current"] = not metadata["deprecated"] and not metadata["legacy"]
@@ -635,19 +644,48 @@ def source_metadata(
 
 
 def infer_product(profile: LibraryProfile | None, path: str, source_url: str) -> str:
+    product, _, _ = infer_product_with_confidence(profile, path, source_url)
+    return product
+
+
+def infer_product_with_confidence(profile: LibraryProfile | None, path: str, source_url: str) -> tuple[str, float, list[str]]:
     haystack = f"{path} {source_url}".lower()
     if profile:
         for product in profile.products:
             normalized = product.strip().lower()
             if normalized and normalized in haystack:
-                return product
+                return product, 1.0, [f"explicit:{normalized}"]
         if len(profile.products) == 1:
-            return profile.products[0]
+            # Do not claim a product just because the library has one configured.
+            # Multi-source docs often contain neighboring products or examples; low
+            # confidence lets retrieval use this as a hint without filtering on it.
+            return profile.products[0], 0.35, ["profile_single_product"]
     parts = [part for part in urlparse(source_url).path.split("/") if part]
     for part in parts[:3]:
         if len(part) >= 3 and not re.fullmatch(r"v?\d+(?:\.\d+)*", part, re.I):
-            return part.lower()
-    return ""
+            return part.lower(), 0.55, [f"path:{part.lower()}"]
+    return "", 0.0, []
+
+
+def infer_source_role(source_kind: str, path: str, source_url: str) -> str:
+    haystack = f"{source_kind} {path} {source_url}".lower()
+    if "openapi" in haystack or "swagger" in haystack or "asyncapi" in haystack:
+        return "api_spec"
+    if source_kind == "source_code":
+        if re.search(r"(^|/)(test|tests|spec|specs)/|[_-](test|spec)\.", haystack):
+            return "test"
+        if re.search(r"(^|/)(example|examples|cookbook|samples?)/", haystack):
+            return "example"
+        return "sdk_source"
+    if re.search(r"(^|/)(example|examples|cookbook|recipes?|samples?)/", haystack):
+        return "cookbook"
+    if re.search(r"(^|/)(test|tests|spec|specs)/", haystack):
+        return "test"
+    if re.search(r"(^|/)(readme|index)\.(md|mdx|txt)$", haystack):
+        return "README"
+    if "changelog" in haystack or "release" in haystack:
+        return "changelog"
+    return "docs"
 
 
 def infer_protocol(source_kind: str, path: str, source_url: str) -> str:

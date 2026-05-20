@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import statistics
 from pathlib import Path
 from collections import Counter
 from datetime import datetime, timezone
@@ -119,7 +121,7 @@ ONE_SHOT_AGENT_QUERIES = [
     "Build a complete README-style quickstart for a new developer integrating Smallest AI in Python, from install to first Atoms agent and first Waves TTS output.",
 ]
 
-QUERIES = BASE_QUERIES + ONE_SHOT_AGENT_QUERIES
+QUERY_TEXTS = BASE_QUERIES + ONE_SHOT_AGENT_QUERIES
 FAILURE_TAG_VALUES = {
     "wrong_product",
     "wrong_api",
@@ -137,6 +139,149 @@ FAILURE_TAG_VALUES = {
     "contradictory",
     "not_one_shot",
 }
+
+
+def case_for_query(index: int, query: str) -> dict[str, Any]:
+    criteria = deterministic_criteria(query)
+    return {
+        "id": f"smallest-{index:03d}",
+        "query": query,
+        "expected_apis": criteria["expected_apis"],
+        "required_terms": criteria["required_terms"],
+        "banned_terms": criteria["banned_terms"],
+        "expected_paths": criteria["expected_paths"],
+        "category": criteria["category"],
+    }
+
+
+def deterministic_criteria(query: str) -> dict[str, Any]:
+    lowered = query.lower()
+    expected_apis: list[str] = []
+    required_terms: list[str] = []
+    banned_terms: list[str] = []
+    expected_paths: list[str] = []
+    category = "general"
+
+    def add_api(*values: str) -> None:
+        for value in values:
+            if value and value not in expected_apis:
+                expected_apis.append(value)
+
+    def add_required(*values: str) -> None:
+        for value in values:
+            if value and value not in required_terms:
+                required_terms.append(value)
+
+    def add_path(*values: str) -> None:
+        for value in values:
+            if value and value not in expected_paths:
+                expected_paths.append(value)
+
+    if any(term in lowered for term in ("install", "initialize", "initialise", "api key", "credential", "environment variable", "requirements", "pin", "host endpoint", "base url", ".env")):
+        category = "setup_auth"
+        add_api("AtomsClient", "SMALLEST_API_KEY")
+        add_required("smallestai")
+        add_path("readme", "installation", "configuration", "python-sdk")
+    if "requirements" in lowered or "pin" in lowered:
+        add_required("requirements.txt", "smallestai")
+    if "custom" in lowered and any(term in lowered for term in ("host", "endpoint", "base url")):
+        add_api("Configuration", "host", "AtomsClient")
+        add_required("host")
+    if "verify" in lowered and "api key" in lowered:
+        add_api("get_current_user", "AtomsClient")
+        add_required("current user")
+
+    if any(term in lowered for term in ("waves", "tts", "speech", "audio", "voiceid", "voice id", "voice_id", "synthesis", "synthesize")):
+        category = "waves_tts"
+        add_api("WavesClient", "synthesize")
+        add_required("voice", "text")
+        add_path("waves", "text-to-speech", "synthesis")
+    if any(term in lowered for term in ("stream", "chunk", "long input", "long text")):
+        add_api("synthesize_streaming", "stream")
+        add_required("stream", "chunk")
+    if "model" in lowered and "slm" not in lowered:
+        add_api("get_models", "model")
+        add_required("model")
+    if "voice" in lowered:
+        add_api("get_voices", "voice_id")
+        add_required("voice")
+    if any(term in lowered for term in ("speed", "consistency", "similarity", "enhancement", "controls")):
+        add_api("speed", "consistency", "similarity", "enhancement")
+    if any(term in lowered for term in ("wav", "mp3", "file", "bytes", "media type")) and category == "waves_tts":
+        add_required("wav", "mp3", "audio")
+
+    if "agent" in lowered or "atoms" in lowered:
+        if category == "general":
+            category = "agent_crud_config"
+        add_api("AtomsClient")
+        add_path("atoms", "agent")
+    if any(term in lowered for term in ("create", "new", "provision")) and "agent" in lowered:
+        add_api("create_agent", "agent_id")
+        add_required("agent")
+    if any(term in lowered for term in ("list", "fetch", "details", "retrieve")) and "agent" in lowered:
+        add_api("list_agents", "get_agent", "agent_id")
+    if "update" in lowered and "agent" in lowered:
+        add_api("update_agent", "agent_id")
+    if any(term in lowered for term in ("delete", "disable")) and "agent" in lowered:
+        add_api("delete_agent", "agent_id")
+    if any(term in lowered for term in ("language", "synthesizer", "slm")) and "agent" in lowered:
+        add_required("language", "synthesizer", "model")
+    if "template" in lowered:
+        category = "agent_templates"
+        add_api("AgentTemplatesApi", "template", "agent_from_template")
+        add_required("template")
+        add_path("template")
+
+    if any(term in lowered for term in ("knowledge base", " kb", "kb ", "upload", "pdf", "ingest", "documents")):
+        category = "knowledge_base"
+        add_api("knowledge", "knowledge_base", "upload", "document")
+        add_required("knowledge", "base")
+        add_path("knowledge", "kb")
+    if any(term in lowered for term in ("pdf", "file")) and category == "knowledge_base":
+        add_api("upload_media", "file")
+    if any(term in lowered for term in ("url", "documentation")) and category == "knowledge_base":
+        add_api("url", "ingest")
+    if any(term in lowered for term in ("attach", "detach", "link")) and category == "knowledge_base":
+        add_api("agent", "knowledge")
+    if any(term in lowered for term in ("status", "ingested", "successfully")) and category == "knowledge_base":
+        add_api("status", "document")
+
+    if any(term in lowered for term in ("session", "conversation", "turn", "memory")):
+        category = "sessions_conversation"
+        add_api("session", "conversation", "AtomsClient")
+        add_required("session")
+        add_path("session", "conversation", "atoms")
+    if any(term in lowered for term in ("fastapi", "pytest", "mock", "unit test", "timeout", "retry", "backoff", "latency", "logging", "ci/cd", "production", "wrapper", "readme-style", "quickstart")):
+        if category == "general":
+            category = "production_examples"
+        add_required(*(term for term in ("retry", "timeout", "pytest", "FastAPI", "logging", "latency") if term.lower() in lowered))
+    if "fastapi" in lowered:
+        add_api("FastAPI", "Response")
+    if any(term in lowered for term in ("pytest", "mock", "unit test")):
+        add_api("pytest", "mock", "AtomsClient")
+    if "timeout" in lowered:
+        add_api("timeout")
+    if "retry" in lowered or "backoff" in lowered:
+        add_api("retry", "backoff", "429", "5xx")
+    if "logging" in lowered or "request id" in lowered or "metadata" in lowered:
+        add_api("request_id", "latency", "status")
+
+    if "atoms" in lowered and "waves" not in lowered and category != "waves_tts":
+        banned_terms.extend(["WavesClient.synthesize"])
+    if "waves" in lowered and "atoms" not in lowered and category == "waves_tts":
+        banned_terms.extend(["create_agent", "agent template"])
+
+    return {
+        "category": category,
+        "expected_apis": expected_apis[:10],
+        "required_terms": required_terms[:10],
+        "banned_terms": banned_terms[:8],
+        "expected_paths": expected_paths[:8],
+    }
+
+
+CASES = [case_for_query(index, query) for index, query in enumerate(QUERY_TEXTS, 1)]
+QUERIES = [case["query"] for case in CASES]
 
 
 def _coerce_score(value: Any) -> float:
@@ -288,13 +433,157 @@ def _live_tag_line(side: str, judge: dict[str, Any]) -> str:
     return f"tags={tags} | gaps={gaps}"
 
 
+def configured_judge_models(default_model: str) -> list[str]:
+    raw = (os.getenv("MODEL_BENCHMARK_JUDGES") or "").strip()
+    if raw:
+        models = [item.strip() for item in raw.split(",") if item.strip()]
+        if models:
+            return models
+    return [default_model]
+
+
+def order_swaps_enabled() -> bool:
+    return str(os.getenv("EVAL_JUDGE_ORDER_SWAPS") or "1").strip().lower() not in {"0", "false", "no"}
+
+
+def retrieval_repeats() -> int:
+    raw = str(os.getenv("EVAL_RETRIEVAL_REPEATS") or "1").strip()
+    try:
+        return max(1, min(5, int(raw)))
+    except ValueError:
+        return 1
+
+
+def median_int(values: list[int]) -> int:
+    if not values:
+        return 0
+    return int(statistics.median(values))
+
+
+def retrieve_oz_repeated(
+    *,
+    repeats: int,
+    query: str,
+    mcp_url: str,
+    api_key: str,
+    library_name: str,
+    version_hint: str,
+    fallback_context_id: str,
+    index: int,
+) -> tuple[base_eval.CommandResult, list[int]]:
+    samples: list[base_eval.CommandResult] = []
+    for _ in range(repeats):
+        samples.append(
+            base_eval.retrieve_with_oz(
+                query=query,
+                mcp_url=mcp_url,
+                api_key=api_key,
+                library_name=library_name,
+                version_hint=version_hint,
+                fallback_context_id=fallback_context_id,
+                index=index,
+            )
+        )
+    chosen = next((sample for sample in samples if sample.exit_code == 0 and sample.stdout.strip()), samples[-1])
+    durations = [sample.duration_ms for sample in samples]
+    return (
+        base_eval.CommandResult(
+            command=chosen.command,
+            stdout=chosen.stdout,
+            stderr=chosen.stderr,
+            exit_code=chosen.exit_code,
+            duration_ms=median_int(durations),
+        ),
+        durations,
+    )
+
+
+def retrieve_context7_repeated(cmd: list[str], *, repeats: int) -> tuple[base_eval.CommandResult, list[int]]:
+    samples = [base_eval.run_command(cmd) for _ in range(repeats)]
+    chosen = next((sample for sample in samples if sample.exit_code == 0 and sample.stdout.strip()), samples[-1])
+    durations = [sample.duration_ms for sample in samples]
+    return (
+        base_eval.CommandResult(
+            command=chosen.command,
+            stdout=chosen.stdout,
+            stderr=chosen.stderr,
+            exit_code=chosen.exit_code,
+            duration_ms=median_int(durations),
+        ),
+        durations,
+    )
+
+
+def contains_term(text: str, term: str) -> bool:
+    lowered = text.lower()
+    normalized_term = term.lower()
+    if re.search(r"[\W_]", normalized_term):
+        return normalized_term in lowered
+    return bool(re.search(rf"\b{re.escape(normalized_term)}\b", lowered))
+
+
+def term_hits(text: str, terms: list[str]) -> list[str]:
+    return [term for term in terms if contains_term(text, term)]
+
+
+def output_sources(text: str) -> list[str]:
+    sources: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("source:"):
+            sources.append(stripped.split(":", 1)[1].strip())
+        elif ".codo/vendors/" in stripped or stripped.startswith("http://") or stripped.startswith("https://"):
+            sources.append(stripped)
+    return sources
+
+
+def deterministic_output_metrics(case: dict[str, Any], text: str) -> dict[str, Any]:
+    expected_apis = list(case.get("expected_apis") or [])
+    required_terms = list(case.get("required_terms") or [])
+    banned_terms = list(case.get("banned_terms") or [])
+    expected_paths = list(case.get("expected_paths") or [])
+    api_hits = term_hits(text, expected_apis)
+    required_hits = term_hits(text, required_terms)
+    banned_hits = term_hits(text, banned_terms)
+    sources = output_sources(text)
+    source_blob = "\n".join(sources).lower()
+    path_hits = [path for path in expected_paths if path.lower() in source_blob or path.lower() in text.lower()]
+    code_block_count = text.count("```") // 2
+    api_recall = len(api_hits) / max(1, len(expected_apis))
+    required_recall = len(required_hits) / max(1, len(required_terms))
+    path_recall = len(path_hits) / max(1, len(expected_paths))
+    signal = len(api_hits) + len(required_hits) + len(path_hits)
+    noise = len(banned_hits)
+    precision_proxy = signal / max(1, signal + noise)
+    return {
+        "expected_api_hits": api_hits,
+        "expected_api_recall": round(api_recall, 4),
+        "required_terms_found": required_hits,
+        "required_terms_found_rate": round(required_recall, 4),
+        "expected_path_hits": path_hits,
+        "expected_path_recall": round(path_recall, 4),
+        "banned_terms_found": banned_hits,
+        "precision_proxy": round(precision_proxy, 4),
+        "source_count": len(sources),
+        "code_block_count": code_block_count,
+        "deterministic_pass": api_recall >= 0.5 and required_recall >= 0.5 and not banned_hits,
+    }
+
+
+def deterministic_pair_metrics(case: dict[str, Any], ours: str, context7: str) -> dict[str, Any]:
+    return {
+        "ours": deterministic_output_metrics(case, ours),
+        "context7": deterministic_output_metrics(case, context7),
+    }
+
+
 def _write_partial_report(
     path: Path,
     *,
     run_id: str,
     rows: list[dict[str, Any]],
-    queries: list[str],
-    model: str,
+    cases: list[dict[str, Any]],
+    models: list[str],
     mcp_url: str,
     library_name: str,
     version_hint: str,
@@ -313,35 +602,80 @@ def _write_partial_report(
         "runId": run_id,
         "partial": True,
         "completedQueries": len(rows),
-        "totalQueries": len(queries),
-        "queries": queries,
+        "totalQueries": len(cases),
+        "queries": [case["query"] for case in cases],
+        "cases": cases,
         "metrics": base_eval.METRICS,
-        "model": model,
+        "models": models,
+        "tokenCounter": "tiktoken_cl100k_base_or_char_fallback",
         "rubric": "strict_one_shot_coding_agent",
         "rows": rows,
     }
     if rows:
-        payload["summary"] = base_eval.aggregate(rows)
+        payload["summary"] = aggregate_summary(rows)
         payload["oneShotSummary"] = summarize_one_shot(rows)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def judge_query(client: OpenAI, model: str, query: str, ours: str, context7: str) -> dict[str, Any]:
+def _normalize_ab_judge_payload(payload: dict[str, Any], *, output_a_side: str, output_b_side: str) -> dict[str, Any]:
+    remapped: dict[str, Any] = {"ours": {}, "context7": {}}
+    for raw_key, side in (("output_a", output_a_side), ("output_b", output_b_side), ("a", output_a_side), ("b", output_b_side)):
+        raw_side = payload.get(raw_key) if isinstance(payload.get(raw_key), dict) else {}
+        if not raw_side:
+            continue
+        remapped[side] = raw_side
+    for side in ("ours", "context7"):
+        remapped.setdefault(side, {})
+    payload = {
+        "ours": remapped["ours"],
+        "context7": remapped["context7"],
+        "summary": payload.get("summary"),
+    }
+    return _normalize_judge_payload(payload)
+
+
+def judge_query_once(
+    client: OpenAI,
+    model: str,
+    case: dict[str, Any],
+    output_a: str,
+    output_b: str,
+    *,
+    output_a_side: str,
+    output_b_side: str,
+) -> dict[str, Any]:
+    query = str(case["query"])
+    criteria = json.dumps(
+        {
+            "expected_apis": case.get("expected_apis", []),
+            "required_terms": case.get("required_terms", []),
+            "banned_terms": case.get("banned_terms", []),
+            "expected_paths": case.get("expected_paths", []),
+            "category": case.get("category", ""),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
     prompt = f"""
 You are a strict evaluator for documentation retrieval used by a coding agent.
 
 The coding agent needs source-grounded context that helps it write correct code immediately.
 Be harsh. Do not reward generic summaries, marketing prose, empty packet headings, or text that lacks concrete API usage.
 Judge by the same standard as an autonomous coding benchmark: can a developer or agent implement the requested task from this retrieved context alone, without another lookup?
+Use the deterministic criteria as anchors, but do not require exact wording when the output clearly provides the same API or parameter.
+The two outputs are anonymous to reduce provider-order bias.
 
 Query:
 {query}
 
-Output A (Oz CLI: oz pull -> oz context):
-{ours}
+Deterministic criteria:
+{criteria}
 
-Output B (Context7):
-{context7}
+Output A:
+{output_a}
+
+Output B:
+{output_b}
 
 Score both outputs from 1 to 10 on these metrics:
 - relevance: directly answers the exact query, not adjacent concepts
@@ -374,10 +708,8 @@ Hard caps:
 
 Return strict JSON with this shape:
 {{
-  "ours": {{"relevance": 0, "actionability": 0, "code_utility": 0, "token_efficiency": 0, "source_grounding": 0, "overall": 0, "one_shot_ready": false, "critical_gaps": [], "missing_apis": [], "formatting_failures": [], "failure_tags": []}},
-  "context7": {{"relevance": 0, "actionability": 0, "code_utility": 0, "token_efficiency": 0, "source_grounding": 0, "overall": 0, "one_shot_ready": false, "critical_gaps": [], "missing_apis": [], "formatting_failures": [], "failure_tags": []}},
-  "winner_by_metric": {{"relevance": "ours|context7|tie", "actionability": "...", "code_utility": "...", "token_efficiency": "...", "source_grounding": "...", "overall": "..."}},
-  "overall_winner": "ours|context7|tie",
+  "output_a": {{"relevance": 0, "actionability": 0, "code_utility": 0, "token_efficiency": 0, "source_grounding": 0, "overall": 0, "one_shot_ready": false, "critical_gaps": [], "missing_apis": [], "formatting_failures": [], "failure_tags": []}},
+  "output_b": {{"relevance": 0, "actionability": 0, "code_utility": 0, "token_efficiency": 0, "source_grounding": 0, "overall": 0, "one_shot_ready": false, "critical_gaps": [], "missing_apis": [], "formatting_failures": [], "failure_tags": []}},
   "summary": "2-4 sentence comparison explaining the score harshly and concretely"
 }}
 """.strip()
@@ -393,7 +725,116 @@ Return strict JSON with this shape:
         raw = {}
     if not isinstance(raw, dict):
         raw = {}
-    return _normalize_judge_payload(raw)
+    normalized = _normalize_ab_judge_payload(raw, output_a_side=output_a_side, output_b_side=output_b_side)
+    normalized["model"] = model
+    normalized["order"] = {"output_a": output_a_side, "output_b": output_b_side}
+    return normalized
+
+
+def aggregate_judgments(judgments: list[dict[str, Any]]) -> dict[str, Any]:
+    if not judgments:
+        return _normalize_judge_payload({})
+    normalized: dict[str, Any] = {"ours": {}, "context7": {}}
+    for side in ("ours", "context7"):
+        for metric in base_eval.METRICS:
+            normalized[side][metric] = round(
+                sum(float(judge[side].get(metric) or 0) for judge in judgments) / len(judgments),
+                2,
+            )
+        normalized[side]["one_shot_ready"] = (
+            sum(1 for judge in judgments if judge[side].get("one_shot_ready")) >= (len(judgments) // 2 + 1)
+        )
+        for key in ("critical_gaps", "missing_apis", "formatting_failures", "failure_tags"):
+            counter: Counter[str] = Counter()
+            for judge in judgments:
+                counter.update(judge[side].get(key) or [])
+            normalized[side][key] = [value for value, _count in counter.most_common(8)]
+    winner_by_metric = {
+        metric: _winner_from_scores(
+            float(normalized["ours"][metric]),
+            float(normalized["context7"][metric]),
+        )
+        for metric in base_eval.METRICS
+    }
+    summaries = [str(judge.get("summary") or "").strip() for judge in judgments if str(judge.get("summary") or "").strip()]
+    return {
+        "ours": normalized["ours"],
+        "context7": normalized["context7"],
+        "winner_by_metric": winner_by_metric,
+        "overall_winner": winner_by_metric["overall"],
+        "summary": summaries[0] if summaries else "Aggregated judge response.",
+        "judge_count": len(judgments),
+        "judge_runs": [
+            {
+                "model": judge.get("model"),
+                "order": judge.get("order"),
+                "overall_winner": judge.get("overall_winner"),
+                "ours_overall": judge.get("ours", {}).get("overall"),
+                "context7_overall": judge.get("context7", {}).get("overall"),
+            }
+            for judge in judgments
+        ],
+    }
+
+
+def judge_query(client: OpenAI, models: list[str], case: dict[str, Any], ours: str, context7: str) -> dict[str, Any]:
+    orders = [("ours", ours, "context7", context7)]
+    if order_swaps_enabled():
+        orders.append(("context7", context7, "ours", ours))
+    judgments: list[dict[str, Any]] = []
+    for model in models:
+        for output_a_side, output_a, output_b_side, output_b in orders:
+            judgments.append(
+                judge_query_once(
+                    client,
+                    model,
+                    case,
+                    output_a,
+                    output_b,
+                    output_a_side=output_a_side,
+                    output_b_side=output_b_side,
+                )
+            )
+    return aggregate_judgments(judgments)
+
+
+def percentile(values: list[int], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return float(ordered[0])
+    position = (len(ordered) - 1) * q
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 1)
+
+
+def aggregate_deterministic(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for side in ("ours", "context7"):
+        metrics = [row.get("deterministic", {}).get(side, {}) for row in rows]
+        durations: list[int] = []
+        for row in rows:
+            durations.extend(int(value) for value in row.get(side, {}).get("duration_samples_ms", []) if isinstance(value, int))
+        count = max(1, len(metrics))
+        output[side] = {
+            "expected_api_recall": round(sum(float(item.get("expected_api_recall") or 0) for item in metrics) / count, 4),
+            "required_terms_found_rate": round(sum(float(item.get("required_terms_found_rate") or 0) for item in metrics) / count, 4),
+            "expected_path_recall": round(sum(float(item.get("expected_path_recall") or 0) for item in metrics) / count, 4),
+            "precision_proxy": round(sum(float(item.get("precision_proxy") or 0) for item in metrics) / count, 4),
+            "deterministic_pass_rate": round(sum(1 for item in metrics if item.get("deterministic_pass")) / count, 4),
+            "latency_p50_ms": percentile(durations, 0.50),
+            "latency_p95_ms": percentile(durations, 0.95),
+        }
+    return output
+
+
+def aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = base_eval.aggregate(rows)
+    summary["deterministic"] = aggregate_deterministic(rows)
+    return summary
 
 
 def make_report(
@@ -418,6 +859,7 @@ def make_report(
         f"- One-shot ready: oz={one_shot_summary['one_shot_ready']['ours']}, context7={one_shot_summary['one_shot_ready']['context7']}",
         f"- Avg output tokens est: oz={summary['avg_output_tokens_est']['ours']}, context7={summary['avg_output_tokens_est']['context7']}",
         f"- Avg latency ms: oz={summary['avg_timing_ms']['ours']}, context7={summary['avg_timing_ms']['context7']}",
+        f"- Judge runs per query: {rows[0]['judge'].get('judge_count', 0) if rows else 0}",
         "",
         "| Metric | Oz | Context7 | Winner Count (oz/context7/tie) |",
         "| --- | ---: | ---: | --- |",
@@ -427,6 +869,30 @@ def make_report(
         lines.append(
             f"| {metric} | {summary['ours'][metric]} | {summary['context7'][metric]} | {wins['ours']}/{wins['context7']}/{wins['tie']} |"
         )
+
+    deterministic = summary.get("deterministic", {})
+    if deterministic:
+        lines.extend(
+            [
+                "",
+                "## Deterministic Criteria",
+                "",
+                "| Metric | Oz | Context7 |",
+                "| --- | ---: | ---: |",
+            ]
+        )
+        for metric in (
+            "expected_api_recall",
+            "required_terms_found_rate",
+            "expected_path_recall",
+            "precision_proxy",
+            "deterministic_pass_rate",
+            "latency_p50_ms",
+            "latency_p95_ms",
+        ):
+            lines.append(
+                f"| {metric} | {deterministic.get('ours', {}).get(metric, 0)} | {deterministic.get('context7', {}).get(metric, 0)} |"
+            )
 
     lines.extend(["", "## Top Failure Tags", ""])
     for side, label in (("ours", "Oz"), ("context7", "Context7")):
@@ -442,9 +908,11 @@ def make_report(
         lines.extend(
             [
                 f"### {idx}. {row['query']}",
+                f"- Category: `{row.get('case', {}).get('category', '')}`",
                 f"- Overall winner: `{judge['overall_winner']}`",
                 f"- Oz: latency={row['ours']['duration_ms']}ms, tokens≈{row['ours']['tokens_est']}, one-shot={judge['ours'].get('one_shot_ready')}, tags={oz_tags}",
                 f"- Context7: latency={row['context7']['duration_ms']}ms, tokens≈{row['context7']['tokens_est']}, one-shot={judge['context7'].get('one_shot_ready')}, tags={ctx_tags}",
+                f"- Deterministic: oz_api_recall={row.get('deterministic', {}).get('ours', {}).get('expected_api_recall')} context7_api_recall={row.get('deterministic', {}).get('context7', {}).get('expected_api_recall')}",
                 f"- Judge summary: {judge['summary']}",
                 "",
             ]
@@ -464,6 +932,7 @@ def main() -> None:
     if not api_key:
         raise SystemExit("OPENAI_API_KEY missing after loading .env")
     model = os.getenv("MODEL_BENCHMARK_JUDGE", "gpt-5.5")
+    models = configured_judge_models(model)
     client = OpenAI(api_key=api_key)
 
     base_eval.OZ_LIBRARY_NAME_DEFAULT = OZ_LIBRARY_NAME_DEFAULT
@@ -476,13 +945,14 @@ def main() -> None:
     md_path = base_eval.OUT_DIR / f"{run_id}_oz_smallest_ai_vs_context7.md"
     partial_path = base_eval.OUT_DIR / f"{run_id}_oz_smallest_ai_vs_context7.partial.json"
 
-    queries = QUERIES
+    cases = CASES
     limit_raw = str(os.getenv("EVAL_QUERY_LIMIT") or "").strip()
     if limit_raw:
         try:
-            queries = QUERIES[: max(1, int(limit_raw))]
+            cases = CASES[: max(1, int(limit_raw))]
         except ValueError:
-            queries = QUERIES
+            cases = CASES
+    repeats = retrieval_repeats()
 
     rows: list[dict[str, Any]] = []
     print(
@@ -490,8 +960,10 @@ def main() -> None:
             {
                 "event": "benchmark_start",
                 "runId": run_id,
-                "queries": len(queries),
-                "model": model,
+                "queries": len(cases),
+                "models": models,
+                "judgeOrderSwaps": order_swaps_enabled(),
+                "retrievalRepeats": repeats,
                 "mcpUrl": mcp_url,
                 "libraryName": library_name,
                 "versionHint": version_hint,
@@ -500,10 +972,12 @@ def main() -> None:
         ),
         flush=True,
     )
-    for idx, query in enumerate(queries, 1):
-        print(f"\n[{idx}/{len(queries)}] {query}", flush=True)
+    for idx, case in enumerate(cases, 1):
+        query = str(case["query"])
+        print(f"\n[{idx}/{len(cases)}] {query}", flush=True)
         ctx7_cmd = ["ctx7", "docs", CTX7_ID, query]
-        ours_res = base_eval.retrieve_with_oz(
+        ours_res, oz_samples = retrieve_oz_repeated(
+            repeats=repeats,
             query=query,
             mcp_url=mcp_url,
             api_key=oz_api_key,
@@ -512,7 +986,7 @@ def main() -> None:
             fallback_context_id=fallback_context_id,
             index=idx,
         )
-        ctx7_res = base_eval.run_command(ctx7_cmd)
+        ctx7_res, ctx7_samples = retrieve_context7_repeated(ctx7_cmd, repeats=repeats)
         ours_text = base_eval.clean_output(ours_res.stdout)
         ctx7_text = base_eval.clean_output(ctx7_res.stdout)
         if not ctx7_text and ctx7_res.stderr:
@@ -524,14 +998,17 @@ def main() -> None:
             f"context7 exit={ctx7_res.exit_code} latency={ctx7_res.duration_ms}ms tokens≈{base_eval.estimate_tokens(ctx7_text)}",
             flush=True,
         )
-        judge = judge_query(client, model, query, ours_text, ctx7_text)
+        deterministic = deterministic_pair_metrics(case, ours_text, ctx7_text)
+        judge = judge_query(client, models, case, ours_text, ctx7_text)
         rows.append(
             {
                 "index": idx,
                 "query": query,
+                "case": case,
                 "ours": {
                     "command": ours_res.command,
                     "duration_ms": ours_res.duration_ms,
+                    "duration_samples_ms": oz_samples,
                     "exit_code": ours_res.exit_code,
                     "stdout": ours_text,
                     "stderr": ours_res.stderr,
@@ -540,15 +1017,17 @@ def main() -> None:
                 "context7": {
                     "command": ctx7_cmd,
                     "duration_ms": ctx7_res.duration_ms,
+                    "duration_samples_ms": ctx7_samples,
                     "exit_code": ctx7_res.exit_code,
                     "stdout": ctx7_text,
                     "stderr": ctx7_res.stderr,
                     "tokens_est": base_eval.estimate_tokens(ctx7_text),
                 },
+                "deterministic": deterministic,
                 "judge": judge,
             }
         )
-        running = base_eval.aggregate(rows)
+        running = aggregate_summary(rows)
         one_shot_running = summarize_one_shot(rows)
         print(
             f"  scores: oz {_live_metric_line('ours', judge)} | context7 {_live_metric_line('context7', judge)}",
@@ -568,15 +1047,15 @@ def main() -> None:
             partial_path,
             run_id=run_id,
             rows=rows,
-            queries=queries,
-            model=model,
+            cases=cases,
+            models=models,
             mcp_url=mcp_url,
             library_name=library_name,
             version_hint=version_hint,
             fallback_context_id=fallback_context_id,
         )
 
-    summary = base_eval.aggregate(rows)
+    summary = aggregate_summary(rows)
     one_shot_summary = summarize_one_shot(rows)
     payload = {
         "libraryId": LIBRARY_ID,
@@ -589,9 +1068,13 @@ def main() -> None:
             "tools": ["oz pull", "oz context"],
         },
         "runId": run_id,
-        "queries": queries,
+        "queries": [case["query"] for case in cases],
+        "cases": cases,
         "metrics": base_eval.METRICS,
-        "model": model,
+        "models": models,
+        "tokenCounter": "tiktoken_cl100k_base_or_char_fallback",
+        "judgeOrderSwaps": order_swaps_enabled(),
+        "retrievalRepeats": repeats,
         "rubric": "strict_one_shot_coding_agent",
         "summary": summary,
         "oneShotSummary": one_shot_summary,
