@@ -352,6 +352,7 @@ def context_snippets_from_postgres(
     query_plan = plan_query(query)
     terms = normalized_tsquery(query_plan.important_terms or query)
     intent = query_plan.content_type
+    legacy_requested = legacy_query(query)
     compact_terms = [
         compact_key(value)
         for value in [*query_plan.symbols, *query_plan.phrases, *query_plan.slugs, *query_plan.important_terms]
