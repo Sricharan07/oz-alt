@@ -10,7 +10,10 @@ ERROR_RE = re.compile(r"\b(?:ERR_[A-Z0-9_]+|[A-Za-z_$][\w$]*Error|HTTP\s+[45]\d{
 API_HEADING_RE = re.compile(r"(?mi)^#{1,4}\s+.*\b(api|reference|parameters?|returns?|methods?|functions?|classes?)\b")
 CODE_FENCE_RE = re.compile(r"(?ms)^\s*(?:`{3,}|~{3,})([A-Za-z0-9_+.-]*)\n(.*?)(?:^\s*(?:`{3,}|~{3,})\s*$)")
 INDENTED_CODE_RE = re.compile(r"(?m)^(?: {4}|\t)(?:const|let|var|import|export|def|class|function|return|curl|npm|npx|pip|uv|docker)\b")
+CODE_STATEMENT_RE = re.compile(r"(?m)^\s*(?:import\s+|export\s+|const\s+|let\s+|var\s+|function\s+|return\s+|await\s+|if\s*\(|switch\s*\()")
 CONFIG_FILE_RE = re.compile(r"\b(?:package\.json|tsconfig\.json|next\.config\.[cm]?[jt]s|vite\.config\.[cm]?[jt]s|tailwind\.config\.[cm]?[jt]s|docker-compose\.ya?ml|\.env)\b", re.I)
+CONFIG_PATH_RE = re.compile(r"(?:^|/)(?:config|configuration|next-config-js)(?:/|$)", re.I)
+ERROR_HEADING_RE = re.compile(r"(?mi)^#{1,4}\s+.*\b(errors?|exceptions?|troubleshooting|status codes?|failed|failure)\b")
 API_PATH_RE = re.compile(r"(?:^|/)(?:api-reference|reference|api)(?:/|$)", re.I)
 API_SIGNATURE_RE = re.compile(
     r"(?m)^\s*(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:function|class|interface|type|const|def)\s+[A-Za-z_$][\w$]*\b"
@@ -27,9 +30,11 @@ def classify_content_type(source_url: str, markdown: str) -> str:
         return "index"
     if lower_url.endswith((".d.ts", ".pyi")) or "type definitions" in lower_head:
         return "api_reference"
+    if CONFIG_PATH_RE.search(lower_path):
+        return "config"
     if API_PATH_RE.search(lower_path) or API_HEADING_RE.search(text_head):
         return "api_reference"
-    if has_config_block(text_head):
+    if has_config_block(text_head, source_url=source_url, page_type="prose"):
         return "config"
     if CLI_RE.search(text_head):
         return "cli"
@@ -45,14 +50,16 @@ def classify_content_type(source_url: str, markdown: str) -> str:
 
 
 def block_content_type(source_url: str, block: str, page_type: str) -> str:
-    if has_config_block(block):
+    if has_config_block(block, source_url=source_url, page_type=page_type):
         return "config"
     if CLI_RE.search(block):
         return "cli"
-    if is_error_reference(block):
-        return "error_ref"
     if CODE_FENCE_RE.search(block) or INDENTED_CODE_RE.search(block):
         return "code_example"
+    if page_type != "api_reference" and CODE_STATEMENT_RE.search(block):
+        return "code_example"
+    if is_error_reference(block, page_type=page_type):
+        return "error_ref"
     if page_type in {"code_example", "config", "cli", "error_ref"}:
         return page_type
     if page_type == "api_reference" or API_HEADING_RE.search(block) or API_SIGNATURE_RE.search(block):
@@ -60,12 +67,13 @@ def block_content_type(source_url: str, block: str, page_type: str) -> str:
     return "prose"
 
 
-def has_config_block(text: str) -> bool:
+def has_config_block(text: str, *, source_url: str = "", page_type: str = "prose") -> bool:
     for match in CODE_FENCE_RE.finditer(text):
         language = match.group(1).strip().lower()
         if language in CONFIG_LANGS:
             return True
-    if CONFIG_FILE_RE.search(text):
+    path_is_config = bool(CONFIG_PATH_RE.search(urlparse(source_url).path.lower()))
+    if path_is_config and CONFIG_FILE_RE.search(text):
         return True
     return looks_like_inline_json_object(text)
 
@@ -75,8 +83,10 @@ def looks_like_inline_json_object(text: str) -> bool:
     return bool(re.search(r"(?s)(?:^|\n)\s*\{\s*\"[A-Za-z_][^\"]+\"\s*:", stripped))
 
 
-def is_error_reference(text: str) -> bool:
+def is_error_reference(text: str, *, page_type: str = "prose") -> bool:
     if not ERROR_RE.search(text):
+        return False
+    if page_type == "api_reference" and not ERROR_HEADING_RE.search(text):
         return False
     lower = text.lower()
     return any(term in lower for term in ("cause", "fix", "solution", "error", "exception", "failed", "failure", "status code"))

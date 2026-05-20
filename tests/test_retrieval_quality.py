@@ -28,6 +28,7 @@ from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_em
 from oz_api.indexer import add_parent_chunks, limit_to_token_budget
 from oz_api.ranking import local_chunk_score
 from oz_api.queue import queued_crawler_job_event
+from oz_api.retrieval import context_source_text
 from oz_api.rerank import (
     boost_named_suggestions,
     boost_query_matches,
@@ -123,6 +124,26 @@ class RetrievalQualityTests(unittest.TestCase):
             block_content_type("https://example.com/docs", "JSON API URL fix solution", "prose"),
             "prose",
         )
+        self.assertEqual(
+            block_content_type(
+                "https://nextjs.org/docs/app/building-your-application/routing/middleware",
+                "import { NextResponse } from 'next/server'\nexport function proxy(request) { return NextResponse.next() }",
+                "prose",
+            ),
+            "code_example",
+        )
+        self.assertEqual(
+            block_content_type(
+                "https://nextjs.org/docs/pages/api-reference/functions/next-response",
+                "NextResponse extends the Web Response API. The URL can be used for redirects.",
+                "api_reference",
+            ),
+            "api_reference",
+        )
+        self.assertEqual(
+            classify_content_type("https://nextjs.org/docs/app/api-reference/config/next-config-js/redirects", "Redirects config"),
+            "config",
+        )
 
     def test_chunker_keeps_code_fence_with_snippet_metadata(self) -> None:
         chunks = chunk_markdown("# API\n\nUse it:\n\n```ts\nclient.responses.create({})\n```\n", source_url="https://docs.example/api", page_type="api_reference")
@@ -191,12 +212,30 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertNotIn("title: Middleware", markdown)
         self.assertTrue(markdown.startswith("# Middleware"))
 
+    def test_context_strips_source_index_boilerplate(self) -> None:
+        text = (
+            "> For an index of all Next.js documentation, see [/docs/pages/llms.txt](/docs/pages/llms.txt).\n"
+            "NextResponse extends the Web Response API."
+        )
+        row = {"_matched_text": text, "content_type": "api_reference", "symbols": ["NextResponse"]}
+
+        self.assertEqual(context_source_text(row), "NextResponse extends the Web Response API.")
+
     def test_markdown_cleanup_strips_single_word_nav_boilerplate(self) -> None:
         markdown = clean_markdown("# Guide\n\nSponsor\n\nBlog\n\nUse computed refs.")
 
         self.assertNotIn("Sponsor", markdown)
         self.assertNotIn("Blog", markdown)
         self.assertIn("Use computed refs.", markdown)
+
+    def test_markdown_cleanup_strips_source_index_boilerplate(self) -> None:
+        markdown = clean_markdown(
+            "> For an index of all Next.js documentation, see [/docs/pages/llms.txt](/docs/pages/llms.txt).\n"
+            "NextResponse extends the Web Response API."
+        )
+
+        self.assertNotIn("index of all Next.js documentation", markdown)
+        self.assertIn("NextResponse extends", markdown)
 
     def test_markdown_cleanup_strips_horizontal_rules_without_frontmatter_false_positive(self) -> None:
         markdown = clean_markdown("---\n## Reference\n\nUse `useState`.\n\n---\n## Usage\n")

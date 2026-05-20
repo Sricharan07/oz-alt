@@ -203,7 +203,12 @@ def clean_context_text(text: str) -> str:
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
+        lowered = stripped.lower()
         if stripped.startswith("Source:") or stripped.startswith("**Source:**"):
+            continue
+        if re.match(r"^>?\s*for an index of all .*documentation, see .*/llms(?:[-.]full)?\.txt", lowered):
+            continue
+        if re.match(r"^>?\s*for a semantic overview of .*documentation, see .*/sitemap\.md", lowered):
             continue
         if stripped in {"---", "+++"} or stripped.startswith(("title:", "description:", "url:", "version:")):
             continue
