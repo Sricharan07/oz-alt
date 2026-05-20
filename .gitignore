@@ -20,5 +20,6 @@ registry/fixtures/**/_crawl_errors.jsonl
 registry/fixtures/**/_crawl_errors*.jsonl
 registry/fixtures/**/_crawl_state.json
 registry/fixtures/**/_crawl_state*.json
+registry/fixtures/**/* 2.*
 .codo/vendors/
 .codo/tmp/
