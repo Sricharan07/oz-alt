@@ -158,7 +158,7 @@ Every public CLI release should include:
 Generate and verify release evidence locally:
 
 ```bash
-python3 scripts/generate-release-manifest.py --dist dist --version 0.1.2
+python3 scripts/generate-release-manifest.py --dist dist --version 0.1.7
 python3 scripts/verify-release-artifacts.py --dist dist
 ```
 
@@ -403,7 +403,7 @@ bash scripts/sync-public-release-repo.sh
 ```
 
 ```bash
-bash scripts/release-local.sh 0.1.2
+bash scripts/release-local.sh 0.1.7
 ```
 
 This creates a raw binary asset, SHA256 files, a release tarball, and a Homebrew formula for the current platform. The npm wrapper downloads the raw binary asset for the user's platform.

@@ -30,6 +30,27 @@ Run deterministic Oz retrieval only:
 python3 benchmark-harness/harness.py run --mode retrieval --limit 3
 ```
 
+Run against the published npm-installed binary:
+
+```bash
+npm install --prefix /tmp/oz-bench-npm @hiringbae/oz@latest
+python3 benchmark-harness/harness.py run \
+  --mode retrieval \
+  --oz-bin /tmp/oz-bench-npm/node_modules/.bin/oz \
+  --skip-build
+```
+
+Run with release-quality gates enabled:
+
+```bash
+python3 benchmark-harness/harness.py run \
+  --mode retrieval \
+  --strict \
+  --min-hit-at-5 0.8 \
+  --min-required-terms 0.8 \
+  --max-search-tokens 500
+```
+
 Run the mini coding/evidence agent on one case:
 
 ```bash
@@ -99,6 +120,8 @@ Primary metrics:
 This is deliberately filesystem-based. Oz's advantage is path-first retrieval plus native file reads, so a pure snippet API eval would under-measure the product.
 
 The retrieval runner reads only the top bounded line window by default. This matches the intended agent workflow: use Oz to find a precise location, inspect that local window, then expand with `rg`, more result windows, or full-file reads only when needed. Use `--read-results N` to intentionally model a broader read strategy.
+
+By default the runner fails only when returned paths are not materialized locally. Use `--strict` for release gates over expected-path hit rate, required-term coverage, and compact search token budget. Those gates are meant to fail loudly when corpus quality regresses; do not loosen them to make a benchmark pass.
 
 ## Judging Rubric
 

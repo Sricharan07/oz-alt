@@ -4,6 +4,14 @@ All notable Oz product and release changes are tracked here.
 
 ## Unreleased
 
+## 0.1.7
+
+- Add compact agent-oriented search output with bounded line ranges via `oz search --compact-json`.
+- Return line ranges through `oz search` text output and the path-first MCP `oz_search` tool.
+- Update generated Oz agent instructions to prefer compact semantic search plus narrow local file reads.
+- Add a 30-case benchmark harness for Next.js, React, and FastAPI with filesystem read-window token accounting.
+- Fix local pull behavior for macOS dataless `.ozpack` files by falling back to materialized fixture sources.
+
 ## 0.1.6
 
 - Make `oz setup` the one-command agent onboarding path by always writing the default registry API URL, even when login is skipped.

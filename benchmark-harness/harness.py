@@ -47,6 +47,11 @@ def main() -> int:
     run.add_argument("--read-results", type=int, default=1, help="Number of search results to read from disk.")
     run.add_argument("--window-lines", type=int, default=80, help="Maximum lines to read around each search hit.")
     run.add_argument("--context-tokens", type=int, default=2000)
+    run.add_argument("--strict", action="store_true", help="Fail the run when quality gates do not pass.")
+    run.add_argument("--min-hit-at-5", type=float, default=0.8, help="Strict gate for expected-path hit@5.")
+    run.add_argument("--min-required-terms", type=float, default=0.8, help="Strict gate for required-term coverage.")
+    run.add_argument("--min-materialized", type=float, default=1.0, help="Gate for materialized top-5 paths.")
+    run.add_argument("--max-search-tokens", type=float, default=500.0, help="Strict gate for average compact search tokens.")
     run.add_argument("--out", default="")
 
     summarize = sub.add_parser("summarize", help="Summarize a benchmark run directory.")
@@ -139,7 +144,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
     oz_bin = resolve_oz_bin(args.oz_bin, skip_build=args.skip_build)
     if args.build_packs:
-        run_cmd([str(oz_bin), "dev", "registry", "build-packs"], cwd=ROOT, env=bench_env(Path(tempfile.mkdtemp(prefix="oz-bench-home-"))))
+        run_cmd(
+            [str(oz_bin), "dev", "registry", "build-packs"],
+            cwd=ROOT,
+            env=bench_env(Path(tempfile.mkdtemp(prefix="oz-bench-home-")), oz_bin=oz_bin),
+        )
 
     run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = Path(args.out) if args.out else RUNS / run_id
@@ -152,10 +161,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
         results.append(case_result)
         write_json(run_dir / "summary.json", aggregate_results(run_id, results))
 
-    summary = aggregate_results(run_id, results)
+    summary = aggregate_results(run_id, results, args)
     write_json(run_dir / "summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if summary["retrieval"]["materialized_top5_rate"] == 1.0 else 1
+    return 0 if summary["passed"] else 1
 
 
 def resolve_oz_bin(value: str, *, skip_build: bool) -> Path:
@@ -185,7 +194,7 @@ def run_case(case: dict[str, Any], run_dir: Path, oz_bin: Path, args: argparse.N
         encoding="utf-8",
     )
 
-    env = bench_env(home)
+    env = bench_env(home, oz_bin=oz_bin)
     run_cmd([str(oz_bin), "init"], cwd=workspace, env=env, timeout=args.command_timeout)
     pull = run_cmd_capture([str(oz_bin), "pull", case["library"]], cwd=workspace, env=env, timeout=args.command_timeout)
     write_text(case_dir / "oz_pull.out", pull.stdout)
@@ -258,12 +267,13 @@ def run_case(case: dict[str, Any], run_dir: Path, oz_bin: Path, args: argparse.N
     return result
 
 
-def bench_env(home: Path) -> dict[str, str]:
+def bench_env(home: Path, *, oz_bin: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["OZ_DISABLE_KEYCHAIN"] = "1"
     env["OZ_TELEMETRY"] = "off"
-    env["PATH"] = f"{ROOT / 'target' / 'debug'}{os.pathsep}{env.get('PATH', '')}"
+    path_prefix = oz_bin.parent if oz_bin else ROOT / "target" / "debug"
+    env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
     env.pop("OZ_API_URL", None)
     return env
 
@@ -495,21 +505,52 @@ def write_judge_packet(
     write_text(case_dir / "judge_packet.md", "\n".join(lines).strip() + "\n")
 
 
-def aggregate_results(run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_results(run_id: str, results: list[dict[str, Any]], args: argparse.Namespace | None = None) -> dict[str, Any]:
     metrics = [row["metrics"] for row in results]
     count = len(metrics)
+    retrieval = {
+        "expected_path_hit_at_1": avg(metrics, "expected_path_hit_at_1"),
+        "expected_path_hit_at_5": avg(metrics, "expected_path_hit_at_5"),
+        "materialized_top5_rate": avg(metrics, "materialized_top5_rate"),
+        "required_terms_found_rate": avg(metrics, "required_terms_found_rate"),
+        "avg_search_tokens_est": avg(metrics, "oz_search_output_tokens_est"),
+        "avg_context_tokens_est": avg(metrics, "oz_context_output_tokens_est"),
+        "avg_docs_read_tokens_est": avg(metrics, "docs_read_tokens_est"),
+    }
+    strict = bool(args and args.strict)
+    gates = {
+        "materialized_top5_rate": {
+            "value": retrieval["materialized_top5_rate"],
+            "threshold": args.min_materialized if args else 1.0,
+            "passed": retrieval["materialized_top5_rate"] >= (args.min_materialized if args else 1.0),
+            "strict": True,
+        },
+        "expected_path_hit_at_5": {
+            "value": retrieval["expected_path_hit_at_5"],
+            "threshold": args.min_hit_at_5 if args else 0.8,
+            "passed": retrieval["expected_path_hit_at_5"] >= (args.min_hit_at_5 if args else 0.8),
+            "strict": strict,
+        },
+        "required_terms_found_rate": {
+            "value": retrieval["required_terms_found_rate"],
+            "threshold": args.min_required_terms if args else 0.8,
+            "passed": retrieval["required_terms_found_rate"] >= (args.min_required_terms if args else 0.8),
+            "strict": strict,
+        },
+        "avg_search_tokens_est": {
+            "value": retrieval["avg_search_tokens_est"],
+            "threshold": args.max_search_tokens if args else 500.0,
+            "passed": retrieval["avg_search_tokens_est"] <= (args.max_search_tokens if args else 500.0),
+            "strict": strict,
+        },
+    }
+    passed = all(gate["passed"] for gate in gates.values() if gate["strict"])
     return {
         "run_id": run_id,
         "case_count": count,
-        "retrieval": {
-            "expected_path_hit_at_1": avg(metrics, "expected_path_hit_at_1"),
-            "expected_path_hit_at_5": avg(metrics, "expected_path_hit_at_5"),
-            "materialized_top5_rate": avg(metrics, "materialized_top5_rate"),
-            "required_terms_found_rate": avg(metrics, "required_terms_found_rate"),
-            "avg_search_tokens_est": avg(metrics, "oz_search_output_tokens_est"),
-            "avg_context_tokens_est": avg(metrics, "oz_context_output_tokens_est"),
-            "avg_docs_read_tokens_est": avg(metrics, "docs_read_tokens_est"),
-        },
+        "passed": passed,
+        "gates": gates,
+        "retrieval": retrieval,
         "agent": {
             "answer_exists_rate": avg([row.get("agent", {}) for row in results], "answer_exists"),
             "ok_rate": avg([row.get("agent", {}) for row in results], "ok"),
