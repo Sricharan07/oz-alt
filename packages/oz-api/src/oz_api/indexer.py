@@ -18,6 +18,7 @@ from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
 from oz_api.versions import compare_versions
 from oz_crawler.content_types import block_content_type, classify_content_type
+from oz_crawler.normalize import clean_markdown
 from oz_crawler.token_counting import token_count
 
 
@@ -184,7 +185,7 @@ def append_unique_chunk_row(
 def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(row)
     path = str(enriched.get("path") or "README.md")
-    text = limit_to_token_budget(str(enriched.get("text") or ""), index_chunk_token_limit())
+    text = limit_to_token_budget(clean_markdown(str(enriched.get("text") or "")).strip(), index_chunk_token_limit())
     source_url = str(enriched.get("source_url") or "")
     enriched["path"] = path
     enriched["source_url"] = source_url

@@ -25,7 +25,7 @@ from oz_api.crawler_jobs import (
 )
 from oz_api.intent import classify_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
-from oz_api.indexer import add_parent_chunks, limit_to_token_budget
+from oz_api.indexer import add_parent_chunks, enrich_chunk_row, limit_to_token_budget
 from oz_api.ranking import local_chunk_score
 from oz_api.queue import queued_crawler_job_event
 from oz_api.retrieval import context_source_text
@@ -220,6 +220,22 @@ class RetrievalQualityTests(unittest.TestCase):
         row = {"_matched_text": text, "content_type": "api_reference", "symbols": ["NextResponse"]}
 
         self.assertEqual(context_source_text(row), "NextResponse extends the Web Response API.")
+
+    def test_indexer_strips_source_index_boilerplate(self) -> None:
+        row = enrich_chunk_row(
+            {"vendor": "vercel", "library": "next.js", "version": "15"},
+            {
+                "path": "api-reference/config.md",
+                "text": (
+                    "Use this config.\n"
+                    "For an index of all available documentation, see [/docs/llms.txt](/docs/llms.txt)"
+                ),
+                "start_line": 1,
+            },
+        )
+
+        self.assertNotIn("index of all available documentation", row["text"])
+        self.assertIn("Use this config.", row["text"])
 
     def test_markdown_cleanup_strips_single_word_nav_boilerplate(self) -> None:
         markdown = clean_markdown("# Guide\n\nSponsor\n\nBlog\n\nUse computed refs.")
