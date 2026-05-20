@@ -8,14 +8,14 @@ import re
 from typing import Any
 from urllib import request
 
-from oz_api.intent import classify_query
+from oz_api.intent import plan_query
 from oz_api.observability import observe_duration
 from oz_api.redis_store import redis_client
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
 
 LOGGER = logging.getLogger(__name__)
-RERANK_CACHE_VERSION = "search-rank-v7"
+RERANK_CACHE_VERSION = "search-rank-v8"
 
 
 def maybe_rerank(
@@ -103,8 +103,9 @@ def cross_encoder_rerank(ctx: RetrievalContext, query: str, rows: list[dict[str,
 
 
 def boost_query_matches(query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    symbols = [normalize_key(symbol) for symbol in classify_query(query).symbols]
-    terms = [normalize_key(term) for term in normalize_query(query)]
+    plan = plan_query(query)
+    symbols = [normalize_key(symbol) for symbol in plan.symbols]
+    terms = [normalize_key(term) for term in plan.important_terms]
     boosted: list[dict[str, Any]] = []
     for row in rows:
         copy = dict(row)

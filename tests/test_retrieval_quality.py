@@ -23,10 +23,10 @@ from oz_api.crawler_jobs import (
     search_eval_report,
     terminal_embedding_error,
 )
-from oz_api.intent import classify_query
+from oz_api.intent import classify_query, plan_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
-from oz_api.indexer import add_parent_chunks, enrich_chunk_row, limit_to_token_budget
-from oz_api.ranking import local_chunk_score
+from oz_api.indexer import add_parent_chunks, chunk_rows, enrich_chunk_row, limit_to_token_budget
+from oz_api.ranking import local_chunk_score, planned_chunk_score
 from oz_api.queue import queued_crawler_job_event
 from oz_api.retrieval import context_source_text
 from oz_api.rerank import (
@@ -86,6 +86,23 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(intent.content_type, "api_reference")
         self.assertIn("useState", intent.symbols)
 
+    def test_query_plan_does_not_treat_client_as_cli_or_json_as_config(self) -> None:
+        client = plan_query("How do I navigate on the client and read search params with useRouter?")
+        route = plan_query("How does a route handler read a POST body and return JSON?")
+
+        self.assertNotEqual(client.content_type, "cli")
+        self.assertIn("useRouter", client.symbols)
+        self.assertNotEqual(route.content_type, "config")
+        self.assertIn("route handler", route.phrases)
+
+    def test_query_plan_removes_stopwords_but_keeps_phrases_and_symbols(self) -> None:
+        plan = plan_query("How do fetch cache options, revalidate, and cache tags work in Next.js?")
+
+        self.assertNotIn("how", plan.important_terms)
+        self.assertNotIn("next", plan.important_terms)
+        self.assertIn("cache tags", plan.phrases)
+        self.assertIn("cache-tags", plan.slugs)
+
     def test_local_eval_ranking_prefers_exact_api_reference_over_examples(self) -> None:
         terms = ["useeffect", "cleanup", "dependency", "array"]
         api_row = {
@@ -102,6 +119,25 @@ class RetrievalQualityTests(unittest.TestCase):
         }
 
         self.assertGreater(local_chunk_score(api_row, terms), local_chunk_score(example_row, terms))
+
+    def test_planned_ranking_demotes_cli_for_non_cli_query(self) -> None:
+        query = "How does a Next.js App Router route handler read a POST body and return JSON?"
+        route_row = {
+            "path": "api-reference/app/api-reference/file-conventions/route.md",
+            "text": "Route Handlers allow you to create custom request handlers for a given route using the Web Request and Response APIs. export async function POST(request: Request) { return Response.json({ ok: true }) }",
+            "content_type": "api_reference",
+            "heading_path": ["Route Handlers"],
+            "symbols": [],
+        }
+        cli_row = {
+            "path": "api-reference/app/api-reference/cli/next.md",
+            "text": "The Next.js CLI has commands and options for route handlers, JSON output, build, dev, and POST examples.",
+            "content_type": "cli",
+            "heading_path": ["Next CLI"],
+            "symbols": [],
+        }
+
+        self.assertGreater(planned_chunk_score(route_row, query), planned_chunk_score(cli_row, query))
 
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(
@@ -236,6 +272,24 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertNotIn("index of all available documentation", row["text"])
         self.assertIn("Use this config.", row["text"])
+
+    def test_indexer_includes_all_symbol_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "registry" / "fixtures" / "vendor" / "lib" / "1"
+            symbols = fixture / "_symbols"
+            symbols.mkdir(parents=True)
+            (fixture / "_chunks.jsonl").write_text("", encoding="utf-8")
+            (symbols / "alpha.md").write_text("# alpha\n\n**Source:** https://docs.example/a\n\nAlpha API.", encoding="utf-8")
+            (symbols / "beta.md").write_text("# beta\n\n**Source:** https://docs.example/b\n\nBeta API.", encoding="utf-8")
+            rows = chunk_rows(
+                RegistryStorage(root),
+                {"vendor": "vendor", "library": "lib", "version": "1"},
+            )
+
+        paths = {row["path"] for row in rows}
+        self.assertIn("_symbols/alpha.md", paths)
+        self.assertIn("_symbols/beta.md", paths)
 
     def test_markdown_cleanup_strips_single_word_nav_boilerplate(self) -> None:
         markdown = clean_markdown("# Guide\n\nSponsor\n\nBlog\n\nUse computed refs.")

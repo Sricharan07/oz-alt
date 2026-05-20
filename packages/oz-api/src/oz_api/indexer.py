@@ -164,7 +164,8 @@ def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str
                 append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
     for row in symbol_chunk_rows(fixture):
         append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
-        return [enrich_chunk_row(entry, row) for row in rows]
+    rows = add_parent_chunks(entry, fixture, rows)
+    return [enrich_chunk_row(entry, row) for row in rows]
 
 
 def append_unique_chunk_row(

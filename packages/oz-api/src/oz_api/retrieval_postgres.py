@@ -7,9 +7,9 @@ from typing import Any
 
 from oz_api.embeddings import embedding_for_query
 from oz_api.db import postgres_connection
-from oz_api.intent import classify_query, intent_name
+from oz_api.intent import plan_query
 from oz_api.observability import observe_duration
-from oz_api.ranking import local_chunk_score
+from oz_api.ranking import planned_chunk_score
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_metrics import retrieval_statement_timeout_ms
 from oz_api.storage import normalize_query
@@ -157,12 +157,15 @@ def search_from_postgres(
     connection = postgres_connection(ctx.database_url)
     if connection is None:
         return None
-    terms = normalized_tsquery(query)
-    intent = intent_name(query)
-    query_intent = classify_query(query)
-    symbol_pattern = like_pattern(query_intent.symbols or normalize_query(query)[:4])
+    query_plan = plan_query(query)
+    terms = normalized_tsquery(query_plan.important_terms or query)
+    intent = query_plan.content_type
+    query_intent = query_plan
+    symbol_pattern = like_pattern(query_intent.symbols) if query_intent.symbols else "__oz_no_exact_symbol_match__"
     exact_symbol_keys = [compact_key(symbol) for symbol in query_intent.symbols if compact_key(symbol)]
     exact_symbol_paths = [f"_symbols/{symbol}.md".lower() for symbol in query_intent.symbols]
+    exact_path_patterns = [f"%/{slug}.md" for slug in query_intent.slugs if slug]
+    exact_path_patterns.extend(f"%/{slug}/%" for slug in query_intent.slugs if slug)
     vector = vector_literal(embedding) if vector_enabled and (embedding := embedding_for_query(query)) else None
     scope = parse_versioned_scope(library_scope)
     scope_vendor, scope_library = scope.vendor, scope.library
@@ -176,7 +179,7 @@ def search_from_postgres(
     )
     content_filter = "and c.content_type = any(%s)" if content_types else ""
     candidates = candidate_limit(max_results)
-    params: list[Any] = [terms, intent, terms]
+    params: list[Any] = [terms, terms, terms, terms, intent, terms]
     if scope_vendor:
         params.extend([scope_vendor, scope_library, scope_version_id])
     if content_types:
@@ -190,19 +193,23 @@ def search_from_postgres(
             params.extend([scope_vendor, scope_library, scope_version_id])
         if content_types:
             params.append(content_types)
-        params.extend([vector, candidates])
+        params.append(candidates)
     params.extend(
         [
             exact_symbol_paths,
             exact_symbol_keys,
             exact_symbol_keys,
+            exact_path_patterns,
+            [compact_key(phrase) for phrase in query_intent.phrases if compact_key(phrase)],
             intent,
-            symbol_pattern,
-            symbol_pattern,
-            symbol_pattern,
             exact_symbol_paths,
             exact_symbol_keys,
             exact_symbol_keys,
+            exact_path_patterns,
+            [compact_key(phrase) for phrase in query_intent.phrases if compact_key(phrase)],
+            symbol_pattern,
+            symbol_pattern,
+            symbol_pattern,
         ]
     )
     if scope_vendor:
@@ -212,42 +219,63 @@ def search_from_postgres(
     params.extend([candidates, max_results])
     sql = f"""
         with fts_candidates as (
-          {candidate_select("greatest(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)", "0::float8", "0::float8")}
-          where c.search_document @@ websearch_to_tsquery('english', %s)
-            and coalesce(c.dedupe_canonical, true)
-            {where_scope}
-            {content_filter}
+          select *
+          from (
+            select ranked_fts.*,
+                   1.0 / (60 + row_number() over (order by fts_score desc, path asc, start_line asc)) as rrf_score
+            from (
+              {candidate_select(fielded_fts_score_expr(), "0::float8", "0::float8")}
+              where c.search_document @@ websearch_to_tsquery('english', %s)
+                and coalesce(c.dedupe_canonical, true)
+                {where_scope}
+                {content_filter}
+            ) ranked_fts
+          ) fused_fts
           order by fts_score desc, path asc, start_line asc
           limit %s
         ),
         vector_candidates as (
           {vector_cte}
         ),
-        symbol_candidates as (
-          {candidate_select("0::float8", "0::float8", symbol_score_expr())}
-          where coalesce(c.dedupe_canonical, true)
-            and (
-              c.path ilike %s
-              or c.symbols::text ilike %s
-              or c.heading_path::text ilike %s
-              or lower(c.path) = any(%s::text[])
-              or compact_basename(c.path) = any(%s::text[])
-              or exists (
-                select 1
-                from jsonb_array_elements_text(c.symbols) symbol_value
-                where compact_key_sql(symbol_value) = any(%s::text[])
-              )
-            )
-            {where_scope}
-            {content_filter}
-          order by symbol_score desc, path asc, start_line asc
+        exact_candidates as (
+          select *
+          from (
+            select ranked_exact.*,
+                   1.0 / (60 + row_number() over (order by exact_score desc, path asc, start_line asc)) as rrf_score
+            from (
+              {candidate_select("0::float8", "0::float8", exact_score_expr())}
+              where coalesce(c.dedupe_canonical, true)
+                and (
+                  lower(c.path) = any(%s::text[])
+                  or compact_basename(c.path) = any(%s::text[])
+                  or exists (
+                    select 1
+                    from jsonb_array_elements_text(c.symbols) symbol_value
+                    where compact_key_sql(symbol_value) = any(%s::text[])
+                  )
+                  or c.path ilike any(%s::text[])
+                  or exists (
+                    select 1
+                    from jsonb_array_elements_text(c.heading_path) heading_value
+                    where compact_key_sql(heading_value) = any(%s::text[])
+                  )
+                  or c.path ilike %s
+                  or c.symbols::text ilike %s
+                  or c.heading_path::text ilike %s
+                )
+                {where_scope}
+                {content_filter}
+            ) ranked_exact
+          ) fused_exact
+          order by exact_score desc, path asc, start_line asc
           limit %s
         ),
         ranked_chunks as (
           select path, start_line, matched_path, source_anchor, token_count,
                  library, vendor, version, relative_path, heading_path, symbols,
                  content_type, quality_score, content, parent_content,
-                 (max(fts_score) * 2.4) + (max(vector_score) * 2.8) + (max(symbol_score) * 2.0)
+                 (sum(rrf_score) * 900.0)
+                 + (max(fts_score) * 2.4) + (max(vector_score) * 2.8) + (max(exact_score) * 3.0)
                  + (max(quality_score) * 0.15) + max(type_score)
                  + least(max(coalesce(token_count, 0)), 2000) / 20000.0 as score
           from (
@@ -255,7 +283,7 @@ def search_from_postgres(
             union all
             select * from vector_candidates
             union all
-            select * from symbol_candidates
+            select * from exact_candidates
           ) candidates
           group by path, start_line, matched_path, source_anchor, token_count,
                    library, vendor, version, relative_path, heading_path, symbols,
@@ -304,7 +332,7 @@ def search_from_postgres(
         return None
 
 
-def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> str:
+def candidate_select(fts_score: str, vector_score: str, exact_score: str) -> str:
     return f"""
         select
           '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(p.path, c.path) as path,
@@ -314,7 +342,7 @@ def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> st
           c.token_count,
           {fts_score} as fts_score,
           {vector_score} as vector_score,
-          {symbol_score} as symbol_score,
+          {exact_score} as exact_score,
           greatest(coalesce(c.quality_score, 1), 0) as quality_score,
           content_type_score(c.content_type) + content_type_intent_score(c.content_type, %s) as type_score,
           v.name || '/' || l.name as library,
@@ -335,7 +363,19 @@ def candidate_select(fts_score: str, vector_score: str, symbol_score: str) -> st
     """
 
 
-def symbol_score_expr() -> str:
+def fielded_fts_score_expr() -> str:
+    return """
+        greatest(
+          (ts_rank_cd(setweight(to_tsvector('english', coalesce(c.path, '')), 'A'), websearch_to_tsquery('english', %s)) * 8.0) +
+          (ts_rank_cd(setweight(to_tsvector('english', coalesce(c.heading_path::text, '')), 'A'), websearch_to_tsquery('english', %s)) * 6.0) +
+          (ts_rank_cd(setweight(to_tsvector('english', coalesce(c.symbols::text, '')), 'A'), websearch_to_tsquery('english', %s)) * 8.0) +
+          (ts_rank_cd(to_tsvector('english', coalesce(c.content, '')), websearch_to_tsquery('english', %s)) * 1.5),
+          0
+        )
+    """
+
+
+def exact_score_expr() -> str:
     return """
         case
           when lower(c.path) = any(%s::text[]) then 8.0
@@ -345,6 +385,12 @@ def symbol_score_expr() -> str:
             from jsonb_array_elements_text(c.symbols) symbol_value
             where compact_key_sql(symbol_value) = any(%s::text[])
           ) then 6.0
+          when c.path ilike any(%s::text[]) then 5.5
+          when exists (
+            select 1
+            from jsonb_array_elements_text(c.heading_path) heading_value
+            where compact_key_sql(heading_value) = any(%s::text[])
+          ) then 4.5
           else 1.0
         end
     """
@@ -352,12 +398,19 @@ def symbol_score_expr() -> str:
 
 def vector_candidate_cte(where_scope: str, content_filter: str) -> str:
     return f"""
-        {candidate_select("0::float8", "greatest(1 - (c.embedding <=> %s::vector), 0)", "0::float8")}
-        where c.embedding is not null
-          and coalesce(c.dedupe_canonical, true)
-          {where_scope}
-          {content_filter}
-        order by c.embedding <=> %s::vector
+        select *
+        from (
+          select ranked_vector.*,
+                 1.0 / (60 + row_number() over (order by vector_score desc, path asc, start_line asc)) as rrf_score
+          from (
+            {candidate_select("0::float8", "greatest(1 - (c.embedding <=> %s::vector), 0)", "0::float8")}
+            where c.embedding is not null
+              and coalesce(c.dedupe_canonical, true)
+              {where_scope}
+              {content_filter}
+          ) ranked_vector
+        ) fused_vector
+        order by vector_score desc, path asc, start_line asc
         limit %s
     """
 
@@ -366,11 +419,12 @@ def empty_vector_cte() -> str:
     return """
         select null::text as path, null::integer as start_line, null::text as matched_path,
                null::text as source_anchor, null::integer as token_count,
-               0::float8 as fts_score, 0::float8 as vector_score, 0::float8 as symbol_score,
+               0::float8 as fts_score, 0::float8 as vector_score, 0::float8 as exact_score,
                0::float8 as quality_score, 0::float8 as type_score,
                null::text as library, null::text as vendor, null::text as version,
                null::text as relative_path, '[]'::jsonb as heading_path, '[]'::jsonb as symbols,
-               null::text as content_type, null::text as content, null::text as parent_content
+               null::text as content_type, null::text as content, null::text as parent_content,
+               0::float8 as rrf_score
         where false
     """
 
@@ -379,11 +433,11 @@ def vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{value:.8g}" for value in values) + "]"
 
 
-def normalized_tsquery(query: str) -> str:
-    terms = normalize_query(query)
+def normalized_tsquery(query: str | list[str]) -> str:
+    terms = query if isinstance(query, list) else normalize_query(query)
     if terms:
         return " OR ".join(terms)
-    return query.strip() or "documentation"
+    return query.strip() if isinstance(query, str) and query.strip() else "documentation"
 
 
 def like_pattern(values: list[str]) -> str:
@@ -408,7 +462,6 @@ def score_postgres_rows(
     retrieval_mode: str,
     degraded: bool,
 ) -> list[dict[str, Any]]:
-    terms = normalize_query(query)
     scored: list[dict[str, Any]] = []
     for row in rows:
         chunk = {
@@ -419,7 +472,7 @@ def score_postgres_rows(
             "quality_score": row[10],
             "text": row[11],
         }
-        score = float(row[2]) + (local_chunk_score(chunk, terms) / 8.0)
+        score = float(row[2]) + (planned_chunk_score(chunk, query) / 8.0)
         scored.append(
             {
                 "path": row[0],
