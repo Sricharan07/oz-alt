@@ -40,6 +40,27 @@ python3 benchmark-harness/harness.py run \
   --skip-build
 ```
 
+Run against production API data instead of the local checked-in registry:
+
+```bash
+python3 benchmark-harness/harness.py run \
+  --mode retrieval \
+  --oz-bin /tmp/oz-bench-npm/node_modules/.bin/oz \
+  --skip-build \
+  --api-url https://api.tryoz.dev \
+  --app-url https://app.tryoz.dev \
+  --create-prod-user
+```
+
+For non-interactive CI, provide an existing CLI token pair instead:
+
+```bash
+OZ_BENCH_AUTH_TOKEN=... OZ_BENCH_REFRESH_TOKEN=... \
+python3 benchmark-harness/harness.py run \
+  --mode retrieval \
+  --api-url https://api.tryoz.dev
+```
+
 Run with release-quality gates enabled:
 
 ```bash
@@ -122,6 +143,8 @@ This is deliberately filesystem-based. Oz's advantage is path-first retrieval pl
 The retrieval runner reads only the top bounded line window by default. This matches the intended agent workflow: use Oz to find a precise location, inspect that local window, then expand with `rg`, more result windows, or full-file reads only when needed. Use `--read-results N` to intentionally model a broader read strategy.
 
 By default the runner fails only when returned paths are not materialized locally. Use `--strict` for release gates over expected-path hit rate, required-term coverage, and compact search token budget. Those gates are meant to fail loudly when corpus quality regresses; do not loosen them to make a benchmark pass.
+
+When `--api-url` is used, the harness writes CLI auth config only into temporary homes outside `benchmark-harness/runs` and deletes those homes after each case. Run artifacts intentionally never store access or refresh tokens.
 
 ## Judging Rubric
 

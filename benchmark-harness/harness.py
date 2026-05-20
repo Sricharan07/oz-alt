@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.cookiejar
 import json
 import os
 import re
@@ -12,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +55,11 @@ def main() -> int:
     run.add_argument("--min-required-terms", type=float, default=0.8, help="Strict gate for required-term coverage.")
     run.add_argument("--min-materialized", type=float, default=1.0, help="Gate for materialized top-5 paths.")
     run.add_argument("--max-search-tokens", type=float, default=500.0, help="Strict gate for average compact search tokens.")
+    run.add_argument("--api-url", default="", help="Run against an Oz API instead of the local registry.")
+    run.add_argument("--app-url", default="https://app.tryoz.dev", help="App URL used with --create-prod-user.")
+    run.add_argument("--auth-token-env", default="OZ_BENCH_AUTH_TOKEN", help="Environment variable containing a CLI access token.")
+    run.add_argument("--refresh-token-env", default="OZ_BENCH_REFRESH_TOKEN", help="Environment variable containing a CLI refresh token.")
+    run.add_argument("--create-prod-user", action="store_true", help="Create a temporary prod account through signup/device auth.")
     run.add_argument("--out", default="")
 
     summarize = sub.add_parser("summarize", help="Summarize a benchmark run directory.")
@@ -143,11 +151,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
         return 1
 
     oz_bin = resolve_oz_bin(args.oz_bin, skip_build=args.skip_build)
+    api_auth = resolve_api_auth(args)
     if args.build_packs:
         run_cmd(
             [str(oz_bin), "dev", "registry", "build-packs"],
             cwd=ROOT,
-            env=bench_env(Path(tempfile.mkdtemp(prefix="oz-bench-home-")), oz_bin=oz_bin),
+            env=bench_env(Path(tempfile.mkdtemp(prefix="oz-bench-home-")), oz_bin=oz_bin, api_auth=api_auth),
         )
 
     run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -157,7 +166,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case['id']} {case['library']}", file=sys.stderr)
-        case_result = run_case(case, run_dir, oz_bin, args)
+        case_result = run_case(case, run_dir, oz_bin, args, api_auth)
         results.append(case_result)
         write_json(run_dir / "summary.json", aggregate_results(run_id, results))
 
@@ -181,93 +190,130 @@ def resolve_oz_bin(value: str, *, skip_build: bool) -> Path:
     return path
 
 
-def run_case(case: dict[str, Any], run_dir: Path, oz_bin: Path, args: argparse.Namespace) -> dict[str, Any]:
+def resolve_api_auth(args: argparse.Namespace) -> dict[str, str] | None:
+    api_url = str(args.api_url or "").strip().rstrip("/")
+    if not api_url:
+        return None
+    if args.create_prod_user:
+        auth = create_prod_cli_auth(str(args.app_url).strip().rstrip("/"), api_url)
+        return {
+            "api_url": api_url,
+            "access_token": auth["access_token"],
+            "refresh_token": auth["refresh_token"],
+            "email": auth.get("email", ""),
+            "source": "created_prod_user",
+        }
+    access = os.environ.get(args.auth_token_env, "").strip()
+    refresh = os.environ.get(args.refresh_token_env, "").strip()
+    if not access or not refresh:
+        raise SystemExit(
+            f"--api-url requires {args.auth_token_env} and {args.refresh_token_env}, "
+            "or pass --create-prod-user"
+        )
+    return {
+        "api_url": api_url,
+        "access_token": access,
+        "refresh_token": refresh,
+        "email": "",
+        "source": "environment",
+    }
+
+
+def run_case(
+    case: dict[str, Any],
+    run_dir: Path,
+    oz_bin: Path,
+    args: argparse.Namespace,
+    api_auth: dict[str, str] | None,
+) -> dict[str, Any]:
     case_dir = run_dir / "cases" / case["id"]
     workspace = case_dir / "workspace"
-    home = case_dir / "home"
+    home = Path(tempfile.mkdtemp(prefix=f"oz-bench-home-{case['id']}-"))
     case_dir.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
-    home.mkdir(parents=True, exist_ok=True)
-    write_json(case_dir / "case.json", case)
-    (workspace / "README.md").write_text(
-        f"# Benchmark Workspace\n\nCase: {case['id']}\nLibrary: {case['library']}\n",
-        encoding="utf-8",
-    )
+    try:
+        write_json(case_dir / "case.json", case)
+        (workspace / "README.md").write_text(
+            f"# Benchmark Workspace\n\nCase: {case['id']}\nLibrary: {case['library']}\n",
+            encoding="utf-8",
+        )
 
-    env = bench_env(home, oz_bin=oz_bin)
-    run_cmd([str(oz_bin), "init"], cwd=workspace, env=env, timeout=args.command_timeout)
-    pull = run_cmd_capture([str(oz_bin), "pull", case["library"]], cwd=workspace, env=env, timeout=args.command_timeout)
-    write_text(case_dir / "oz_pull.out", pull.stdout)
-    write_text(case_dir / "oz_pull.err", pull.stderr)
+        env = bench_env(home, oz_bin=oz_bin, api_auth=api_auth)
+        run_cmd([str(oz_bin), "init"], cwd=workspace, env=env, timeout=args.command_timeout)
+        pull = run_cmd_capture([str(oz_bin), "pull", case["library"]], cwd=workspace, env=env, timeout=args.command_timeout)
+        write_text(case_dir / "oz_pull.out", pull.stdout)
+        write_text(case_dir / "oz_pull.err", pull.stderr)
 
-    search = run_cmd_capture(
-        [
-            str(oz_bin),
-            "search",
-            case["query"],
-            case["library"],
-            "--compact-json",
-            "--max-results",
-            str(args.max_results),
-        ],
-        cwd=workspace,
-        env=env,
-        timeout=args.command_timeout,
-    )
-    write_text(case_dir / "oz_search.raw", search.stdout)
-    write_text(case_dir / "oz_search.err", search.stderr)
-    search_json = parse_json_or_empty(search.stdout)
-    write_json(case_dir / "oz_search.json", search_json)
+        search = run_cmd_capture(
+            [
+                str(oz_bin),
+                "search",
+                case["query"],
+                case["library"],
+                "--compact-json",
+                "--max-results",
+                str(args.max_results),
+            ],
+            cwd=workspace,
+            env=env,
+            timeout=args.command_timeout,
+        )
+        write_text(case_dir / "oz_search.raw", search.stdout)
+        write_text(case_dir / "oz_search.err", search.stderr)
+        search_json = parse_json_or_empty(search.stdout)
+        write_json(case_dir / "oz_search.json", search_json)
 
-    context = run_cmd_capture(
-        [
-            str(oz_bin),
-            "context",
-            case["query"],
-            case["library"],
-            "--json",
-            "--max-results",
-            "8",
-            "--max-tokens",
-            str(args.context_tokens),
-        ],
-        cwd=workspace,
-        env=env,
-        timeout=args.command_timeout,
-    )
-    write_text(case_dir / "oz_context.raw", context.stdout)
-    write_text(case_dir / "oz_context.err", context.stderr)
-    context_json = parse_json_or_empty(context.stdout)
-    write_json(case_dir / "oz_context.json", context_json)
+        context = run_cmd_capture(
+            [
+                str(oz_bin),
+                "context",
+                case["query"],
+                case["library"],
+                "--json",
+                "--max-results",
+                "8",
+                "--max-tokens",
+                str(args.context_tokens),
+            ],
+            cwd=workspace,
+            env=env,
+            timeout=args.command_timeout,
+        )
+        write_text(case_dir / "oz_context.raw", context.stdout)
+        write_text(case_dir / "oz_context.err", context.stderr)
+        context_json = parse_json_or_empty(context.stdout)
+        write_json(case_dir / "oz_context.json", context_json)
 
-    read_files = read_top_files(
-        workspace,
-        search_json,
-        limit=args.read_results,
-        window_lines=args.window_lines,
-    )
-    write_json(case_dir / "read_files.json", read_files)
-    metrics = score_retrieval(case, workspace, search_json, context_json, read_files)
-    write_json(case_dir / "retrieval_metrics.json", metrics)
+        read_files = read_top_files(
+            workspace,
+            search_json,
+            limit=args.read_results,
+            window_lines=args.window_lines,
+        )
+        write_json(case_dir / "read_files.json", read_files)
+        metrics = score_retrieval(case, workspace, search_json, context_json, read_files)
+        write_json(case_dir / "retrieval_metrics.json", metrics)
 
-    agent = {"ran": False, "ok": None, "answer_exists": False}
-    if args.mode == "agent":
-        agent = run_agent(case, case_dir, workspace, oz_bin, env, args)
+        agent = {"ran": False, "ok": None, "answer_exists": False}
+        if args.mode == "agent":
+            agent = run_agent(case, case_dir, workspace, oz_bin, env, args)
 
-    write_judge_packet(case, case_dir, metrics, read_files, agent)
-    result = {
-        "case_id": case["id"],
-        "library": case["library"],
-        "query": case["query"],
-        "metrics": metrics,
-        "agent": agent,
-        "case_dir": str(case_dir),
-    }
-    write_json(case_dir / "result.json", result)
-    return result
+        write_judge_packet(case, case_dir, metrics, read_files, agent)
+        result = {
+            "case_id": case["id"],
+            "library": case["library"],
+            "query": case["query"],
+            "metrics": metrics,
+            "agent": agent,
+            "case_dir": str(case_dir),
+        }
+        write_json(case_dir / "result.json", result)
+        return result
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
-def bench_env(home: Path, *, oz_bin: Path | None = None) -> dict[str, str]:
+def bench_env(home: Path, *, oz_bin: Path | None = None, api_auth: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["OZ_DISABLE_KEYCHAIN"] = "1"
@@ -275,6 +321,22 @@ def bench_env(home: Path, *, oz_bin: Path | None = None) -> dict[str, str]:
     path_prefix = oz_bin.parent if oz_bin else ROOT / "target" / "debug"
     env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
     env.pop("OZ_API_URL", None)
+    if api_auth:
+        config_dir = home / ".codo"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "telemetry": False,
+                    "api_url": api_auth["api_url"],
+                    "auth_token": api_auth["access_token"],
+                    "refresh_token": api_auth["refresh_token"],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     return env
 
 
@@ -591,6 +653,72 @@ def parse_json_or_empty(text: str) -> dict[str, Any]:
         return json.loads(text)
     except Exception:
         return {"results": [], "parse_error": text[:1000]}
+
+
+def create_prod_cli_auth(app_url: str, api_url: str) -> dict[str, str]:
+    suffix = f"{int(time.time())}-{os.getpid()}"
+    safe_suffix = re.sub(r"[^a-zA-Z0-9]", "", suffix)
+    email = f"benchmark+{safe_suffix}@tryoz.dev"
+    password = f"OzBenchmark!{safe_suffix}9"
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    post_form(opener, f"{app_url}/signup", {"email": email, "password": password, "confirm_password": password})
+    device = post_json(opener, f"{api_url}/auth/device", {"client_name": "benchmark-harness"})
+    account = get_json(opener, f"{api_url}/api/console/account")
+    post_json(
+        opener,
+        f"{api_url}/api/console/device/approve",
+        {
+            "user_code": str(device["user_code"]),
+            "csrf": str(account.get("csrf") or ""),
+        },
+    )
+    token = post_json(opener, f"{api_url}/auth/token", {"device_code": device["device_code"]})
+    refreshed = post_json(opener, f"{api_url}/auth/refresh", {"refresh_token": token["refresh_token"]})
+    return {
+        "email": email,
+        "access_token": str(refreshed["access_token"]),
+        "refresh_token": str(refreshed.get("refresh_token") or token["refresh_token"]),
+    }
+
+
+def post_json(opener: urllib.request.OpenerDirector, url: str, payload: dict[str, object]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with opener.open(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def post_form(opener: urllib.request.OpenerDirector, url: str, payload: dict[str, str]) -> str:
+    request = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(payload).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with opener.open(request, timeout=30) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def get_text(opener: urllib.request.OpenerDirector, url: str) -> str:
+    with opener.open(url, timeout=30) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def get_json(opener: urllib.request.OpenerDirector, url: str) -> dict[str, Any]:
+    with opener.open(url, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def hidden_value(html: str, name: str) -> str:
+    match = re.search(rf'name="{re.escape(name)}"\s+value="([^"]*)"', html)
+    if not match:
+        raise RuntimeError(f"missing hidden form value: {name}")
+    return match.group(1)
 
 
 def run_cmd(cmd: list[str], cwd: Path, env: dict[str, str] | None = None, timeout: int = 300) -> None:
