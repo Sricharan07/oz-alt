@@ -718,10 +718,18 @@ def context_packet(
         if remaining <= 0 or len(code_snippets) >= max_code:
             break
     query_lower = query.lower()
-    setup_only = has_setup_composite and any(term in query_lower for term in ("install", "setup", "initialize", "initialise", "authenticate", "api key", "environment")) and not any(
-        term in query_lower for term in ("custom host", "host endpoint", "verify", "valid", "model", "voice", "synthesize", "speech", "audio")
+    compact_ids = {
+        "oz:composite:setup",
+        "oz:composite:default-client",
+        "oz:composite:custom-host",
+        "oz:composite:version-pin",
+    }
+    first_code_id = str(code_snippets[0].get("codeId") or "") if code_snippets else ""
+    compact_setup = first_code_id in compact_ids and any(
+        term in query_lower
+        for term in ("install", "setup", "initialize", "initialise", "default configuration", "custom host", "host endpoint", "api key", "environment", "requirements", "pin")
     )
-    if setup_only:
+    if compact_setup:
         return {
             "codeSnippets": code_snippets[:1],
             "infoSnippets": [],
@@ -1327,6 +1335,8 @@ def model_names_from_rows(rows: list[dict[str, Any]]) -> set[str]:
     for row in rows[:100]:
         text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
         for name in re.findall(r"\b[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+\b", text.lower()):
+            if "_" in name or any(noise in name for noise in ("voice", "voices", "models", "schema", "request", "response")):
+                continue
             if any(term in name for term in ("model", "lightning", "large", "turbo", "flash", "pro", "ultra")):
                 names.add(name)
         for quoted in re.findall(r"['\"]([A-Za-z][A-Za-z0-9_.-]{2,})['\"]", text):
@@ -1382,8 +1392,11 @@ def synthesis_controls_usage_block(rows: list[dict[str, Any]], query: str, token
         return None
     base = best_code_block(
         rows,
-        lambda block, row, text: "synthesize" in block["code"].lower() and re.search(r"\b\w*Client\s*\(", block["code"]) is not None,
-        lambda block, row, text: packet_row_score(row, query) + controls_block_score(block["code"]) - implementation_fragment_penalty(row, block["code"]),
+        lambda block, row, text: synthesis_control_base_block(block["code"], row, query),
+        lambda block, row, text: packet_row_score(row, query)
+        + controls_block_score(block["code"])
+        + (900 if "wavesclient" in block["code"].lower() or "tts" in block["code"].lower() else 0)
+        - implementation_fragment_penalty(row, block["code"]),
     )
     if not base:
         return None
@@ -1417,6 +1430,18 @@ def synthesis_controls_usage_block(rows: list[dict[str, Any]], query: str, token
         )
     )
     return {"language": focused.get("language") or "python", "code": trim_to_token_budget(code, token_budget)}
+
+
+def synthesis_control_base_block(code: str, row: dict[str, Any], query: str) -> bool:
+    lowered = code.lower()
+    query_lower = query.lower()
+    if "synthesize" not in lowered or re.search(r"\b\w*Client\s*\(", code) is None:
+        return False
+    if "agent" not in query_lower and any(term in lowered for term in ("atomsclient", "create_agent", "new_agent")):
+        return False
+    if text_to_speech_query(query_lower) and not any(term in lowered + " " + source_id(row).lower() for term in ("tts", "speech", "audio", "waves", "synthesize")):
+        return False
+    return True
 
 
 def synthesis_control_params(rows: list[dict[str, Any]]) -> list[str]:
