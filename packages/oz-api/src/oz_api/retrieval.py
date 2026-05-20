@@ -686,7 +686,7 @@ def meaningful_query_terms(lowered_query: str) -> set[str]:
     return terms
 
 
-FENCE_RE = re.compile(r"(?ms)^\s*(`{3,}|~{3,})([A-Za-z0-9_+.#-]*)\n(?P<code>.*?)(?:^\s*\1\s*$)")
+FENCE_RE = re.compile(r"(?ms)^\s*(`{3,}|~{3,})[ \t]*([^\n`]*)\n(?P<code>.*?)(?:^\s*\1\s*$)")
 
 
 def context_packet(
@@ -850,12 +850,18 @@ def model_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
     list_block = best_code_block(
         rows,
         lambda block, row, text: "get_models" in block["code"].lower(),
-        lambda block, row, text: packet_row_score(row, query) + model_block_score(block["code"], text) - implementation_fragment_penalty(row, block["code"]),
+        lambda block, row, text: packet_row_score(row, query)
+        + model_block_score(block["code"], text)
+        - implementation_fragment_penalty(row, block["code"])
+        - schema_fragment_penalty(row, block),
     )
     usage_block = best_code_block(
         rows,
         lambda block, row, text: "model" in block["code"].lower() and any(term in block["code"].lower() for term in ("synthesize", "client", "tts")),
-        lambda block, row, text: packet_row_score(row, query) + model_block_score(block["code"], text) - implementation_fragment_penalty(row, block["code"]),
+        lambda block, row, text: packet_row_score(row, query)
+        + model_block_score(block["code"], text)
+        - implementation_fragment_penalty(row, block["code"])
+        - schema_fragment_penalty(row, block),
     )
     info = model_info_snippet(rows)
     if not list_block and not usage_block and not info:
@@ -886,12 +892,19 @@ def voice_selection_card(rows: list[dict[str, Any]], query: str, budget: int) ->
     list_block = best_code_block(
         rows,
         lambda block, row, text: any(term in block["code"].lower() for term in ("get_voices", "list_voices", "voices(")),
-        lambda block, row, text: packet_row_score(row, query) + (900 if "get_voices" in block["code"].lower() else 0) - implementation_fragment_penalty(row, block["code"]),
+        lambda block, row, text: packet_row_score(row, query)
+        + (1600 if re.search(r"\bclient\.get_voices\s*\(", block["code"].lower()) else 0)
+        + (900 if "get_voices" in block["code"].lower() else 0)
+        - implementation_fragment_penalty(row, block["code"])
+        - schema_fragment_penalty(row, block),
     )
     usage_block = best_code_block(
         rows,
         lambda block, row, text: any(term in block["code"].lower() for term in ("voice_id", "voiceid")) and any(term in block["code"].lower() for term in ("synthesize", "request", "payload", "client")),
-        lambda block, row, text: packet_row_score(row, query) + (500 if "synthesize" in block["code"].lower() else 0) - implementation_fragment_penalty(row, block["code"]),
+        lambda block, row, text: packet_row_score(row, query)
+        + (500 if "synthesize" in block["code"].lower() else 0)
+        - implementation_fragment_penalty(row, block["code"])
+        - schema_fragment_penalty(row, block),
     )
     if not list_block and not usage_block:
         return None
@@ -936,7 +949,9 @@ def error_recovery_card(rows: list[dict[str, Any]], query: str, budget: int) -> 
     block = best_code_block(
         rows,
         lambda block, row, text: error_handling_block(block["code"], text, query),
-        lambda block, row, text: packet_row_score(row, query) + error_block_score(block["code"], text),
+        lambda block, row, text: packet_row_score(row, query)
+        + error_block_score(block["code"], text)
+        - query_domain_mismatch_penalty(row, query),
     )
     if block:
         code = focused_code_for_query(block["code"], query, token_budget=min(max(budget, 1), 620))
@@ -951,7 +966,7 @@ def error_recovery_card(rows: list[dict[str, Any]], query: str, budget: int) -> 
     generation = best_code_block(
         rows,
         lambda block, row, text: any(term in block["code"].lower() for term in ("synthesize", "generate", "completion", "request")),
-        lambda block, row, text: packet_row_score(row, query),
+        lambda block, row, text: packet_row_score(row, query) - query_domain_mismatch_penalty(row, query),
     )
     if not generation:
         return None
@@ -1367,6 +1382,62 @@ def implementation_fragment_penalty(row: dict[str, Any], code: str) -> float:
     return max(0.0, penalty)
 
 
+def schema_fragment_penalty(row: dict[str, Any], block: dict[str, str]) -> float:
+    path = source_id(row).lower()
+    language = canonical_language(str(block.get("language") or ""))
+    code = (block.get("code") or "").lower()
+    if language not in {"yaml", "json"} and "openapi:" not in code and "components:" not in code:
+        return 0.0
+    if "schema" in path or "openapi" in path or "api-reference" in path:
+        return 1400.0
+    return 800.0
+
+
+DOMAIN_STOP_TERMS = {
+    "audio",
+    "available",
+    "choose",
+    "client",
+    "detect",
+    "failed",
+    "fetch",
+    "generation",
+    "handle",
+    "latency",
+    "model",
+    "models",
+    "quality",
+    "recover",
+    "request",
+    "requests",
+    "response",
+    "speech",
+    "synthesis",
+    "tradeoffs",
+    "using",
+}
+
+
+def query_domain_mismatch_penalty(row: dict[str, Any], query: str) -> float:
+    terms = {
+        term
+        for term in meaningful_query_terms(query.lower())
+        if term not in DOMAIN_STOP_TERMS and len(term) >= 5
+    }
+    if not terms:
+        return 0.0
+    text = " ".join(
+        [
+            str(row.get("title") or ""),
+            str(row.get("matched_path") or row.get("path") or ""),
+            str(row.get("library") or ""),
+            str(row.get("_matched_text") or row.get("snippet") or "")[:1500],
+        ]
+    ).lower()
+    missing = [term for term in terms if term not in text]
+    return min(1800.0, 650.0 * len(missing))
+
+
 def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, str] | None:
     for row in rows:
         text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "").strip()
@@ -1604,9 +1675,10 @@ def extract_code_blocks(text: str) -> list[dict[str, str]]:
         code = match.group("code").strip()
         if not code:
             continue
+        language = (match.group(2) or "").strip().split()
         blocks.append(
             {
-                "language": (match.group(2) or "").strip(),
+                "language": language[0] if language else "",
                 "code": code,
             }
         )
