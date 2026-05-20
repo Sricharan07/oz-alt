@@ -580,7 +580,7 @@ def pack_eval_report(manifest: dict[str, Any]) -> dict[str, Any]:
     metrics = {
         "blob_count": len(paths),
         "has_index": "INDEX.md" in paths,
-        "has_meta": "_meta.json" in paths,
+        "has_manifest": ".oz/manifest.json" in paths,
         "has_signature": has_signature,
         "requires_signature": require_signature,
         "has_path_traversal": any(path.startswith("/") or ".." in Path(path).parts for path in paths),
@@ -588,7 +588,7 @@ def pack_eval_report(manifest: dict[str, Any]) -> dict[str, Any]:
     passed = (
         metrics["blob_count"] > 0
         and bool(metrics["has_index"])
-        and bool(metrics["has_meta"])
+        and bool(metrics["has_manifest"])
         and not bool(metrics["has_path_traversal"])
         and (not require_signature or has_signature)
     )

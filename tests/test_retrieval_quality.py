@@ -18,6 +18,7 @@ from oz_api import admin_ops
 from oz_api.crawler_jobs import (
     content_requirement_hit,
     embedding_result_is_terminal,
+    pack_eval_report,
     path_junk_hit,
     search_eval_report,
     terminal_embedding_error,
@@ -421,16 +422,21 @@ class RetrievalQualityTests(unittest.TestCase):
             root = Path(tmp)
             (root / "guides").mkdir()
             (root / ".oz").mkdir()
+            (root / "INDEX.md").write_text("# Index\n", encoding="utf-8")
             (root / "guides" / "doc.md").write_text("Doc", encoding="utf-8")
             (root / ".oz" / "manifest.json").write_text("{}", encoding="utf-8")
             (root / "_chunks.jsonl").write_text("internal", encoding="utf-8")
             body, manifest = build_pack_bytes(root, "v", "l", "1")
 
         paths = {row["path"] for row in manifest["blobs"]}
+        self.assertIn("INDEX.md", paths)
         self.assertIn("guides/doc.md", paths)
         self.assertIn(".oz/manifest.json", paths)
         self.assertNotIn("_chunks.jsonl", paths)
         self.assertNotIn(b"_chunks.jsonl", body)
+        report = pack_eval_report(manifest)
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["metrics"]["has_manifest"])
 
     def test_validation_blocks_long_anchors_and_docs_authoring_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
