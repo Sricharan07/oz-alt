@@ -127,6 +127,7 @@ def context(
     candidate_rows: list[dict[str, Any]]
     if snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
         candidate_rows = merge_context_candidates(snippet_rows or [], search_rows or [])
+        candidate_rows = score_context_candidates_for_packet(candidate_rows, query)
         rows = select_context_snippets(
             candidate_rows,
             query,
@@ -229,6 +230,49 @@ def context_candidate_key(row: dict[str, Any]) -> str:
     title = str(row.get("title") or "")
     role = str(row.get("role") or row.get("content_type") or "")
     return f"{matched_path}:{line}:{role}:{title}"
+
+
+def score_context_candidates_for_packet(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    return [{**row, "score": float(row.get("score") or 0) + context_packet_candidate_boost(row, query, rows)} for row in rows]
+
+
+def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> float:
+    query_lower = query.lower()
+    setup_query = any(term in query_lower for term in ("install", "initialize", "authenticate", "api key", "environment", "credential", "setup", "quickstart"))
+    if not setup_query:
+        return 0.0
+    text = str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")
+    text_lower = text.lower()
+    path = str(row.get("matched_path") or row.get("relative_path") or row.get("path") or "").lower()
+    title = str(row.get("title") or "").lower()
+    role = str(row.get("role") or row.get("content_type") or "")
+    code_blocks = extract_code_blocks(text)
+    code_lower = "\n".join(block["code"] for block in code_blocks).lower()
+    target_text = code_lower or text_lower
+    score = 0.0
+    if "readme" in path or "quickstart" in path or "getting-started" in path:
+        score += 340.0
+    if any(term in title for term in ("getting started", "quickstart", "installation", "api key", "creating your first", "first ")):
+        score += 260.0
+    if role in {"code_example", "workflow", "cli"}:
+        score += 160.0
+    if re.search(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", text) or "api key" in text_lower or "access_token" in text_lower:
+        score += 220.0
+    if re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", target_text) or re.search(r"\b\w*Client\s*\(", target_text):
+        score += 180.0
+    scope_terms = library_scope_terms(rows, query)
+    own_hits = sum(1 for term in scope_terms if term in target_text)
+    if own_hits:
+        score += 420.0 + own_hits * 70.0
+    provider_hits = {term for term in PROVIDER_CLIENT_TERMS if term in f"{code_lower} {path} {title}"}
+    unrequested_provider_hits = {term for term in provider_hits if term not in query_lower}
+    if unrequested_provider_hits and not own_hits:
+        score -= 1450.0
+    elif unrequested_provider_hits:
+        score -= 450.0
+    if "basellmclient" in code_lower or "standalone openai client" in text_lower:
+        score -= 500.0
+    return score
 
 
 FENCE_RE = re.compile(r"(?ms)^\s*(`{3,}|~{3,})([A-Za-z0-9_+.#-]*)\n(?P<code>.*?)(?:^\s*\1\s*$)")
