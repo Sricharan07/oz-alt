@@ -1,0 +1,208 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Nodes
+
+> The fundamental building blocks of your agent's logic.
+
+A **Node** is the basic unit of computation in the Atoms graph. Every "agent" or functional component you build is ultimately a Node.
+
+## What is a Node?
+
+In the conceptual graph, a Node is a vertex that performs three key actions:
+
+* **Receive**: Accept incoming events like user audio, text, or system triggers.
+* **Process**: Execute custom Python code, business logic, or AI inference.
+* **Send**: Emit new events to pass control to the rest of the graph.
+
+## Abstracted Nodes
+
+To help you get started quickly, we have abstracted three common node patterns for you. You can use these out of the box or build your own custom nodes from scratch.
+
+### 1. The Base Node (`Node`)
+
+The `Node` class is the raw primitive. It gives you full control but assumes nothing. It is perfect for deterministic logic, API calls, or routing decisions.
+
+**Key Features:**
+
+* **Raw Event Access**: You get the raw event and decide exactly what to do with it.
+* **No Overhead**: No LLM context or streaming logic unless you build it.
+
+**Use Case**: Router, API Fetcher, Database Logger, Analytics Tracker.
+
+Override `process_event()` to handle incoming events.
+
+```python
+from smallestai.atoms.crew.nodes import CrewNode
+
+class RouterNode(CrewNode):
+    async def process_event(self, event):
+        # Deterministic logic
+        if "sales" in event.content:
+            # Broadcast to children (routing logic handles filtering)
+            await self.send_event(event)
+        else:
+            await self.send_event(event)
+```
+
+### 2. The Output Agent (`OutputCrewNode`)
+
+This is the most common node type. It is a full-featured conversational agent designed to interact with Large Language Models (LLMs).
+
+**Key Features:**
+
+* **Auto-Interruption**: Automatically handles user interruptions during playback only when the user is speaking.
+* **Streaming**: Manages the complexity of streaming LLM tokens to the user in real-time.
+* **Context Management**: Maintains conversation history automatically.
+
+**Use Case**: The "brain" of your agent—Sales Agent, Support Agent, Triage Agent.
+
+Implement `generate_response()` as an async generator that yields text chunks.
+
+```python
+from smallestai.atoms.crew.nodes import OutputCrewNode
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+class MyAgent(OutputCrewNode):
+    def __init__(self):
+        super().__init__(name="my_agent")
+        # Initialize your own LLM client
+        self.llm = OpenAIClient(model="gpt-4o-mini")
+
+    async def generate_response(self):
+        # 1. Call your LLM
+        # 2. Yield text chunks (the framework handles buffering and events)
+        response = await self.llm.chat(
+            messages=self.context.messages,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.content:
+                yield chunk.content
+```
+
+### 3. The Background Agent (`BackgroundCrewNode`)
+
+A silent observer node that processes events without producing audio output.
+
+**Key Features:**
+
+* **Silent Processing**: Receives all events but doesn't speak.
+* **Parallel Execution**: Runs alongside your main agent.
+* **State Sharing**: Main agent can query its state.
+
+**Use Case**: Sentiment analysis, call quality monitoring, analytics, webhooks.
+
+```python
+from smallestai.atoms.crew.nodes import BackgroundCrewNode
+from smallestai.atoms.crew.events import SDKEvent, SDKAgentTranscriptUpdateEvent
+
+class SentimentAnalyzer(BackgroundCrewNode):
+    def __init__(self):
+        super().__init__(name="sentiment-analyzer")
+        self.current_sentiment = "neutral"
+
+    async def process_event(self, event: SDKEvent):
+        if isinstance(event, SDKAgentTranscriptUpdateEvent):
+            if event.role == "user":
+                self.current_sentiment = await self._analyze(event.content)
+```
+
+See [Background Agent](/atoms/developer-guide/build/agents/overview) for a complete guide.
+
+## How to Write a Custom Node
+
+Create a new class that inherits from `Node` (or `OutputCrewNode`).
+
+```python
+class LoggerNode(CrewNode):
+```
+
+Implement the `process_event` async method. This is your logic handler.
+
+```python
+async def process_event(self, event):
+    print(f"LOG: Received event type {event.type}")
+```
+
+**Crucial:** You must manually send events if you want the flow to continue.
+
+```python
+await self.send_event(event)
+```
+
+**Manual Event Propagation**
+In a custom `Node`, the chain of events stops with you unless you explicitly move it forward. You **MUST** call `await self.send_event(...)` if you want the event to continue causing effects in the graph.
+
+## Custom Node Examples
+
+```python Logger
+"""Logs every event for debugging."""
+from loguru import logger
+from smallestai.atoms.crew.nodes import CrewNode
+
+class LoggerNode(CrewNode):
+    async def process_event(self, event):
+        # Log the event
+        logger.info(f"[{event.type}] {event}")
+
+        # Pass it on
+        await self.send_event(event)
+```
+
+```python Filter
+"""Only lets specific events pass through."""
+class FilterNode(CrewNode):
+    def __init__(self, allowed_types):
+        super().__init__(name="filter")
+        self.allowed_types = allowed_types
+
+    async def process_event(self, event):
+        # Only send if allowed
+        if event.type in self.allowed_types:
+            await self.send_event(event)
+```
+
+```python Counter
+"""Counts events (e.g., conversation turns)."""
+class TurnCounter(CrewNode):
+    def __init__(self):
+        super().__init__(name="counter")
+        self.count = 0
+
+    async def process_event(self, event):
+        self.count += 1
+        await self.send_event(event)
+```
+
+## Best Practices
+
+Use clear, unique names for debugging. This name shows up in your logs.
+
+```python
+# Good
+super().__init__(name="sales-router")
+
+# Bad
+super().__init__(name="node1")
+```
+
+One node, one responsibility. If you need to filter AND log AND route, chain three small nodes together instead of building one complex node. This makes testing much easier.
+
+Unless you are intentionally building a filter that drops events, always remember to call `await self.send_event(event)` at the end of your logic.
+
+Don't let exceptions break the event chain.
+
+```python
+async def process_event(self, event):
+    try:
+        await self.risky_operation()
+    except Exception as e:
+        logger.error(f"Failed: {e}")
+
+    # Still propagate so the call continues
+    await self.send_event(event)
+```

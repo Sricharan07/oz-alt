@@ -191,6 +191,7 @@ def write_source_documents(target: Path, pages: list[NormalizedPage]) -> None:
                 "title": page.title,
                 "source_priority": page.source_priority,
                 "discovered_from": page.discovered_from,
+                "metadata_json": page.source_metadata or {},
             }
         )
     (target / "_sources.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
@@ -220,6 +221,7 @@ def write_user_manifest(
                 "source_url": page.source_url,
                 "canonical_url": page.canonical_url or page.source_url,
                 "source_kind": page.source_kind,
+                "metadata_json": page.source_metadata or {},
             }
             for page in pages
         ],
@@ -239,14 +241,24 @@ def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[Normalize
             markdown=clean_markdown(artifact.markdown),
             source_url=artifact.source_url,
             path=artifact.path,
+            content_type=artifact_content_type(artifact),
             source_kind=artifact.source_kind,
             canonical_url=artifact.canonical_url or artifact.source_url,
             source_priority=artifact.source_priority,
             discovered_from=artifact.discovered_from,
+            source_metadata=artifact.metadata or {},
         )
         for artifact in artifacts
         if artifact.markdown.strip()
     ]
+
+
+def artifact_content_type(artifact: SourceArtifact) -> str:
+    if artifact.source_kind in {"openapi", "asyncapi", "type_defs", "source_code"}:
+        return "api_reference"
+    if artifact.source_kind in {"github"} and "/examples/" in f"/{artifact.path.lower()}":
+        return "code_example"
+    return "prose"
 
 
 def crawl_pages(
@@ -607,7 +619,7 @@ def prepare_pages(
     assigned_pages, version_rejections = filter_current_version(assign_page_paths(unique_pages), target_version=version)
     rejected.extend(version_rejections)
     for page in assigned_pages:
-        if profile is not None and not language_allowed(page.markdown, profile.target_language):
+        if profile is not None and should_apply_language_filter(page) and not language_allowed(page.markdown, profile.target_language):
             rejected.append(
                 {
                     "title": page.title,
@@ -631,6 +643,27 @@ def prepare_pages(
             )
         )
     return accepted, rejected
+
+
+def should_apply_language_filter(page: NormalizedPage) -> bool:
+    """Only natural-language pages need language filtering.
+
+    Structured API/source artifacts are intentionally dense with identifiers,
+    generated model names, signatures, and code. General language detection
+    routinely misclassifies those as non-English, which drops exactly the
+    material coding agents need most.
+    """
+    source_kind = (page.source_kind or "").lower()
+    if source_kind in {"source_code", "type_defs", "openapi", "asyncapi"}:
+        return False
+    metadata = page.source_metadata or {}
+    source_type = str(metadata.get("source_type") or metadata.get("source_kind") or "").lower()
+    if source_type in {"source_code", "type_defs", "openapi", "asyncapi"}:
+        return False
+    content_type = (page.content_type or "").lower()
+    if content_type in {"code_example", "api_reference", "config", "cli"} and "```" in page.markdown:
+        return False
+    return True
 
 
 def dedupe_pages_by_content(pages: list[NormalizedPage]) -> tuple[list[NormalizedPage], list[dict[str, Any]]]:

@@ -1,0 +1,9 @@
+{
+  "name": "context7",
+  "kind": "context7_api",
+  "url": "https://context7.com/api/v2/context",
+  "api_key_env": "CONTEXT7_API_KEY",
+  "library_id_template": "/{library}",
+  "response_type": "json",
+  "fast": "false"
+}

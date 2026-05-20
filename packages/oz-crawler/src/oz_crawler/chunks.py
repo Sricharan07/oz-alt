@@ -69,6 +69,7 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                     "source_document_key": source_document_key(page.canonical_url or page.source_url or page.path or page.title),
                     "source_priority": page.source_priority,
                     "discovered_from": page.discovered_from,
+                    "metadata_json": page.source_metadata or {},
                     "token_count": token_count(chunk.text),
                     "text": chunk.text,
                 }

@@ -47,6 +47,7 @@ PUBLIC_PATHS = {
     "/auth/token",
     "/auth/device/token",
     "/auth/refresh",
+    "/context",
 }
 
 HTML_AUTH_PATHS = {
@@ -135,7 +136,7 @@ def request_rate_limit_allowed(request: Request) -> bool:
     identity = principal.user_id if principal is not None else client_ip(request)
     if path.startswith("/admin"):
         return rate_limit_allowed(f"admin:{path}", identity, limit=60, window_seconds=60) or not production_env()
-    if path in {"/suggest", "/search"}:
+    if path in {"/suggest", "/search", "/context"}:
         return rate_limit_allowed(f"api:{path}", identity, limit=120, window_seconds=60) or not production_env()
     if path.startswith("/auth/") or path in {"/login", "/signup", "/invite", "/reset-password"}:
         return rate_limit_allowed(f"auth:{path}", identity, limit=30, window_seconds=60) or not production_env()

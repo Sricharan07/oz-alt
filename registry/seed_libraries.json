@@ -13,5 +13,8 @@
   {"vendor": "honojs", "library": "hono", "version": "latest", "source_url": "https://hono.dev/docs/"},
   {"vendor": "vercel", "library": "sdk", "version": "latest", "source_url": "https://vercel.com/docs/rest-api/deployments/create-a-new-deployment"},
   {"vendor": "openai", "library": "openai-node", "version": "latest", "source_url": "https://github.com/openai/openai-node"},
-  {"vendor": "anthropics", "library": "anthropic-sdk-typescript", "version": "latest", "source_url": "https://github.com/anthropics/anthropic-sdk-typescript"}
+  {"vendor": "anthropics", "library": "anthropic-sdk-typescript", "version": "latest", "source_url": "https://github.com/anthropics/anthropic-sdk-typescript"},
+  {"vendor": "smallest-ai", "library": "atoms", "version": "latest", "source_url": "https://docs.smallest.ai/atoms/atoms-platform/get-started/quick-start", "description": "Smallest AI Atoms voice-agent platform documentation."},
+  {"vendor": "smallest-ai", "library": "waves", "version": "v4.0.0", "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/streaming", "description": "Smallest AI Waves speech platform documentation for Lightning TTS and Pulse STT."},
+  {"vendor": "smallest-ai", "library": "python-sdk", "version": "latest", "source_url": "https://github.com/smallest-inc/smallest-python-sdk", "description": "Official Smallest AI Python SDK documentation and examples."}
 ]

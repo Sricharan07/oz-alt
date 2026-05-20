@@ -8,7 +8,7 @@ from oz_api.retrieval_cache import get_cached_results, put_cached_results
 from oz_api.retrieval_common import dedupe_search_results, latest_entry, unique_libraries_to_pull
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_experiments import rerank_enabled, retrieval_variant
-from oz_api.retrieval_local import search_from_fixtures, suggest_from_catalog
+from oz_api.retrieval_local import context_snippets_from_fixtures, search_from_fixtures, suggest_from_catalog
 from oz_api.retrieval_postgres import (
     context_snippets_from_postgres,
     postgres_connection,
@@ -103,29 +103,46 @@ def context(
     content_types: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_types = normalize_content_types(content_types)
+    candidate_pool = max(max_results * 4, 24)
     snippet_rows = context_snippets_from_postgres(
         ctx,
         query,
         library_scope,
-        max(max_results * 4, 24),
+        candidate_pool,
         fingerprint,
         content_types=normalized_types,
     )
-    if snippet_rows:
-        rows = select_context_snippets(snippet_rows, query, max_results=max_results, max_tokens=max_tokens)
+    search_rows = search(
+        ctx,
+        query,
+        library_scope=library_scope,
+        max_results=candidate_pool,
+        fingerprint=fingerprint,
+        content_types=normalized_types,
+        keep_private=True,
+    )
+    search_rows_are_fixture_fallback = bool(search_rows) and all(
+        str(row.get("retrieval_mode") or "") == "fixture_fallback" for row in search_rows
+    )
+    if snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
+        rows = select_context_snippets(
+            merge_context_candidates(snippet_rows or [], search_rows or []),
+            query,
+            max_results=max(max_results * 3, 12),
+            max_tokens=max(max_tokens * 2, max_tokens),
+        )
     else:
-        rows = search(
-            ctx,
+        rows = context_snippets_from_fixtures(
+            ctx.storage,
             query,
             library_scope=library_scope,
-            max_results=max_results,
-            fingerprint=fingerprint,
+            max_results=max(max_results * 3, 12),
+            max_tokens=max(max_tokens * 2, max_tokens),
             content_types=normalized_types,
-            keep_private=True,
         )
     snippets: list[dict[str, Any]] = []
     remaining = max(max_tokens, 1)
-    retrieval_mode = first_retrieval_mode(rows)
+    retrieval_mode = context_retrieval_mode(rows)
     degraded = any(bool(row.get("degraded")) for row in rows)
     for row in rows:
         if remaining <= 0:
@@ -150,6 +167,7 @@ def context(
             "applies_to": bounded_list(row.get("applies_to") or [], 120),
             "entities": bounded_list(row.get("entities") or [], 120),
             "task_tags": bounded_list(row.get("task_tags") or [], 120),
+            "source_metadata": bounded_metadata(row.get("metadata_json") or {}),
             "heading_path": bounded_list(row.get("heading_path") or [], 160),
             "symbols": row.get("symbols") or [],
             "retrieval_mode": row.get("retrieval_mode", retrieval_mode),
@@ -173,11 +191,391 @@ def context(
                 "snippet": snippet,
             }
         )
+    packet = context_packet(snippets, query=query, max_tokens=max_tokens, max_results=max_results)
     return {
+        **packet,
         "results": snippets,
         "retrieval_mode": retrieval_mode,
         "degraded": degraded,
     }
+
+
+def merge_context_candidates(snippet_rows: list[dict[str, Any]], search_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in [*snippet_rows, *search_rows]:
+        key = context_candidate_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
+def context_candidate_key(row: dict[str, Any]) -> str:
+    matched_path = str(row.get("matched_path") or row.get("relative_path") or row.get("path") or "")
+    line = int(row.get("line") or row.get("start_line") or 1)
+    title = str(row.get("title") or "")
+    role = str(row.get("role") or row.get("content_type") or "")
+    return f"{matched_path}:{line}:{role}:{title}"
+
+
+FENCE_RE = re.compile(r"(?ms)^\s*(`{3,}|~{3,})([A-Za-z0-9_+.#-]*)\n(?P<code>.*?)(?:^\s*\1\s*$)")
+
+
+def context_packet(
+    rows: list[dict[str, Any]],
+    *,
+    query: str,
+    max_tokens: int,
+    max_results: int,
+) -> dict[str, Any]:
+    code_snippets: list[dict[str, Any]] = []
+    info_snippets: list[dict[str, Any]] = []
+    remaining = max(max_tokens, 1)
+    seen_code: set[str] = set()
+    seen_info: set[str] = set()
+    max_code = max(1, min(max_results, 3 if max_results >= 5 else max_results))
+    max_info = max(0, max_results - max_code)
+    ordered = sorted(rows, key=lambda row: packet_row_score(row, query), reverse=True)
+    has_setup_composite = False
+    for card in composite_code_cards(ordered, query, remaining):
+        key = card_key(card)
+        if not key or key in seen_code:
+            continue
+        seen_code.add(key)
+        has_setup_composite = has_setup_composite or card.get("codeId") == "oz:composite:setup"
+        remaining -= int(card.get("codeTokens") or 0)
+        code_snippets.append(card)
+        if remaining <= 0 or len(code_snippets) >= max_code:
+            break
+    for row in ordered:
+        if remaining <= 0:
+            break
+        text = str(row.get("snippet") or "").strip()
+        if not text:
+            continue
+        title_lower = str(row.get("title") or "").lower()
+        if has_setup_composite and any(term in title_lower for term in ("installation", "dependencies")):
+            continue
+        code_blocks = extract_code_blocks(text)
+        if code_blocks:
+            card = code_snippet_card(row, text, code_blocks, remaining)
+            key = card_key(card)
+            if key and key not in seen_code and len(code_snippets) < max_code:
+                seen_code.add(key)
+                remaining -= int(card.get("codeTokens") or 0)
+                code_snippets.append(card)
+                if len(code_snippets) >= max_code:
+                    continue
+        info = info_snippet_card(row, text, remaining)
+        key = card_key(info)
+        if key and key not in seen_info and info.get("content") and len(info_snippets) < max_info:
+            seen_info.add(key)
+            remaining -= int(info.get("contentTokens") or 0)
+            info_snippets.append(info)
+        if len(code_snippets) + len(info_snippets) >= max_results:
+            break
+    return {
+        "codeSnippets": code_snippets[:max_code],
+        "infoSnippets": info_snippets[:max_info],
+    }
+
+
+def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
+    query_lower = query.lower()
+    output: list[dict[str, Any]] = []
+    if any(term in query_lower for term in ("install", "setup", "authenticate", "api key", "environment", "credential", "quickstart")):
+        card = setup_composite_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("custom host", "api host", "host endpoint", "endpoint", "base url", "base_url", "host")):
+        card = host_composite_card(rows, budget)
+        if card:
+            output.insert(0, card)
+    return output
+
+
+def setup_composite_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    install = first_code_block(rows, lambda block, row, text: install_command(block["code"]))
+    env_vars = env_var_names(rows, query=query)
+    init = first_code_block(
+        rows,
+        lambda block, row, text: (
+            bool(re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", block["code"]))
+            or bool(re.search(r"\b\w*Client\s*\(", block["code"]))
+        )
+        and not generated_context_path(str(row.get("matched_path") or row.get("path") or "").lower()),
+    )
+    if not install and not env_vars and not init:
+        return None
+    code_list: list[dict[str, str]] = []
+    if install:
+        code_list.append({"language": install.get("language") or "bash", "code": trim_to_token_budget(install["code"], 160)})
+    if env_vars:
+        exports = "\n".join(f'export {name}="<your-{name.lower().replace("_", "-")}>"' for name in env_vars[:3])
+        code_list.append({"language": "bash", "code": exports})
+    if init:
+        code_list.append({"language": init.get("language") or "python", "code": trim_to_token_budget(init["code"], 700)})
+    content = "\n\n".join(item["code"] for item in code_list)
+    tokens = approximate_tokens(content)
+    if tokens <= 0 or tokens > budget + 120:
+        code_list = bounded_code_list(code_list, budget)
+        content = "\n\n".join(item["code"] for item in code_list)
+        tokens = approximate_tokens(content)
+    return {
+        "codeTitle": "Install, authenticate, and initialize",
+        "codeDescription": "A compact setup path assembled from the highest-ranked official setup, credential, and client-initialization snippets.",
+        "codeId": "oz:composite:setup",
+        "codeLanguage": code_list[0].get("language") if code_list else "",
+        "codeTokens": tokens,
+        "pageTitle": "Setup",
+        "codeList": code_list,
+        "source": composite_sources([install, init], rows),
+    }
+
+
+def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, Any] | None:
+    config = first_code_block(
+        rows,
+        lambda block, row, text: (
+            ("configuration" in block["code"].lower() and "host" in block["code"].lower())
+            or bool(re.search(r"\bhost\s*=", block["code"]))
+        ),
+    )
+    client = first_code_block(
+        rows,
+        lambda block, row, text: "client(config" in block["code"].lower()
+        or "client(configuration" in block["code"].lower()
+        or "configuration(" in block["code"].lower(),
+    )
+    if not config and not client:
+        return None
+    code_list: list[dict[str, str]] = []
+    for block in (config, client):
+        if block and block["code"] not in {item["code"] for item in code_list}:
+            code_list.append({"language": block.get("language") or "python", "code": trim_to_token_budget(block["code"], 900)})
+    content = "\n\n".join(item["code"] for item in code_list)
+    tokens = approximate_tokens(content)
+    if tokens <= 0 or tokens > budget + 120:
+        code_list = bounded_code_list(code_list, budget)
+        content = "\n\n".join(item["code"] for item in code_list)
+        tokens = approximate_tokens(content)
+    return {
+        "codeTitle": "Configure a custom API host",
+        "codeDescription": "Shows the source-backed configuration host override and the adjacent client-configuration pattern when available.",
+        "codeId": "oz:composite:custom-host",
+        "codeLanguage": code_list[0].get("language") if code_list else "",
+        "codeTokens": tokens,
+        "pageTitle": "Configuration",
+        "codeList": code_list,
+        "source": composite_sources([config, client], rows),
+    }
+
+
+def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, str] | None:
+    for row in rows:
+        text = str(row.get("snippet") or "").strip()
+        if not text:
+            continue
+        for block in extract_code_blocks(text):
+            if predicate(block, row, text):
+                return {**block, "source": source_id(row)}
+    return None
+
+
+def install_command(code: str) -> bool:
+    lowered = code.lower()
+    return "pip install" in lowered or "npm install" in lowered or "pnpm add" in lowered or "yarn add" in lowered
+
+
+def env_var_names(rows: list[dict[str, Any]], query: str = "") -> list[str]:
+    scores: dict[str, int] = {}
+    query_terms = {term for term in re.findall(r"[a-z][a-z0-9]+", query.lower()) if len(term) >= 4}
+    for row in rows:
+        text = str(row.get("snippet") or "")
+        for name in re.findall(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", text):
+            lowered = name.lower()
+            score = scores.get(name, 0) + 1
+            if query_terms and any(term in lowered for term in query_terms):
+                score += 100
+            if name in {"API_KEY", "TOKEN", "SECRET", "KEY", "BEARER_TOKEN"}:
+                score -= 20
+            if query_terms and not any(term in lowered for term in query_terms) and "_" in name:
+                score -= 30
+            scores[name] = score
+    ordered = [name for name, _score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))]
+    query_matched = [name for name in ordered if query_terms and any(term in name.lower() for term in query_terms)]
+    return query_matched or ordered
+
+
+def composite_sources(blocks: list[dict[str, str] | None], rows: list[dict[str, Any]]) -> str:
+    sources = [str(block.get("source") or "").strip() for block in blocks if block]
+    if not sources:
+        sources = [source_id(row) for row in rows[:3] if source_id(row)]
+    return ", ".join(dict.fromkeys(source for source in sources if source))
+
+
+def packet_row_score(row: dict[str, Any], query: str) -> float:
+    score = float(row.get("score") or 0)
+    text = str(row.get("snippet") or "").lower()
+    path = str(row.get("matched_path") or row.get("path") or "").lower()
+    title = str(row.get("title") or "").lower()
+    role = str(row.get("role") or row.get("content_type") or "")
+    query_lower = query.lower()
+    setup_query = any(term in query_lower for term in ("install", "initialize", "authenticate", "api key", "environment", "credential", "setup", "quickstart"))
+    credential_query = any(term in query_lower for term in ("api key", "authenticate", "auth", "credential", "environment", "secret"))
+    host_query = any(term in query_lower for term in ("custom host", "api host", "host endpoint", "endpoint", "base url", "base_url", "host"))
+    if role in {"code_example", "cli"}:
+        score += 90
+    if "readme" in path or "llms" in path:
+        score += 160
+    if "quickstart" in path or "getting-started" in path or "installation" in title:
+        score += 120
+    if setup_query:
+        if "pip install" in text or "npm install" in text:
+            score += 260
+        if "api key" in text or "smallest_api_key" in text or "environment variable" in text:
+            score += 170
+        if "client()" in text or "atomsclient" in text or "wavesclient" in text:
+            score += 140
+        if role == "cli":
+            score += 160
+        if any(term in title for term in ("installation", "api key", "environment", "authenticate", "credential")):
+            score += 180
+        if generated_context_path(path) and not any(term in title for term in ("installation", "api key", "environment", "authenticate", "credential")):
+            score -= 340
+    if credential_query:
+        if any(term in title for term in ("api key", "environment", "authenticate", "credential", "secret")):
+            score += 360
+        if re.search(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", str(row.get("snippet") or "")):
+            score += 160
+        if "api key" in text or "environment variable" in text or "export " in text:
+            score += 180
+    if host_query:
+        if "configuration" in text and ("host" in text or "base url" in text or "endpoint" in text):
+            score += 520
+        if re.search(r"\bhost\s*=", str(row.get("snippet") or "")) or "base_url" in text or "base url" in text:
+            score += 360
+        if "configuration" in title:
+            score += 260
+    if "```" in text:
+        score += 60
+    if generated_context_path(path) and not any(term in query_lower for term in ("schema", "request body", "response", "model", "class")):
+        score -= 320
+    return score
+
+
+def generated_context_path(path: str) -> bool:
+    return (
+        "api-reference/source/" in path
+        or "/models/" in path
+        or path.endswith("-init-py.md")
+        or "response" in path
+        or "request" in path
+    )
+
+
+def extract_code_blocks(text: str) -> list[dict[str, str]]:
+    blocks: list[dict[str, str]] = []
+    for match in FENCE_RE.finditer(text):
+        code = match.group("code").strip()
+        if not code:
+            continue
+        blocks.append(
+            {
+                "language": (match.group(2) or "").strip(),
+                "code": code,
+            }
+        )
+    return blocks
+
+
+def code_snippet_card(row: dict[str, Any], text: str, code_blocks: list[dict[str, str]], budget: int) -> dict[str, Any]:
+    description = str(row.get("description") or first_prose_before_code(text) or "").strip()
+    code_list = bounded_code_list(code_blocks, budget)
+    content = "\n\n".join(block["code"] for block in code_list)
+    tokens = approximate_tokens(description + "\n" + content)
+    return {
+        "codeTitle": context_card_title(row, default="Code example"),
+        "codeDescription": bounded_string(description, 420),
+        "codeId": source_id(row),
+        "codeLanguage": code_list[0].get("language") if code_list else str(row.get("code_language") or ""),
+        "codeTokens": tokens,
+        "pageTitle": page_title(row),
+        "codeList": code_list,
+        "source": source_id(row),
+    }
+
+
+def info_snippet_card(row: dict[str, Any], text: str, budget: int) -> dict[str, Any]:
+    prose = strip_code_blocks(text)
+    if not prose.strip():
+        prose = str(row.get("description") or "").strip()
+    prose = trim_to_token_budget(prose, min(max(budget, 1), 600))
+    return {
+        "title": context_card_title(row, default="Documentation"),
+        "pageId": source_id(row),
+        "pageTitle": page_title(row),
+        "content": prose,
+        "contentTokens": approximate_tokens(prose) if prose else 0,
+        "source": source_id(row),
+    }
+
+
+def bounded_code_list(blocks: list[dict[str, str]], budget: int) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    remaining = max(budget, 1)
+    for block in blocks:
+        code = trim_to_token_budget(block["code"], min(remaining, 900))
+        if not code.strip():
+            continue
+        output.append({"language": block.get("language") or "", "code": code})
+        remaining -= approximate_tokens(code)
+        if remaining <= 0 or len(output) >= 3:
+            break
+    return output
+
+
+def first_prose_before_code(text: str) -> str:
+    before = FENCE_RE.split(text, maxsplit=1)[0]
+    before = re.sub(r"^#{1,6}\s+", "", before.strip())
+    lines = [line.strip() for line in before.splitlines() if line.strip()]
+    return " ".join(lines[-3:])[:420]
+
+
+def strip_code_blocks(text: str) -> str:
+    return clean_context_text(FENCE_RE.sub("", text))
+
+
+def context_card_title(row: dict[str, Any], *, default: str) -> str:
+    title = str(row.get("title") or "").strip()
+    if title:
+        return bounded_string(re.sub(r"^(Example|Reference|Command|Concept|Workflow):\s*", "", title), 180)
+    heading = row.get("heading_path") or []
+    if isinstance(heading, list) and heading:
+        return bounded_string(str(heading[-1]), 180)
+    path = str(row.get("matched_path") or row.get("path") or "")
+    return bounded_string(path.rsplit("/", 1)[-1].replace("-", " ").replace(".md", "").title() or default, 180)
+
+
+def source_id(row: dict[str, Any]) -> str:
+    return str(row.get("source_anchor") or row.get("matched_path") or row.get("path") or "").strip()
+
+
+def page_title(row: dict[str, Any]) -> str:
+    heading = row.get("heading_path") or []
+    if isinstance(heading, list) and heading:
+        return " > ".join(str(item) for item in heading[-3:])
+    return context_card_title(row, default="Documentation")
+
+
+def card_key(card: dict[str, Any]) -> str:
+    for key in ("codeId", "pageId", "source"):
+        value = str(card.get(key) or "").strip()
+        if value:
+            return value + ":" + str(card.get("codeTitle") or card.get("title") or "")
+    return ""
 
 
 def normalize_content_types(values: list[str] | None) -> list[str] | None:
@@ -203,6 +601,18 @@ def first_retrieval_mode(rows: list[dict[str, Any]]) -> str:
         if mode:
             return mode
     return "unknown"
+
+
+def context_retrieval_mode(rows: list[dict[str, Any]]) -> str:
+    modes = {str(row.get("retrieval_mode") or "").strip() for row in rows}
+    modes.discard("")
+    if any(mode.startswith("vector") for mode in modes) and "context_snippets" in modes:
+        return "hybrid_context_vector"
+    if any(mode.startswith("vector") for mode in modes):
+        return "hybrid_vector"
+    if "context_snippets" in modes:
+        return "context_snippets"
+    return first_retrieval_mode(rows)
 
 
 def context_source_text(row: dict[str, Any]) -> str:
@@ -357,6 +767,29 @@ def bounded_list(value: list[Any], max_chars: int) -> list[str]:
     for item in value:
         output.append(bounded_string(item, max_chars))
     return output
+
+
+def bounded_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "source_type",
+        "source_kind",
+        "product",
+        "current",
+        "deprecated",
+        "legacy",
+        "protocol",
+        "language",
+        "framework",
+        "endpoint",
+        "method",
+        "operation_id",
+        "channel",
+        "action",
+        "message",
+    }
+    return {key: value[key] for key in allowed if key in value}
 
 
 __all__ = [

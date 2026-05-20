@@ -264,6 +264,118 @@
       ],
       "required_topics": ["messages", "streaming", "client"],
       "expected_symbols": ["Anthropic"]
+    },
+    {
+      "library": "smallest-ai/atoms",
+      "allowed_hosts": ["docs.smallest.ai", "github.com", "raw.githubusercontent.com"],
+      "allowed_paths": ["/atoms", "/smallest-inc"],
+      "denied_paths": ["/blog", "/pricing", "/privacy", "/terms"],
+      "preferred_urls": [
+        "https://docs.smallest.ai/atoms/llms-full.txt",
+        "https://docs.smallest.ai/atoms/llms.txt",
+        "https://docs.smallest.ai/atoms/atoms-platform/get-started/quick-start",
+        "https://docs.smallest.ai/atoms/atoms-platform/tool-calls/webhook",
+        "https://docs.smallest.ai/atoms/atoms-platform/knowledge-base/upload-knowledge-base",
+        "https://docs.smallest.ai/atoms/atoms-platform/agent/realtime-agent"
+      ],
+      "source_roots": ["docs/atoms", "examples", "example", "cookbook", "samples", "sample"],
+      "source_priorities": {
+        "llms_full": 5,
+        "openapi": 8,
+        "asyncapi": 8,
+        "github": 22,
+        "source_code": 18
+      },
+      "aliases": [
+        "atoms",
+        "smallest atoms",
+        "voice agents",
+        "voice agent",
+        "webhooks",
+        "knowledge base",
+        "outbound calls",
+        "realtime agent"
+      ],
+      "products": ["atoms"],
+      "current_patterns": ["/atoms/", "atoms-platform"],
+      "deprecated_patterns": ["deprecated"],
+      "legacy_patterns": ["legacy", "old", "previous"],
+      "required_topics": ["agent", "webhook", "knowledge base", "call", "realtime"],
+      "expected_symbols": ["Agent", "Webhook", "KnowledgeBase"]
+    },
+    {
+      "library": "smallest-ai/waves",
+      "allowed_hosts": ["docs.smallest.ai", "github.com", "raw.githubusercontent.com"],
+      "allowed_paths": ["/waves", "/smallest-inc"],
+      "denied_paths": ["/blog", "/pricing", "/privacy", "/terms"],
+      "preferred_urls": [
+        "https://docs.smallest.ai/waves/llms-full.txt",
+        "https://docs.smallest.ai/waves/llms.txt",
+        "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/streaming",
+        "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/quickstart",
+        "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/batch-transcription",
+        "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-cloning"
+      ],
+      "source_roots": ["docs/waves", "examples", "example", "cookbook", "samples", "sample"],
+      "source_priorities": {
+        "llms_full": 5,
+        "openapi": 8,
+        "asyncapi": 8,
+        "github": 22,
+        "source_code": 18
+      },
+      "aliases": [
+        "waves",
+        "smallest waves",
+        "tts",
+        "stt",
+        "text to speech",
+        "speech to text",
+        "lightning",
+        "lightning v3.1",
+        "pulse",
+        "websocket audio",
+        "voice cloning"
+      ],
+      "products": ["waves"],
+      "current_patterns": ["/waves/", "lightning-v3.1", "pulse"],
+      "deprecated_patterns": ["lightning-v2", "lightning-large", "deprecated"],
+      "legacy_patterns": ["legacy", "old", "previous"],
+      "required_topics": ["Lightning", "Pulse", "WebSocket", "transcription", "voice"],
+      "expected_symbols": ["Lightning", "Pulse", "WebSocket"]
+    },
+    {
+      "library": "smallest-ai/python-sdk",
+      "allowed_hosts": ["github.com", "raw.githubusercontent.com", "docs.smallest.ai"],
+      "allowed_paths": ["/smallest-inc/smallest-python-sdk", "/atoms", "/waves"],
+      "denied_paths": ["/issues", "/pulls", "/actions", "/security", "/branches", "/tags", "/forks"],
+      "preferred_urls": [
+        "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/README.md"
+      ],
+      "source_roots": ["docs", "examples", "example", "smallestai", "tests"],
+      "source_file_patterns": ["smallestai/**/*.py", "examples/**/*.py", "docs/**/*.md", "README.md"],
+      "include_source_files": true,
+      "source_priorities": {
+        "github": 8,
+        "source_code": 7,
+        "type_defs": 10,
+        "llms_full": 18
+      },
+      "aliases": [
+        "python sdk",
+        "smallest python",
+        "smallestai",
+        "WavesClient",
+        "AtomsClient",
+        "FastAPI agent server",
+        "streaming audio"
+      ],
+      "products": ["python-sdk", "atoms", "waves"],
+      "current_patterns": ["smallest-python-sdk", "smallestai", "/atoms/", "/waves/"],
+      "deprecated_patterns": ["deprecated"],
+      "legacy_patterns": ["legacy", "old", "previous"],
+      "required_topics": ["WavesClient", "AtomsClient", "stream", "agent", "knowledge base"],
+      "expected_symbols": ["WavesClient", "AtomsClient"]
     }
   ]
 }

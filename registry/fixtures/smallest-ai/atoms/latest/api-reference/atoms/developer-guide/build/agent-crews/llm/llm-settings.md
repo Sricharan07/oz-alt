@@ -1,0 +1,169 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# LLM Settings
+
+> Configure models, parameters, and providers.
+
+The `OpenAIClient` is the unified interface for calling LLMs. It works with OpenAI by default, but supports any OpenAI-compatible endpoint by changing the `base_url`.
+
+## Basic Configuration
+
+```python
+import os
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+self.llm = OpenAIClient(
+    model="gpt-4o-mini",
+    temperature=0.7,
+    api_key=os.getenv("OPENAI_API_KEY")
+)
+```
+
+## Parameters
+
+| Parameter     | Type  | Default              | Description                                                           |
+| ------------- | ----- | -------------------- | --------------------------------------------------------------------- |
+| `model`       | str   | —                    | The model identifier (e.g., `gpt-4o-mini`, `llama-3.1-70b-versatile`) |
+| `api_key`     | str   | `OPENAI_API_KEY` env | Your provider's API key                                               |
+| `base_url`    | str   | OpenAI               | Custom endpoint URL for other providers                               |
+| `temperature` | float | `0.7`                | Controls randomness. Lower = consistent, higher = creative            |
+| `max_tokens`  | int   | `1024`               | Maximum tokens in the response                                        |
+
+### Temperature
+
+Controls how "creative" vs "predictable" the model behaves:
+
+* **0.0–0.3**: Consistent, factual. Best for support, FAQ bots.
+* **0.4–0.6**: Balanced. Good for general conversation.
+* **0.7–1.0**: Creative, varied. Better for sales, engagement.
+
+```python
+# Consistent support agent
+self.llm = OpenAIClient(model="gpt-4o-mini", temperature=0.3)
+
+# Engaging sales agent
+self.llm = OpenAIClient(model="gpt-4o-mini", temperature=0.8)
+```
+
+## Using Other Providers
+
+Any provider with an OpenAI-compatible API works by setting `base_url`. This includes Groq, Together.ai, Fireworks, Anyscale, OpenRouter, and Azure OpenAI.
+
+```python
+import os
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+# Example: Using Groq
+self.llm = OpenAIClient(
+    model="llama-3.1-70b-versatile",
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY")
+)
+```
+
+Just swap the `base_url` and `api_key`—your agent code stays the same.
+
+## Streaming
+
+Voice agents **must** use streaming. Without it, users wait for the entire response before hearing anything.
+
+```python
+async def generate_response(self):
+    response = await self.llm.chat(
+        messages=self.context.messages,
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.content:
+            yield chunk.content
+```
+
+## Tool Calling
+
+To enable function calling, pass tool schemas:
+
+```python
+response = await self.llm.chat(
+    messages=self.context.messages,
+    stream=True,
+    tools=self.tool_registry.get_schemas()
+)
+```
+
+## Error Handling
+
+```python
+from openai import RateLimitError, APIError
+
+async def generate_response(self):
+    try:
+        response = await self.llm.chat(
+            messages=self.context.messages,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.content:
+                yield chunk.content
+
+    except RateLimitError:
+        yield "I'm experiencing high demand. Please try again."
+
+    except APIError as e:
+        logger.error(f"LLM error: {e}")
+        yield "I'm having trouble. Let me try again."
+```
+
+## Voice Configuration
+
+Agents also need a voice for text-to-speech. **Waves** is our recommended TTS engine—ultra-low latency, optimized for real-time telephony.
+
+### Basic Voice Setup
+
+```python
+from smallestai.atoms.models import CreateAgentRequest
+
+agent = CreateAgentRequest(
+    name="SupportAgent",
+    synthesizer={
+        "provider": "smallest",  # Use Waves
+        "model": "waves_lightning_v2",
+        "voice_id": "zorin",     # Male, professional
+        "speed": 1.0
+    },
+    # ... other config
+)
+```
+
+### Waves Voice IDs
+
+| Voice ID | Description                      |
+| -------- | -------------------------------- |
+| `zorin`  | Male, professional (recommended) |
+| `emily`  | Female, warm                     |
+| `raj`    | Male, Indian English             |
+| `aria`   | Female, neutral                  |
+
+For the complete Waves voice library with audio samples:
+→ [Waves Voice Models](/waves/documentation/getting-started/models)
+
+### Voice Cloning
+
+Create custom voices from audio samples:
+→ [Waves Voice Cloning Guide](/waves/documentation/voice-cloning/instant-clone-ui)
+
+### Third-Party Providers
+
+OpenAI and ElevenLabs voices are also supported. Set `provider` to `openai` or `elevenlabs` and use their respective voice IDs.
+
+## Tips
+
+Set `max_tokens` to 100-200. Shorter responses mean faster audio playback. Guide conciseness in your prompt too.
+
+The first LLM call has connection overhead. Send a tiny request in `start()` to warm up before the user speaks.
+
+Configure a backup provider (e.g., Groq primary, OpenAI fallback) to handle rate limits or outages gracefully.

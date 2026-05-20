@@ -17,6 +17,8 @@ node_modules/
 frontend-main-design-ref/
 registry/admin/*.jsonl
 registry/fixtures/**/_crawl_errors.jsonl
+registry/fixtures/**/_crawl_errors*.jsonl
 registry/fixtures/**/_crawl_state.json
+registry/fixtures/**/_crawl_state*.json
 .codo/vendors/
 .codo/tmp/

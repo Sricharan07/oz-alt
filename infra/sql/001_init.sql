@@ -64,11 +64,13 @@ create table if not exists libraries (
   name text not null,
   description text not null default '',
   source_url text,
+  aliases jsonb not null default '[]'::jsonb,
   default_version_id bigint,
   redirected_to_library_id bigint references libraries(id) on delete set null,
   version_strategy text not null default 'semver',
   search_document tsvector generated always as (
     setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(aliases::text, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(description, '')), 'B')
   ) stored,
   created_at timestamptz not null default now(),
@@ -150,6 +152,7 @@ create table if not exists source_documents (
   source_priority integer not null default 50,
   discovered_from text,
   raw_artifact_key text,
+  metadata_json jsonb not null default '{}'::jsonb,
   etag text,
   last_modified text,
   fetched_at timestamptz not null default now(),
@@ -179,6 +182,7 @@ create table if not exists chunks (
   parent_chunk_key text,
   token_count integer not null default 0,
   source_anchor text,
+  metadata_json jsonb not null default '{}'::jsonb,
   embedding_model text,
   embedding_dimensions integer,
   dedupe_cluster_id bigint,
@@ -210,6 +214,7 @@ create table if not exists source_sections (
   content text not null,
   token_count integer not null default 0,
   quality_score double precision not null default 1,
+  metadata_json jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   unique (version_id, section_key),
   search_document tsvector generated always as (
@@ -247,6 +252,7 @@ create table if not exists context_snippets (
   content text not null,
   token_count integer not null default 0,
   quality_score double precision not null default 1,
+  metadata_json jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   unique (version_id, snippet_key),
   search_document tsvector generated always as (

@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::OnceLock;
 
 pub(crate) fn local_search_response(
     project_root: &Path,
@@ -74,195 +73,6 @@ fn library_from_path(project_root: &Path, path: &Path) -> (String, String) {
         }
     }
     (String::new(), String::new())
-}
-
-pub(crate) fn local_context_hits(
-    project_root: &Path,
-    terms: &[String],
-    library_scope: Option<&str>,
-    max_results: usize,
-    content_type: Option<&str>,
-) -> Result<Vec<LocalContextHit>> {
-    let scope = library_scope.map(parse_library_scope).transpose()?;
-    let mut hits =
-        search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
-    if hits.is_empty() {
-        if let Some(spec) = best_registry_match(project_root, terms, &scope)? {
-            pull_library_impl(project_root, &spec, true)?;
-            hits =
-                search_vendor_tree(project_root, &project_root.join(VENDORS_DIR), terms, &scope)?;
-        }
-    }
-    hits.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then_with(|| a.path.cmp(&b.path))
-            .then(a.line.cmp(&b.line))
-    });
-    let mut seen = HashSet::new();
-    Ok(hits
-        .into_iter()
-        .filter(|hit| content_type_matches(&hit.content_type, content_type))
-        .filter(|hit| seen.insert(hit.path.clone()))
-        .take(clamp_max_results(max_results, 1, 20))
-        .map(|hit| LocalContextHit {
-            path: to_project_path(project_root, &hit.path),
-            line: hit.line,
-            snippet: hit.snippet,
-            content_type: hit.content_type,
-        })
-        .collect())
-}
-
-pub(crate) struct LocalContextHit {
-    path: String,
-    line: usize,
-    snippet: Option<String>,
-    content_type: String,
-}
-
-pub(crate) fn context_snippets(
-    project_root: &Path,
-    hits: &[LocalContextHit],
-    max_tokens: usize,
-) -> Result<Vec<serde_json::Value>> {
-    let mut remaining = max_tokens.max(1);
-    let mut output = Vec::new();
-    for hit in hits {
-        if remaining == 0 {
-            break;
-        }
-        let snippet = if let Some(snippet) = &hit.snippet {
-            trim_snippet_to_budget(&strip_frontmatter_and_source(snippet), remaining)
-        } else {
-            let file_path = project_root.join(&hit.path);
-            if !file_path.exists() {
-                continue;
-            }
-            snippet_at_line(&file_path, hit.line, remaining)?
-        };
-        let tokens = approximate_tokens(&snippet);
-        if tokens == 0 {
-            continue;
-        }
-        remaining = remaining.saturating_sub(tokens);
-        output.push(serde_json::json!({
-            "path": hit.path,
-            "line": hit.line,
-            "content_type": hit.content_type,
-            "token_count": tokens,
-            "snippet": snippet,
-        }));
-    }
-    Ok(output)
-}
-
-fn trim_snippet_to_budget(snippet: &str, max_tokens: usize) -> String {
-    if approximate_tokens(snippet) <= max_tokens {
-        return snippet.trim().to_string();
-    }
-    let mut selected = Vec::new();
-    let mut tokens = 0;
-    let mut in_fence = false;
-    for line in snippet.lines() {
-        let line_tokens = approximate_tokens(line);
-        if tokens > 0 && !in_fence && tokens + line_tokens > max_tokens {
-            break;
-        }
-        selected.push(line);
-        tokens += line_tokens;
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-        }
-    }
-    if in_fence {
-        selected.push("```");
-    }
-    selected.join("\n").trim().to_string()
-}
-
-fn snippet_at_line(path: &Path, line: usize, max_tokens: usize) -> Result<String> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let content = strip_frontmatter_and_source(&content);
-    let lines = content.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return Ok(String::new());
-    }
-    let center = line.saturating_sub(1).min(lines.len() - 1);
-    let start = center.saturating_sub(8);
-    let mut selected = Vec::new();
-    let mut tokens = 0;
-    let mut in_fence = false;
-    for item in lines.iter().skip(start) {
-        let line_tokens = approximate_tokens(item);
-        if tokens > 0 && !in_fence && tokens + line_tokens > max_tokens.min(900) {
-            break;
-        }
-        selected.push(*item);
-        tokens += line_tokens;
-        if item.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-        }
-        if tokens >= max_tokens && !in_fence {
-            break;
-        }
-    }
-    if in_fence {
-        selected.push("```");
-    }
-    Ok(selected.join("\n").trim().to_string())
-}
-
-fn strip_frontmatter_and_source(content: &str) -> String {
-    let mut lines = content.lines().collect::<Vec<_>>();
-    if let Some(start) = lines.iter().take(12).position(|line| line.trim() == "---") {
-        if let Some(end) = lines
-            .iter()
-            .skip(start + 1)
-            .position(|line| line.trim() == "---")
-        {
-            lines.drain(start..=start + end + 1);
-        }
-    }
-    let filtered = lines
-        .into_iter()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.starts_with("Source:")
-                && !trimmed.starts_with("**Source:**")
-                && !trimmed.starts_with("title:")
-                && !trimmed.starts_with("description:")
-                && !trimmed.starts_with("url:")
-                && !trimmed.starts_with("version:")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    collapse_repeated_heading(&filtered)
-}
-
-fn collapse_repeated_heading(content: &str) -> String {
-    let mut output = Vec::new();
-    let mut last_heading = String::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            if trimmed == last_heading {
-                continue;
-            }
-            last_heading = trimmed.to_string();
-        }
-        output.push(line);
-    }
-    output.join("\n").trim().to_string()
-}
-
-fn approximate_tokens(text: &str) -> usize {
-    static ENCODING: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
-    let encoding = ENCODING.get_or_init(|| {
-        tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available")
-    });
-    encoding.encode_with_special_tokens(text).len().max(1)
 }
 
 fn search_vendor_tree(
@@ -358,10 +168,6 @@ fn collect_chunk_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) 
                 .and_then(|value| value.as_str())
                 .unwrap_or("guide")
                 .to_string(),
-            snippet: row
-                .get("text")
-                .and_then(|value| value.as_str())
-                .map(str::to_string),
             preview: row
                 .get("text")
                 .and_then(|value| value.as_str())
@@ -424,7 +230,6 @@ fn collect_symbol_hits(
             end_line: Some(content.lines().count().max(1)),
             score,
             content_type: "api_reference".to_string(),
-            snippet: Some(content.clone()),
             preview: content
                 .lines()
                 .next()
@@ -480,7 +285,6 @@ fn collect_file_hits(path: &Path, terms: &[String], hits: &mut Vec<SearchHit>) -
                 end_line: Some(idx + 1),
                 score,
                 content_type: "guide".to_string(),
-                snippet: None,
                 preview: line.trim().chars().take(160).collect(),
             });
         }
@@ -499,6 +303,7 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         .to_ascii_lowercase();
     let compact_path = compact(&path);
     let compact_symbols = compact(&symbols);
+    let compact_query = compact(&terms.join(" "));
 
     let text_hits = terms
         .iter()
@@ -524,6 +329,17 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         return 0;
     }
 
+    let total_distinct_hits = terms
+        .iter()
+        .filter(|term| {
+            text.contains(term.as_str())
+                || path.contains(term.as_str())
+                || headings.contains(term.as_str())
+                || symbols.contains(term.as_str())
+                || compact_path.contains(&compact(term))
+                || compact_symbols.contains(&compact(term))
+        })
+        .count();
     let coverage_bonus = if terms.is_empty() {
         0
     } else {
@@ -550,9 +366,25 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         "index" => 0,
         _ => 0,
     };
+    let pair_bonus = adjacent_pair_bonus(terms, &text, &path, &headings, &symbols);
+    let practical_task_bonus = practical_task_bonus(terms, &path, &text, &content_type);
+    let source_priority_bonus = source_priority_bonus(row);
+    let exact_symbol_query = !symbols.is_empty()
+        && !compact_query.is_empty()
+        && (compact_symbols == compact_query || compact_symbols.contains(&compact_query));
+    let generated_penalty =
+        generated_artifact_penalty(terms, &path, &symbols, row, exact_symbol_query);
     let specific_query = terms.len() >= 3;
     let overview_penalty = if specific_query && shallow_overview_path(&path) {
         28
+    } else {
+        0
+    };
+    let low_coverage_penalty = if specific_query && total_distinct_hits <= 1 && !exact_symbol_query
+    {
+        80
+    } else if specific_query && total_distinct_hits <= 2 && generated_penalty > 0 {
+        35
     } else {
         0
     };
@@ -562,8 +394,151 @@ fn chunk_score(row: &serde_json::Value, terms: &[String]) -> usize {
         + (path_hits * 25)
         + (heading_hits * 16)
         + (symbol_hits * 70)
-        + type_bonus;
-    score.saturating_sub(path_penalty + overview_penalty)
+        + type_bonus
+        + pair_bonus
+        + practical_task_bonus
+        + source_priority_bonus;
+    score.saturating_sub(path_penalty + overview_penalty + low_coverage_penalty + generated_penalty)
+}
+
+fn adjacent_pair_bonus(
+    terms: &[String],
+    text: &str,
+    path: &str,
+    headings: &str,
+    symbols: &str,
+) -> usize {
+    let mut bonus = 0;
+    for pair in terms.windows(2) {
+        let phrase = format!("{} {}", pair[0], pair[1]);
+        let compact_phrase = compact(&phrase);
+        if text.contains(&phrase) || headings.contains(&phrase) {
+            bonus += 28;
+        }
+        if path.contains(&phrase) || compact(path).contains(&compact_phrase) {
+            bonus += 36;
+        }
+        if symbols.contains(&phrase) || compact(symbols).contains(&compact_phrase) {
+            bonus += 32;
+        }
+    }
+    bonus.min(140)
+}
+
+fn practical_task_bonus(terms: &[String], path: &str, text: &str, content_type: &str) -> usize {
+    let tasky = has_any(
+        terms,
+        &[
+            "install",
+            "initialize",
+            "configure",
+            "environment",
+            "example",
+            "build",
+            "create",
+            "stream",
+            "websocket",
+            "audio",
+            "fastapi",
+            "tool",
+            "python",
+            "save",
+        ],
+    );
+    if !tasky {
+        return 0;
+    }
+    let mut bonus = 0;
+    if content_type == "code_example" {
+        bonus += 30;
+    }
+    if path.contains("readme") || path.contains("/examples/") || path.contains("-examples-") {
+        bonus += 55;
+    }
+    if path.contains("quickstart")
+        || path.contains("get-started")
+        || path.contains("getting-started")
+    {
+        bonus += 45;
+    }
+    if has_all(terms, &["api", "key"])
+        && (text.contains("api key") || text.contains("smallest_api_key"))
+    {
+        bonus += 70;
+    }
+    if has_all(terms, &["environment"])
+        && (text.contains("environment variable") || text.contains("env var"))
+    {
+        bonus += 55;
+    }
+    if has_all(terms, &["websocket", "audio"])
+        && text.contains("websocket")
+        && text.contains("audio")
+    {
+        bonus += 65;
+    }
+    if has_all(terms, &["fastapi"]) && text.contains("fastapi") {
+        bonus += 70;
+    }
+    bonus
+}
+
+fn source_priority_bonus(row: &serde_json::Value) -> usize {
+    row.get("source_priority")
+        .and_then(|value| value.as_u64())
+        .map(|priority| 30usize.saturating_sub(priority as usize).min(24))
+        .unwrap_or(0)
+}
+
+fn generated_artifact_penalty(
+    terms: &[String],
+    path: &str,
+    symbols: &str,
+    row: &serde_json::Value,
+    exact_symbol_query: bool,
+) -> usize {
+    if exact_symbol_query || has_any(terms, &["response", "request", "model", "schema", "class"]) {
+        return 0;
+    }
+    let metadata = row.get("metadata_json").and_then(|value| value.as_object());
+    let source_type = metadata
+        .and_then(|metadata| {
+            metadata
+                .get("source_type")
+                .or_else(|| metadata.get("source_kind"))
+        })
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let compact_symbols = compact(symbols);
+    let generated_name = compact_symbols.contains("response")
+        || compact_symbols.contains("request")
+        || compact_symbols.contains("dto")
+        || compact_symbols.contains("schema")
+        || compact_symbols.contains("apiresponse");
+    let generated_path = path.contains("/models/")
+        || path.contains("_symbols/")
+        || path.contains("api-reference/source/")
+        || path.contains("response")
+        || path.contains("request");
+    if source_type == "source_code" && generated_name {
+        return 110;
+    }
+    if generated_path && generated_name {
+        return 90;
+    }
+    0
+}
+
+fn has_any(terms: &[String], needles: &[&str]) -> bool {
+    needles
+        .iter()
+        .any(|needle| terms.iter().any(|term| term == needle))
+}
+
+fn has_all(terms: &[String], needles: &[&str]) -> bool {
+    needles
+        .iter()
+        .all(|needle| terms.iter().any(|term| term == needle))
 }
 
 fn shallow_overview_path(path: &str) -> bool {

@@ -1,0 +1,89 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# PII and PCI Redaction
+
+> Automatically redact sensitive information from transcriptions
+
+Real-TimeRedaction allows you to identify and mask sensitive information from transcriptions to protect privacy and comply with data protection regulations. The Pulse STT API supports two types of redaction: PII (Personally Identifiable Information) and PCI (Payment Card Information).## Enabling RedactionAdd `redact_pii` and/or `redact_pci` parameters to your WebSocket connection query parameters. Both parameters default to `false`. Options: `true`, `false`.### Real-Time WebSocket API```javascript
+const url = new URL("wss://api.smallest.ai/waves/v1/pulse/get_text");
+url.searchParams.append("language", "en");
+url.searchParams.append("encoding", "linear16");
+url.searchParams.append("sample_rate", "16000");
+url.searchParams.append("redact_pii", "true");
+url.searchParams.append("redact_pci", "true");
+
+const ws = new WebSocket(url.toString(), {
+  headers: {
+    Authorization: `Bearer ${API_KEY}`,
+  },
+});
+```## Redaction Types### PII Redaction (`redact_pii`)When `redact_pii=true` is enabled, the following types of personally identifiable information are automatically identified and redacted:- **Names**: First names and surnames
+- **Addresses**: Street addresses and locations
+- **Phone numbers**: Various phone number formatsRedacted PII items are replaced with placeholder tokens like `[FIRSTNAME_1]`, `[FIRSTNAME_2]`, `[PHONENUMBER_1]`, etc.### PCI Redaction (`redact_pci`)When `redact_pci=true` is enabled, the following types of payment card information are automatically identified and redacted:- **Credit card numbers**: 16-digit credit/debit card numbers
+- **CVV codes**: Card verification values
+- **ZIP codes**: Postal/ZIP codes
+- **Account numbers**: Bank account numbersRedacted PCI items are replaced with placeholder tokens like `[CREDITCARDCVV_1]`, `[ZIPCODE_1]`, `[ACCOUNTNUMBER_1]`, etc.## Output FormatWhen redaction is enabled, the transcription text contains placeholder tokens instead of the original sensitive information. The response also includes a `redacted_entities` array listing all the redacted entity placeholders.### Sample Response with Redaction```json
+{
+  "session_id": "sess_12345abcde",
+  "transcript": "[CREDITCARDCVV_1] and expiry [TIME_2] slash 34.",
+  "is_final": true,
+  "is_last": true,
+  "language": "en",
+  "languages": ["en"],
+  "redacted_entities": [
+    "[CREDITCARDCVV_1]",
+    "[TIME_2]"
+  ]
+}
+```## Response Fields
+
+        Field
+
+        Type
+
+        When Included
+
+        Description
+
+        `redacted_entities`
+
+        array
+
+        `redact_pii=true`
+
+         or
+
+        `redact_pci=true`
+
+        List of redacted entity placeholders (e.g.,
+
+        `[FIRSTNAME_1]`
+
+        ,
+
+        `[CREDITCARDCVV_1]`
+
+        )
+
+        `transcript`
+
+        string
+
+        Always
+
+        Transcription text with redacted entities replaced by placeholder tokens
+
+## Redaction Placeholder FormatRedacted entities are replaced with placeholder tokens following the pattern:- `[ENTITYTYPE_N]` where `ENTITYTYPE` indicates the type of information (e.g., `FIRSTNAME`, `PHONENUMBER`, `CREDITCARDCVV`, `ZIPCODE`, `ACCOUNTNUMBER`)
+- `N` is a sequential number starting from 1 to uniquely identify each instanceExamples:- `[FIRSTNAME_1]`, `[FIRSTNAME_2]` - First names
+- `[PHONENUMBER_1]` - Phone numbers
+- `[CREDITCARDCVV_1]` - Credit card CVV codes
+- `[ZIPCODE_1]` - ZIP/Postal codes
+- `[ACCOUNTNUMBER_1]` - Account numbersFor the highest level of protection and effective compliance auditing, enable both `redact_pii=true` and `redact_pci=true` flags in your request.Additionally, use the `redacted_entities` array in the response as an audit trail to track what data has been redacted from each transcript.## Compliance and PrivacyRedaction helps with compliance requirements for:- **HIPAA**: Health Insurance Portability and Accountability Act (healthcare data)
+- **GDPR**: General Data Protection Regulation (EU data protection)
+- **CCPA**: California Consumer Privacy Act (California data protection)
+- **PCI DSS**: Payment Card Industry Data Security Standard (payment card data)
+- **SOC 2**: System and Organization Controls (security and privacy)Note: Redaction is a tool to help protect sensitive information, but it should be used as part of a comprehensive data protection strategy. Always consult with legal and compliance teams to ensure your implementation meets regulatory requirements.

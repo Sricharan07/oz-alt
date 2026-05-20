@@ -1,5 +1,5 @@
 use super::*;
-use search_local::{context_snippets, local_context_hits, local_search_response};
+use search_local::local_search_response;
 
 pub(crate) fn search_docs(
     project_root: &Path,
@@ -81,52 +81,17 @@ pub(crate) fn context_docs(
     if terms.is_empty() {
         bail!("context query must contain at least one alphanumeric term");
     }
-    let config = read_config()?;
-    if configured_api_url(&config).is_some() {
-        return context_docs_remote(
-            project_root,
-            &config,
-            query,
-            library_scope,
-            max_tokens,
-            max_results,
-            content_type,
-            json,
-        );
-    }
-    let hits = local_context_hits(
+    let config = context_api_config(read_config()?);
+    context_docs_remote(
         project_root,
-        &terms,
+        &config,
+        query,
         library_scope,
+        max_tokens,
         max_results,
         content_type,
-    )?;
-    let snippets = context_snippets(project_root, &hits, max_tokens)?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ "results": snippets }))?
-        );
-    } else {
-        for snippet in &snippets {
-            println!(
-                "{}:{}\n{}\n",
-                snippet["path"].as_str().unwrap_or_default(),
-                snippet["line"].as_u64().unwrap_or_default(),
-                snippet["snippet"].as_str().unwrap_or_default()
-            );
-        }
-    }
-    emit_telemetry(
-        &config,
-        "context_query",
-        serde_json::json!({
-            "query_length": query.len(),
-            "result_count": snippets.len(),
-            "library_scope": library_scope,
-        }),
-    );
-    Ok(())
+        json,
+    )
 }
 
 pub(crate) fn search_docs_response(
@@ -174,54 +139,25 @@ pub(crate) fn context_docs_response(
     if terms.is_empty() {
         bail!("context query must contain at least one alphanumeric term");
     }
-    let config = read_config()?;
-    if configured_api_url(&config).is_some() {
-        let response = remote_context_response(
-            project_root,
-            &config,
-            query,
-            library_scope,
-            max_tokens,
-            max_results,
-            content_type,
-        )?;
-        warn_stale_response(&response.stale_libraries);
-        return Ok(response);
-    }
-    let hits = local_context_hits(
+    let config = context_api_config(read_config()?);
+    let response = remote_context_response(
         project_root,
-        &terms,
+        &config,
+        query,
         library_scope,
+        max_tokens,
         max_results,
         content_type,
     )?;
-    let snippets = context_snippets(project_root, &hits, max_tokens)?;
-    let results = snippets
-        .into_iter()
-        .map(|snippet| ContextResult {
-            path: snippet["path"].as_str().unwrap_or_default().to_string(),
-            line: snippet["line"].as_u64().map(|value| value as usize),
-            score: serde_json::Value::Null,
-            library: String::new(),
-            version: String::new(),
-            matched_path: None,
-            source_anchor: None,
-            content_type: None,
-            heading_path: Vec::new(),
-            symbols: Vec::new(),
-            token_count: snippet["token_count"].as_u64().unwrap_or_default() as usize,
-            snippet: snippet["snippet"].as_str().unwrap_or_default().to_string(),
-            retrieval_mode: Some("local_grep".to_string()),
-            degraded: false,
-        })
-        .collect();
-    Ok(ContextResponse {
-        results,
-        libraries_to_pull: Vec::new(),
-        stale_libraries: Vec::new(),
-        retrieval_mode: Some("local_grep".to_string()),
-        degraded: false,
-    })
+    warn_stale_response(&response.stale_libraries);
+    Ok(response)
+}
+
+fn context_api_config(mut config: OzConfig) -> OzConfig {
+    if configured_api_url(&config).is_none() {
+        config.api_url = Some(DEFAULT_API_URL.to_string());
+    }
+    config
 }
 
 fn search_docs_remote(
@@ -502,9 +438,87 @@ fn context_docs_remote(
     if json {
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else {
+        print!("{}", context_response_text(&response));
+    }
+    emit_telemetry(
+        config,
+        "context_query",
+        serde_json::json!({
+            "query_length": query.len(),
+            "result_count": context_response_count(&response),
+            "library_scope": library_scope,
+        }),
+    );
+    Ok(())
+}
+
+pub(crate) fn context_response_text(response: &ContextResponse) -> String {
+    let mut blocks = Vec::new();
+    for snippet in &response.code_snippets {
+        let mut block = String::new();
+        let title = snippet
+            .code_title
+            .trim()
+            .is_empty()
+            .then_some("Code snippet")
+            .unwrap_or(snippet.code_title.trim());
+        block.push_str(&format!("### {title}\n"));
+        let source = snippet
+            .source
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(snippet.code_id.as_str());
+        if !source.trim().is_empty() {
+            block.push_str(&format!("Source: {}\n", source.trim()));
+        }
+        if !snippet.code_description.trim().is_empty() {
+            block.push('\n');
+            block.push_str(snippet.code_description.trim());
+            block.push('\n');
+        }
+        for item in &snippet.code_list {
+            let language = item.language.trim();
+            block.push('\n');
+            if language.is_empty() {
+                block.push_str("```\n");
+            } else {
+                block.push_str(&format!("```{language}\n"));
+            }
+            block.push_str(item.code.trim());
+            block.push_str("\n```\n");
+        }
+        blocks.push(block.trim().to_string());
+    }
+    for snippet in &response.info_snippets {
+        let title = snippet
+            .title
+            .as_deref()
+            .or(snippet.page_title.as_deref())
+            .unwrap_or("Reference")
+            .trim()
+            .to_string();
+        let mut block = format!("### {title}\n");
+        let source = snippet
+            .source
+            .as_deref()
+            .or(snippet.page_id.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !source.is_empty() {
+            block.push_str(&format!("Source: {source}\n"));
+        }
+        if !snippet.content.trim().is_empty() {
+            block.push('\n');
+            block.push_str(snippet.content.trim());
+            block.push('\n');
+        }
+        blocks.push(block.trim().to_string());
+    }
+    if blocks.is_empty() {
         for snippet in &response.results {
-            println!(
-                "{}:{}{}\n{}\n",
+            blocks.push(format!(
+                "{}:{}{}\n{}",
                 snippet.path,
                 snippet.line.unwrap_or(1),
                 snippet
@@ -513,19 +527,23 @@ fn context_docs_remote(
                     .map(|kind| format!(" [{kind}]"))
                     .unwrap_or_default(),
                 snippet.snippet
-            );
+            ));
         }
     }
-    emit_telemetry(
-        config,
-        "context_query",
-        serde_json::json!({
-            "query_length": query.len(),
-            "result_count": response.results.len(),
-            "library_scope": library_scope,
-        }),
-    );
-    Ok(())
+    if blocks.is_empty() {
+        "no matching Oz context found\n".to_string()
+    } else {
+        format!("{}\n", blocks.join("\n\n---\n\n"))
+    }
+}
+
+fn context_response_count(response: &ContextResponse) -> usize {
+    let packet_count = response.code_snippets.len() + response.info_snippets.len();
+    if packet_count == 0 {
+        response.results.len()
+    } else {
+        packet_count
+    }
 }
 
 fn remote_context_response(

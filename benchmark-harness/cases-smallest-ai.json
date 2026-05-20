@@ -1,0 +1,232 @@
+{
+  "libraries": [
+    {
+      "library": "smallest-ai/atoms",
+      "version": "latest",
+      "cases": [
+        {
+          "id": "atoms-create-agent",
+          "query": "Create a Smallest AI voice agent from the API",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["agents", "create"],
+          "required_terms": ["agent", "POST", "create"]
+        },
+        {
+          "id": "atoms-agent-webhooks",
+          "query": "Create webhook subscriptions for a voice agent",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["webhooks", "agents"],
+          "required_terms": ["webhook", "agent", "subscription"]
+        },
+        {
+          "id": "atoms-knowledge-base",
+          "query": "Create a knowledge base and connect it to an agent",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["knowledge-base", "agent"],
+          "required_terms": ["knowledge", "agent", "connect"]
+        },
+        {
+          "id": "atoms-realtime-agent-websocket",
+          "query": "Connect to an agent over WebSocket for realtime conversation",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["websocket", "realtime-agent"],
+          "required_terms": ["WebSocket", "realtime", "agent"]
+        },
+        {
+          "id": "atoms-live-transcripts",
+          "query": "Subscribe to live transcript events for a call",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["live-transcripts", "subscribe"],
+          "required_terms": ["transcript", "subscribe", "event"]
+        },
+        {
+          "id": "atoms-outbound-call",
+          "query": "Start an outbound call with an agent",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["calling", "outbound"],
+          "required_terms": ["call", "agent", "outbound"]
+        },
+        {
+          "id": "atoms-agent-drafts",
+          "query": "Update an agent draft or version before publishing",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["draft", "version"],
+          "required_terms": ["draft", "agent", "version"]
+        },
+        {
+          "id": "atoms-phone-number",
+          "query": "Attach or configure a phone number for an agent",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["phone", "number"],
+          "required_terms": ["phone", "number", "agent"]
+        },
+        {
+          "id": "atoms-widget-embed",
+          "query": "Embed a voice agent widget in a web app",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["embed", "widget"],
+          "required_terms": ["embed", "agent", "widget"]
+        },
+        {
+          "id": "atoms-events-payload",
+          "query": "What event payload does an agent webhook receive",
+          "context7_library_id": "/websites/smallest_ai_atoms",
+          "expected_paths": ["events", "webhooks"],
+          "required_terms": ["event", "payload", "webhook"]
+        }
+      ]
+    },
+    {
+      "library": "smallest-ai/waves",
+      "version": "v4.0.0",
+      "cases": [
+        {
+          "id": "waves-lightning-websocket-python",
+          "query": "Stream text to speech audio with Lightning v3.1 WebSocket in Python",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["websocket", "lightning"],
+          "required_terms": ["WebSocket", "audio", "stream"]
+        },
+        {
+          "id": "waves-lightning-http-tts",
+          "query": "Generate text to speech audio using the REST API",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["text-to-speech", "lightning"],
+          "required_terms": ["text", "speech", "audio"]
+        },
+        {
+          "id": "waves-pulse-realtime-stt",
+          "query": "Realtime speech to text transcription with Pulse WebSocket",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["pulse", "websocket"],
+          "required_terms": ["Pulse", "WebSocket", "transcription"]
+        },
+        {
+          "id": "waves-pulse-prerecorded",
+          "query": "Transcribe a pre-recorded audio file with Pulse",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["pulse", "transcribe"],
+          "required_terms": ["audio", "transcribe", "Pulse"]
+        },
+        {
+          "id": "waves-voice-cloning",
+          "query": "Create or use a cloned voice for text to speech",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["voice", "clone"],
+          "required_terms": ["voice", "clone", "speech"]
+        },
+        {
+          "id": "waves-pronunciation-dictionary",
+          "query": "Use a pronunciation dictionary when generating speech",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["pronunciation", "dictionary"],
+          "required_terms": ["pronunciation", "dictionary"]
+        },
+        {
+          "id": "waves-auth-api-key",
+          "query": "Authenticate Waves API requests with an API key",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["authentication", "api-key"],
+          "required_terms": ["API key", "Authorization"]
+        },
+        {
+          "id": "waves-webhook-transcription",
+          "query": "Submit audio for transcription and receive the result by webhook",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["webhook", "transcription"],
+          "required_terms": ["webhook", "transcription"]
+        },
+        {
+          "id": "waves-livekit-integration",
+          "query": "Use Smallest speech with LiveKit realtime voice agents",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["livekit", "agent"],
+          "required_terms": ["LiveKit", "agent", "audio"]
+        },
+        {
+          "id": "waves-pipecat-integration",
+          "query": "Use Smallest TTS or STT service with Pipecat",
+          "context7_library_id": "/websites/waves-docs_smallest_ai_v4_0_0",
+          "expected_paths": ["pipecat", "service"],
+          "required_terms": ["Pipecat", "service"]
+        }
+      ]
+    },
+    {
+      "library": "smallest-ai/python-sdk",
+      "version": "latest",
+      "cases": [
+        {
+          "id": "python-sdk-install",
+          "query": "Install and initialize the Smallest AI Python SDK",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["install", "python"],
+          "required_terms": ["python", "install", "client"]
+        },
+        {
+          "id": "python-sdk-waves-streaming-tts",
+          "query": "Stream LLM text to audio with the Python SDK",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["stream", "tts"],
+          "required_terms": ["stream", "audio", "Python"]
+        },
+        {
+          "id": "python-sdk-agent-server",
+          "query": "Build a FastAPI agent server with tool calling",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["fastapi", "agent"],
+          "required_terms": ["FastAPI", "agent", "tool"]
+        },
+        {
+          "id": "python-sdk-link-knowledge-base",
+          "query": "Link a knowledge base to an agent using Python",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["knowledge", "agent"],
+          "required_terms": ["knowledge", "agent", "Python"]
+        },
+        {
+          "id": "python-sdk-context-agent",
+          "query": "Provide context to an agent with the Python SDK",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["context", "agent"],
+          "required_terms": ["context", "agent", "Python"]
+        },
+        {
+          "id": "python-sdk-websocket-audio",
+          "query": "Stream audio through a WebSocket using Python",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["websocket", "audio"],
+          "required_terms": ["WebSocket", "audio", "Python"]
+        },
+        {
+          "id": "python-sdk-calls",
+          "query": "Make an outbound phone call with the Python SDK",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["call", "agent"],
+          "required_terms": ["call", "agent", "Python"]
+        },
+        {
+          "id": "python-sdk-error-handling",
+          "query": "Handle errors from Smallest API calls in Python",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["error", "exception"],
+          "required_terms": ["error", "Python"]
+        },
+        {
+          "id": "python-sdk-env-api-key",
+          "query": "Configure the Smallest API key in environment variables",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["api-key", "environment"],
+          "required_terms": ["API key", "environment"]
+        },
+        {
+          "id": "python-sdk-audio-file",
+          "query": "Save generated speech audio to a file with Python",
+          "context7_library_id": "/smallest-inc/smallest-python-sdk",
+          "expected_paths": ["audio", "file"],
+          "required_terms": ["audio", "file", "Python"]
+        }
+      ]
+    }
+  ]
+}

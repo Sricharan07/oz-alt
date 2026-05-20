@@ -1,3 +1,8 @@
 runs/
 *.pyc
 __pycache__/
+Eval/.env
+Eval/.oz_eval_api_key
+Eval/.ingestion_work/
+Eval/__pycache__/
+Eval/.DS_Store

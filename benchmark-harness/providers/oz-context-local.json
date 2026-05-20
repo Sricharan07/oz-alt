@@ -1,0 +1,15 @@
+{
+  "name": "oz-context-local",
+  "kind": "command",
+  "command": [
+    "oz",
+    "context",
+    "{query}",
+    "{library}",
+    "--json",
+    "--max-results",
+    "8",
+    "--max-tokens",
+    "{max_tokens}"
+  ]
+}

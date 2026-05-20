@@ -137,6 +137,7 @@ def write_catalog_and_chunks(
                 quality_score=float(row.get("quality_score") or 1.0),
                 token_count=int(row.get("token_count") or token_count(str(row.get("text") or ""))),
                 source_anchor=nullable_string(row.get("source_anchor")),
+                metadata_json=row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {},
                 embedding_model=nullable_string(row.get("embedding_model")) if embedding else None,
                 embedding_dimensions=(int(row.get("embedding_dimensions") or 0) or None) if embedding else None,
                 content=str(row.get("text") or ""),
@@ -200,6 +201,7 @@ def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, An
     enriched["token_count"] = token_count(text)
     enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
     enriched["source_document_key"] = source_document_key_for_row(enriched)
+    enriched["metadata_json"] = enriched.get("metadata_json") if isinstance(enriched.get("metadata_json"), dict) else {}
     return enriched
 
 
@@ -232,6 +234,7 @@ def source_document_rows(fixture: Path, rows: list[dict[str, Any]]) -> list[dict
                 "title": first_heading(str(row.get("text") or "")) or Path(str(row.get("path") or "")).stem,
                 "source_priority": int(row.get("source_priority") or 50),
                 "discovered_from": nullable_string(row.get("discovered_from")),
+                "metadata_json": row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {},
             }
         )
         seen.add(key)
@@ -488,6 +491,14 @@ def list_of_strings(value: Any) -> list[str]:
     return [str(item) for item in value if str(item).strip()]
 
 
+def merge_metadata(*values: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in values:
+        if isinstance(value, dict):
+            merged.update(value)
+    return merged
+
+
 def valid_embedding(value: Any) -> bool:
     return (
         isinstance(value, list)
@@ -657,6 +668,7 @@ class IndexWriter:
         quality_score: float,
         token_count: int,
         source_anchor: str | None,
+        metadata_json: dict[str, Any],
         embedding_model: str | None,
         embedding_dimensions: int | None,
         content: str,
@@ -695,11 +707,12 @@ class PostgresWriter(IndexWriter):
     def upsert_library(self, vendor_id: int, entry: dict[str, Any]) -> int:
         return self.scalar(
             """
-            insert into libraries(vendor_id, name, description, source_url)
-            values (%s, %s, %s, %s)
+            insert into libraries(vendor_id, name, description, source_url, aliases)
+            values (%s, %s, %s, %s, %s::jsonb)
             on conflict (vendor_id, name) do update
               set description = excluded.description,
                   source_url = excluded.source_url,
+                  aliases = excluded.aliases,
                   updated_at = now()
             returning id
             """,
@@ -708,6 +721,7 @@ class PostgresWriter(IndexWriter):
                 str(entry["library"]),
                 str(entry.get("description") or ""),
                 first_source_url(entry),
+                json.dumps(list_of_strings(entry.get("aliases")), sort_keys=True),
             ),
         )
 
@@ -784,9 +798,9 @@ class PostgresWriter(IndexWriter):
             """
             insert into source_documents(
               version_id, source_document_key, source_kind, canonical_url, source_url,
-              path, title, source_priority, discovered_from, fetched_at
+              path, title, source_priority, discovered_from, metadata_json, fetched_at
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
             on conflict (version_id, source_document_key) do update
               set source_kind = excluded.source_kind,
                   canonical_url = excluded.canonical_url,
@@ -795,6 +809,7 @@ class PostgresWriter(IndexWriter):
                   title = excluded.title,
                   source_priority = excluded.source_priority,
                   discovered_from = excluded.discovered_from,
+                  metadata_json = excluded.metadata_json,
                   fetched_at = now()
             returning id
             """,
@@ -808,6 +823,7 @@ class PostgresWriter(IndexWriter):
                 nullable_string(source.get("title")),
                 int(source.get("source_priority") or 50),
                 nullable_string(source.get("discovered_from")),
+                json.dumps(source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}, sort_keys=True),
             ),
         )
 
@@ -1023,7 +1039,9 @@ class PostgresWriter(IndexWriter):
                        c.source_anchor, c.content, c.dedupe_canonical,
                        coalesce(sd.title, '') as source_title,
                        coalesce(sd.source_kind, '') as source_kind,
-                       coalesce(sd.source_priority, 50) as source_priority
+                       coalesce(sd.source_priority, 50) as source_priority,
+                       coalesce(c.metadata_json, '{}'::jsonb) as chunk_metadata_json,
+                       coalesce(sd.metadata_json, '{}'::jsonb) as source_metadata_json
                 from chunks c
                 left join source_documents sd on sd.id = c.source_document_id
                 where c.version_id = %s
@@ -1058,6 +1076,7 @@ class PostgresWriter(IndexWriter):
                     "source_title": row[19],
                     "source_kind": row[20],
                     "source_priority": row[21],
+                    "metadata_json": merge_metadata(row[22], row[23]),
                 }
             )
         return output
@@ -1072,9 +1091,9 @@ class PostgresWriter(IndexWriter):
                 insert into source_sections(
                   version_id, source_document_id, section_key, path, source_url, source_anchor,
                   title, heading_path, content_type, start_line, end_line, content, token_count,
-                  quality_score
+                  quality_score, metadata_json
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 on conflict (version_id, section_key) do update
                   set source_document_id = excluded.source_document_id,
                       path = excluded.path,
@@ -1087,7 +1106,8 @@ class PostgresWriter(IndexWriter):
                       end_line = excluded.end_line,
                       content = excluded.content,
                       token_count = excluded.token_count,
-                      quality_score = excluded.quality_score
+                      quality_score = excluded.quality_score,
+                      metadata_json = excluded.metadata_json
                 returning id
                 """,
                 (
@@ -1105,6 +1125,7 @@ class PostgresWriter(IndexWriter):
                     section.content,
                     section.token_count,
                     section.quality_score,
+                    json.dumps(section.metadata_json, sort_keys=True),
                 ),
             )
             section_ids[section.section_key] = section_id
@@ -1119,13 +1140,13 @@ class PostgresWriter(IndexWriter):
                   version_id, source_section_id, primary_chunk_id, snippet_key, path, source_url,
                   source_anchor, title, description, role, applies_to, entities, task_tags,
                   heading_path, symbols, code_language, code, constraints, related_chunk_ids,
-                  start_line, end_line, content, token_count, quality_score
+                  start_line, end_line, content, token_count, quality_score, metadata_json
                 )
                 values (
                   %s, %s, %s, %s, %s, %s,
                   %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
                   %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb,
-                  %s, %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s::jsonb
                 )
                 on conflict (version_id, snippet_key) do update
                   set source_section_id = excluded.source_section_id,
@@ -1149,7 +1170,8 @@ class PostgresWriter(IndexWriter):
                       end_line = excluded.end_line,
                       content = excluded.content,
                       token_count = excluded.token_count,
-                      quality_score = excluded.quality_score
+                      quality_score = excluded.quality_score,
+                      metadata_json = excluded.metadata_json
                 """,
                 (
                     version_id,
@@ -1176,6 +1198,7 @@ class PostgresWriter(IndexWriter):
                     snippet.content,
                     snippet.token_count,
                     snippet.quality_score,
+                    json.dumps(snippet.metadata_json, sort_keys=True),
                 ),
             )
 
@@ -1214,6 +1237,7 @@ class PostgresWriter(IndexWriter):
         quality_score: float,
         token_count: int,
         source_anchor: str | None,
+        metadata_json: dict[str, Any],
         embedding_model: str | None,
         embedding_dimensions: int | None,
         content: str,
@@ -1226,9 +1250,9 @@ class PostgresWriter(IndexWriter):
               version_id, source_document_id, path, start_line, end_line, source_url, ordinal, chunk_key,
               parent_chunk_key, chunk_sha, content_sha, heading_path, symbols, content_type,
               quality_score, token_count, source_anchor, embedding_model,
-              embedding_dimensions, content, embedding
+              embedding_dimensions, metadata_json, content, embedding
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
               set source_document_id = excluded.source_document_id,
                   path = excluded.path,
@@ -1245,6 +1269,7 @@ class PostgresWriter(IndexWriter):
                   quality_score = excluded.quality_score,
                   token_count = excluded.token_count,
                   source_anchor = excluded.source_anchor,
+                  metadata_json = excluded.metadata_json,
                   embedding_model = coalesce(excluded.embedding_model, chunks.embedding_model),
                   embedding_dimensions = coalesce(excluded.embedding_dimensions, chunks.embedding_dimensions),
                   content = excluded.content,
@@ -1270,6 +1295,7 @@ class PostgresWriter(IndexWriter):
                 source_anchor,
                 embedding_model,
                 embedding_dimensions,
+                json.dumps(metadata_json, sort_keys=True),
                 content,
                 vector,
             ),

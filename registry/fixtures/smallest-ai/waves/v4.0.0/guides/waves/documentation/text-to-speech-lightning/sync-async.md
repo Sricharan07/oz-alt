@@ -1,0 +1,168 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Sync & Async Synthesis
+
+> Generate speech synchronously or concurrently — REST API examples.
+
+Generate speech via the REST API — synchronously (one request, complete audio) or asynchronously (multiple requests in parallel).
+
+**Sample output (sync, voice: magnus):**
+
+  Your browser does not support the audio element.
+
+## Requirements
+
+* An API key from the [Smallest AI Console](https://app.smallest.ai/dashboard/api-keys?utm_source=documentation\&utm_medium=text-to-speech)
+* For Python: `requests`
+* For JavaScript: Node.js 18+ (built-in `fetch`)
+
+```bash
+export SMALLEST_API_KEY="your-api-key-here"
+```
+
+## Synchronous Text to Speech
+
+Send text, receive complete audio in the response:
+
+```bash cURL
+curl -X POST "https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech" \
+  -H "Authorization: Bearer $SMALLEST_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Hello, this is a test of synchronous speech synthesis.",
+    "voice_id": "magnus",
+    "sample_rate": 24000,
+    "output_format": "wav"
+  }' --output sync_output.wav
+```
+
+```python Python
+import os
+import requests
+
+API_KEY = os.environ["SMALLEST_API_KEY"]
+
+response = requests.post(
+    "https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech",
+    headers={
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "text": "Hello, this is a test of synchronous speech synthesis.",
+        "voice_id": "magnus",
+        "sample_rate": 24000,
+        "output_format": "wav",
+    },
+)
+
+with open("sync_output.wav", "wb") as f:
+    f.write(response.content)
+```
+
+```javascript JavaScript
+const fs = require("fs");
+
+const response = await fetch(
+  "https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech",
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.SMALLEST_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text: "Hello, this is a test of synchronous speech synthesis.",
+      voice_id: "magnus",
+      sample_rate: 24000,
+      output_format: "wav",
+    }),
+  }
+);
+
+const buffer = Buffer.from(await response.arrayBuffer());
+fs.writeFileSync("sync_output.wav", buffer);
+```
+
+## Asynchronous Text to Speech
+
+For concurrent requests (e.g., generating multiple audio files in parallel):
+
+```python Python (asyncio)
+import os
+import asyncio
+import aiohttp
+
+API_KEY = os.environ["SMALLEST_API_KEY"]
+URL = "https://api.smallest.ai/waves/v1/lightning-v3.1/get_speech"
+
+async def synthesize(session, text, filename):
+    async with session.post(URL, headers={
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }, json={
+        "text": text,
+        "voice_id": "magnus",
+        "sample_rate": 24000,
+        "output_format": "wav",
+    }) as resp:
+        audio = await resp.read()
+        with open(filename, "wb") as f:
+            f.write(audio)
+        print(f"Saved {filename}")
+
+async def main():
+    async with aiohttp.ClientSession() as session:
+        await asyncio.gather(
+            synthesize(session, "First sentence.", "async_1.wav"),
+            synthesize(session, "Second sentence.", "async_2.wav"),
+            synthesize(session, "Third sentence.", "async_3.wav"),
+        )
+
+asyncio.run(main())
+```
+
+The `smallestai` Python SDK's `WavesClient` and `AsyncWavesClient` synthesis methods are being updated. Use the `requests` / `aiohttp` examples above until the next SDK release. (Streaming synthesis via `WavesStreamingTTS` works — see [Streaming TTS](/waves/documentation/text-to-speech-lightning/streaming).)
+
+## Parameters
+
+| Parameter             | Type   | Default    | Description                                                                                                                                                                                                                                                                             |
+| --------------------- | ------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`                | string | *required* | Text to synthesize (max \~250 chars recommended)                                                                                                                                                                                                                                        |
+| `voice_id`            | string | *required* | Voice to use (e.g., `magnus`, `olivia`, `aarush`)                                                                                                                                                                                                                                       |
+| `sample_rate`         | int    | `44100`    | `8000`, `16000`, `24000`, or `44100` Hz                                                                                                                                                                                                                                                 |
+| `speed`               | float  | `1.0`      | Speech rate multiplier (`0.5` to `2.0`)                                                                                                                                                                                                                                                 |
+| `language`            | string | `en`       | Language code. `auto` for code-switching detection. Indian: `en`, `hi`, `mr`, `kn`, `ta`, `bn`, `gu`, `te`, `ml`, `pa`, `or`. European: `es`. See the [Lightning v3.1 model card](/waves/model-cards/text-to-speech/lightning-v-3-1#supported-languages) for per-language voice counts. |
+| `output_format`       | string | `pcm`      | Audio format: `pcm`, `wav`, `mp3`, `ulaw`, or `alaw`                                                                                                                                                                                                                                    |
+| `pronunciation_dicts` | array  | —          | List of [pronunciation dictionary](/waves/documentation/text-to-speech-lightning/pronunciation-dictionaries) IDs                                                                                                                                                                        |
+
+You can override any parameter per request:
+
+```python
+# ci:skip — fragment; assumes URL/headers/requests from the synchronous example above
+# Override speed and sample rate for a single call
+response = requests.post(URL, headers=headers, json={
+    "text": "Fast and high quality.",
+    "voice_id": "magnus",
+    "speed": 1.5,
+    "sample_rate": 44100,
+    "output_format": "mp3",
+})
+```
+
+## When to Use Each Mode
+
+* **Synchronous**: Real-time voice assistants, chatbot responses, single audio generation
+* **Asynchronous**: Batch processing, generating multiple audio files, audiobook chapters, concurrent API calls
+
+For real-time streaming where audio starts playing before generation completes, see [Streaming TTS](/waves/documentation/text-to-speech-lightning/streaming).
+
+**Full runnable source:** [quickstart-python.py](https://github.com/smallest-inc/cookbook/blob/main/text-to-speech/quickstart-python.py)
+
+## Need Help?
+
+Check out the [API Reference](/waves/api-reference) for the full endpoint specification, or ask on [Discord](https://discord.gg/9WtSXv26WE).

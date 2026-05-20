@@ -1,0 +1,371 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Pulse
+
+> High-accuracy, low-latency speech-to-text model built for real-time transcription across 38 languages, with streaming and non-streaming support.
+
+Pulse is a high-accuracy, low-latency speech-to-text model built for real-time transcription across 38 languages, with streaming and non-streaming support.
+
+TTFT at 1 concurrency
+
+TTFT at 100 concurrency
+
+Streaming + Non-streaming
+
+Streaming + Non-streaming
+
+## Model Overview
+
+|                                  |                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| **Developed by**                 | Smallest AI                                                                       |
+| **Model type**                   | Speech-to-Text                                                                    |
+| **Languages**                    | 38 supported (plus `multi`, `multi-eu`, `multi-indic`, `multi-asian` aggregators) |
+| **License**                      | Proprietary                                                                       |
+| **Model format (non-streaming)** | `pulse_offline__.smlst`                                            |
+| **Model format (streaming)**     | `pulse_streaming__.smlst`                                          |
+| **Documentation**                | [docs.smallest.ai/waves](https://docs.smallest.ai/waves)                          |
+| **Console**                      | [console.smallest.ai](https://console.smallest.ai)                                |
+| **Support**                      | [support@smallest.ai](mailto:support@smallest.ai)                                 |
+
+## Key Capabilities
+
+Ultra-low latency architecture delivering 64ms TTFT at 1 concurrency and 300ms at 100 concurrent requests — designed for live transcription and conversational AI.
+
+38 languages supported across streaming and non-streaming modes, with automatic language detection and code-switching within a single session.
+
+Built-in redaction of personal and payment card data across both streaming and non-streaming use cases.
+
+Automatic multi-speaker identification across both streaming and non-streaming modes, with per-word and per-utterance speaker labels.
+
+Background noise handling built into the model.
+
+Supports multi-language audio within a single session. Best used by setting the known primary language (e.g. `es` for Spanish handles English+Spanish automatically).
+
+## Performance & Benchmarks
+
+Pulse STT is evaluated against three open-source datasets — [FLEURS](https://huggingface.co/datasets/google/fleurs), [ESB](https://huggingface.co/datasets/esb/datasets), and [WildASR](https://huggingface.co/datasets/bosonai/WildASR) — and one internal English perturbation suite. Word Error Rate (WER) by language. Lower is better. `NA` = not available or not supported by that provider.
+
+For the full benchmark comparison across every dataset, see the [Performance page](/waves/documentation/speech-to-text-pulse/benchmarks/performance).
+
+### FLEURS — Streaming
+
+| Language       | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| -------------- | -------------- | --------------- | --------------- |
+| **Italian**    | **4.41%**      | 11.05%          | 6.99%           |
+| **English**    | **4.55%**      | 15.59%          | 11.21%          |
+| **Spanish**    | **5.99%**      | 10.67%          | 7.52%           |
+| **Portuguese** | **8.32%**      | 14.15%          | 11.46%          |
+| **German**     | **9.5%**       | 11.1%           | 10.15%          |
+| **French**     | **10.71%**     | 14.3%           | 12.07%          |
+| **Russian**    | **14.35%**     | NA              | NA              |
+| **Dutch**      | **11.90%**     | NA              | NA              |
+
+| Language      | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| ------------- | :------------: | :-------------: | :-------------: |
+| **Hindi**     |    **8.3%**    |      20.0%      |      15.46%     |
+| **Marathi**   |   **15.68%**   |        NA       |        NA       |
+| **Malayalam** |   **15.91%**   |        NA       |        NA       |
+| **Kannada**   |   **16.97%**   |        NA       |        NA       |
+| **Bengali**   |   **17.48%**   |        NA       |        NA       |
+| **Gujarati**  |   **20.05%**   |        NA       |        NA       |
+| **Tamil**     |   **20.15%**   |        NA       |        NA       |
+| **Oriya**     |   **22.74%**   |        NA       |        NA       |
+| **Telugu**    |   **24.79%**   |        NA       |        NA       |
+
+### FLEURS — Pre-recorded
+
+| Language       | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| -------------- | -------------- | --------------- | --------------- |
+| **English**    | **4.55%**      | 7.9%            | 6.7%            |
+| **Italian**    | **3.0%**       | 10.7%           | 6.2%            |
+| **Spanish**    | **3.2%**       | 8.6%            | 4.1%            |
+| **Portuguese** | **5.0%**       | 9.9%            | 7.5%            |
+| **German**     | **6.4%**       | 8.2%            | 8.5%            |
+| **French**     | **7.1%**       | 13.3%           | 10.7%           |
+| **Russian**    | 9.6%           | 7.9%            | 11.8%           |
+| **Ukrainian**  | **7.5%**       | 12.4%           | NA              |
+| **Polish**     | **10.3%**      | 12.2%           | NA              |
+| **Dutch**      | 15.0%          | 16.3%           | 12.5%           |
+| **Czech**      | **12.4%**      | 22.9%           | 19.2%           |
+| **Slovak**     | **13.5%**      | 31.2%           | NA              |
+| **Swedish**    | 18.7%          | 17.7%           | 14.3%           |
+| **Finnish**    | 18.3%          | 14.1%           | 13.2%           |
+| **Latvian**    | **16.5%**      | 48.7%           | NA              |
+| **Romanian**   | **17.8%**      | 36.0%           | NA              |
+| **Estonian**   | **17.8%**      | 49.0%           | NA              |
+| **Bulgarian**  | **24.1%**      | 32.7%           | NA              |
+| **Danish**     | 19.8%          | 21.1%           | 16.1%           |
+| **Hungarian**  | **22.5%**      | 31.8%           | 28.6%           |
+| **Maltese**    | **25.5%**      | NA              | NA              |
+| **Lithuanian** | **25.1%**      | 44.9%           | NA              |
+
+| Language      | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| ------------- | :------------: | :-------------: | :-------------: |
+| **Hindi**     |    **6.3%**    |      23.5%      |      23.6%      |
+| **Kannada**   |    **9.8%**    |        NA       |        NA       |
+| **Malayalam** |    **10.0%**   |        NA       |        NA       |
+| **Marathi**   |    **11.5%**   |        NA       |        NA       |
+| **Gujarati**  |    **12.3%**   |        NA       |        NA       |
+| **Telugu**    |    **14.3%**   |        NA       |        NA       |
+| **Oriya**     |    **14.8%**   |        NA       |        NA       |
+| **Bengali**   |    **16.4%**   |        NA       |        NA       |
+| **Punjabi**   |    **18.3%**   |        NA       |        NA       |
+| **Tamil**     |    **21.6%**   |        NA       |        NA       |
+
+### Hindi — multi-dataset (Streaming)
+
+WER across seven Hindi datasets covering read speech, conversational speech, telephony / contact-center audio, and noise-augmented variants. Compared against IndicWhisper, Sarvam Saaras v3, and Deepgram Nova-3. Lower is better.
+
+| Dataset              | Smallest Pulse | IndicWhisper | Sarvam Saaras v3 | Deepgram Nova-3 |
+| -------------------- | :------------: | :----------: | :--------------: | :-------------: |
+| **FLEURS**           |      9.55      |     15.00    |       8.31       |      14.09      |
+| **Kathbath**         |      9.71      |     10.30    |       8.15       |      16.22      |
+| **Kathbath (noisy)** |      10.94     |     12.00    |       10.81      |      17.06      |
+| **Common Voice**     |    **11.20**   |     11.40    |       11.36      |      23.55      |
+| **Indic-TTS**        |    **6.39**    |     7.60     |       6.49       |      10.72      |
+| **MUCS**             |      9.19      |     12.00    |       8.96       |      16.20      |
+| **Gramvaani**        |    **21.43**   |     26.80    |       21.80      |      31.44      |
+
+For the full breakdown including training-data and evaluation-protocol notes, see the [Performance page](/waves/documentation/speech-to-text-pulse/benchmarks/performance#hindi-multi-dataset-streaming).
+
+### English STT — ESB Dataset (Streaming)
+
+A Hugging Face benchmark suite aggregating 8 English speech datasets across diverse domains (audiobooks, parliament, meetings, finance, etc.) to test STT generalization.
+
+*Evaluated on the open-source Hugging Face ESB datasets. Smallest Pulse numbers from internal evaluation.*
+
+| Dataset               | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| --------------------- | -------------- | --------------- | --------------- |
+| **LibriSpeech Clean** | **1.80**       | 4.35            | 3.71            |
+| **LibriSpeech Other** | **3.94**       | 9.36            | 7.72            |
+| **Common Voice**      | **9.20**       | 17.79           | 14.59           |
+| **VoxPopuli**         | **3.17**       | 9.95            | 9.38            |
+| **TEDELIUM**          | **2.36**       | 4.35            | 3.57            |
+| **GigaSpeech**        | **4.74**       | 11.63           | 10.05           |
+| **SPGISpeech**        | **2.67**       | 5.26            | 3.28            |
+| **Earnings22**        | **8.73**       | 18.98           | 15.34           |
+| **AMI**               | **11.93**      | 19.86           | 16.06           |
+| **Overall**           | **5.39**       | 11.28           | 9.30            |
+
+### ASR Robustness — WildASR Dataset (Streaming)
+
+An open-source robustness benchmark designed to stress-test STT under real-world degraded conditions: clipping, far-field capture, background noise, phone codec compression, reverberation, and accented speech.
+
+*Evaluated on the open-source WildASR dataset. Smallest Pulse numbers from internal evaluation.*
+
+| Dataset           | Smallest Pulse | Deepgram Nova 2 | Deepgram Nova 3 |
+| ----------------- | -------------- | --------------- | --------------- |
+| **Clean**         | **4.41**       | 15.28           | 10.76           |
+| **Clipping**      | **12.93**      | 70.41           | 43.15           |
+| **Far Field**     | **12.09**      | 74.52           | 58.72           |
+| **Noise Gap**     | **9.03**       | 21.91           | 14.19           |
+| **Phone Codec**   | **5.71**       | 12.22           | 9.27            |
+| **Reverberation** | **7.91**       | 40.71           | 27.21           |
+| **Accent**        | **5.35**       | 9.17            | 7.23            |
+| **Overall**       | **8.76**       | 34.89           | 24.36           |
+
+### Internal English Perturbation Benchmark
+
+Not a public dataset. The English audio is sliced by perturbation type (Emotion, Entity, Disfluency, Noise, Accent, Silence, Speaker Diversity, Speed, Boundary, Pitch, Audio Quality, Volume) to isolate model weaknesses.
+
+| Category              | Pulse English (Streaming) | Deepgram Nova 3 (en) |
+| :-------------------- | :-----------------------: | :------------------: |
+| **Emotion**           |         **15.43%**        |        19.42%        |
+| **Entity**            |           12.14%          |        11.80%        |
+| **Disfluency**        |           11.91%          |         8.64%        |
+| **Noise**             |         **11.57%**        |        14.61%        |
+| **Accent**            |         **9.13%**         |        10.43%        |
+| **Silence**           |         **8.99%**         |        13.17%        |
+| **Speaker Diversity** |         **7.77%**         |         9.91%        |
+| **Speed**             |         **3.54%**         |         6.85%        |
+| **Boundary**          |         **3.02%**         |         6.30%        |
+| **Pitch**             |         **2.60%**         |         4.04%        |
+| **Audio Quality**     |         **2.45%**         |         4.05%        |
+| **Volume**            |         **2.11%**         |         3.59%        |
+
+## Features — Non-streaming
+
+| Feature                      | Available | Notes                                                       |
+| ---------------------------- | --------- | ----------------------------------------------------------- |
+| Speaker diarization          | Yes       | Multi-speaker identification                                |
+| PII redaction                | Yes       | Personal info redaction                                     |
+| PCI redaction                | Yes       | Payment card data redaction                                 |
+| Word-level timestamps        | Yes       | Per-word timing                                             |
+| Sentence-level timestamps    | Yes       | Requires `word_timestamps=true` to be enabled               |
+| Punctuation                  | Yes       | Auto punctuation                                            |
+| Profanity filter             | Yes       | Explicit content filtering                                  |
+| Language detection           | Yes       | Auto language ID                                            |
+| Code-switching               | Yes       | Multi-language in same audio                                |
+| Noise reduction              | Yes       | Background noise handling                                   |
+| Emotion and gender detection | Yes       | Returns the percentage score of detected emotion and gender |
+
+## Features — Streaming
+
+| Feature                   | Available | Notes                         |
+| ------------------------- | --------- | ----------------------------- |
+| Speaker diarization       | Yes       | Multi-speaker identification  |
+| Keyword boosting          | Yes       | Custom vocabulary enhancement |
+| PII redaction             | Yes       | Personal info redaction       |
+| PCI redaction             | Yes       | Payment card data redaction   |
+| Word-level timestamps     | Yes       | Per-word timing               |
+| Sentence-level timestamps | Yes       | Per-sentence timing           |
+| Punctuation               | Yes       | Auto punctuation              |
+| Profanity filter          | No        | —                             |
+| Language detection        | Yes       | Auto language ID              |
+| Code-switching            | Yes       | Multi-language in same audio  |
+| Custom vocabulary         | No        | —                             |
+| Noise reduction           | Yes       | Background noise handling     |
+
+## Supported Languages — Non-streaming
+
+| Language     | Code  | Available |
+| ------------ | ----- | --------- |
+| English      | `en`  | Yes       |
+| Italian      | `it`  | Yes       |
+| Spanish      | `es`  | Yes       |
+| Portuguese   | `pt`  | Yes       |
+| Hindi        | `hi`  | Yes       |
+| German       | `de`  | Yes       |
+| French       | `fr`  | Yes       |
+| Ukrainian    | `uk`  | Yes       |
+| Russian      | `ru`  | Yes       |
+| Kannada      | `kn`  | Yes       |
+| Malayalam    | `ml`  | Yes       |
+| Polish       | `pl`  | Yes       |
+| Marathi      | `mr`  | Yes       |
+| Gujarati     | `gu`  | Yes       |
+| Czech        | `cs`  | Yes       |
+| Slovak       | `sk`  | Yes       |
+| Telugu       | `te`  | Yes       |
+| Oriya (Odia) | `or`  | Yes       |
+| Dutch        | `nl`  | Yes       |
+| Bengali      | `bn`  | Yes       |
+| Latvian      | `lv`  | Yes       |
+| Estonian     | `et`  | Yes       |
+| Romanian     | `ro`  | Yes       |
+| Punjabi      | `pa`  | Yes       |
+| Finnish      | `fi`  | Yes       |
+| Swedish      | `sv`  | Yes       |
+| Bulgarian    | `bg`  | Yes       |
+| Tamil        | `ta`  | Yes       |
+| Hungarian    | `hu`  | Yes       |
+| Danish       | `da`  | Yes       |
+| Lithuanian   | `lt`  | Yes       |
+| Maltese      | `mt`  | Yes       |
+| Japanese     | `ja`  | Yes       |
+| Cantonese    | `yue` | Yes       |
+| Mandarin     | `zh`  | Yes       |
+| Korean       | `ko`  | Yes       |
+| Tagalog      | `tl`  | Yes       |
+| Indonesian   | `id`  | Yes       |
+| Malay        | `ms`  | Yes       |
+
+## Supported Languages — Streaming
+
+| Language     | Code  | Available |
+| ------------ | ----- | --------- |
+| English      | `en`  | Yes       |
+| Italian      | `it`  | Yes       |
+| Spanish      | `es`  | Yes       |
+| Portuguese   | `pt`  | Yes       |
+| Hindi        | `hi`  | Yes       |
+| German       | `de`  | Yes       |
+| French       | `fr`  | Yes       |
+| Ukrainian    | `uk`  | Yes       |
+| Russian      | `ru`  | Yes       |
+| Kannada      | `kn`  | Yes       |
+| Malayalam    | `ml`  | Yes       |
+| Polish       | `pl`  | Yes       |
+| Marathi      | `mr`  | Yes       |
+| Gujarati     | `gu`  | Yes       |
+| Czech        | `cs`  | Yes       |
+| Slovak       | `sk`  | Yes       |
+| Telugu       | `te`  | Yes       |
+| Oriya (Odia) | `or`  | Yes       |
+| Dutch        | `nl`  | Yes       |
+| Bengali      | `bn`  | Yes       |
+| Latvian      | `lv`  | Yes       |
+| Estonian     | `et`  | Yes       |
+| Romanian     | `ro`  | Yes       |
+| Punjabi      | `pa`  | Yes       |
+| Finnish      | `fi`  | Yes       |
+| Swedish      | `sv`  | Yes       |
+| Bulgarian    | `bg`  | Yes       |
+| Tamil        | `ta`  | Yes       |
+| Hungarian    | `hu`  | Yes       |
+| Danish       | `da`  | Yes       |
+| Lithuanian   | `lt`  | Yes       |
+| Maltese      | `mt`  | Yes       |
+| Japanese     | `ja`  | Yes       |
+| Cantonese    | `yue` | Yes       |
+| Mandarin     | `zh`  | Yes       |
+| Korean       | `ko`  | Yes       |
+| Tagalog      | `tl`  | Yes       |
+| Indonesian   | `id`  | Yes       |
+| Malay        | `ms`  | Yes       |
+
+## Best Practices
+
+### Specify the language parameter when known
+
+When the language of the audio is known in advance, always set it explicitly rather than relying on automatic detection. This yields better transcription accuracy because the model can optimize directly for that language without needing to first identify it.
+
+For example, setting the language parameter to `es` (Spanish) tells the model to expect Spanish audio, which also handles English+Spanish code-switching scenarios. This produces more accurate outputs compared to using `multi-eu` or `multi`.
+
+| Parameter  | Use case                                                                 |
+| ---------- | ------------------------------------------------------------------------ |
+| `en`       | English                                                                  |
+| `es`       | Spanish (handles English+Spanish)                                        |
+| `hi`       | Hindi (handles English+Hindi)                                            |
+| `multi-eu` | Unknown European-language audio (auto-detects across the European set)   |
+| `multi`    | Truly unknown or mixed-language audio (full multilingual auto-detection) |
+
+**When to use `multi-eu` or `multi`:**
+
+* When the language is truly unknown beforehand
+* When processing audio from varied or unpredictable sources
+* Prefer `multi-eu` for European-language input; use `multi` only for truly mixed multilingual audio
+
+## Use Cases
+
+### Direct use
+
+* Real-time call transcription
+* Voice assistant input
+* Meeting transcription
+* Accessibility and captioning
+* Customer support recording analysis
+
+### Downstream use
+
+* Multi-turn conversational agents
+* Voice-to-text pipelines
+* Telephony and IVR systems
+* Content indexing and search
+* Compliance and audit logging
+
+## Safety & Compliance
+
+Pulse must not be used for:
+
+* Recording or transcribing individuals without their explicit consent
+* Surveillance, stalking, or any form of unauthorized monitoring
+* Any illegal or unethical purposes
+
+Additionally:
+
+* Usage is monitored for policy compliance
+* For compliance documentation (GDPR, SOC2, HIPAA), contact [support@smallest.ai](mailto:support@smallest.ai)
+
+## Contact
+
+|                   |                                                          |
+| ----------------- | -------------------------------------------------------- |
+| **Support**       | [support@smallest.ai](mailto:support@smallest.ai)        |
+| **Documentation** | [docs.smallest.ai/waves](https://docs.smallest.ai/waves) |
+| **Console**       | [console.smallest.ai](https://console.smallest.ai)       |

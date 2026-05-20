@@ -1,0 +1,34 @@
+{
+  "errors": [],
+  "metrics": {
+    "chunks": 3829,
+    "content_types": {
+      "api_reference": 345,
+      "cli": 552,
+      "code_example": 1592,
+      "config": 1100,
+      "error_ref": 54,
+      "prose": 186
+    },
+    "docs_authoring_chunks": 0,
+    "documents": 245,
+    "duplicate_chunk_ratio": 0.0,
+    "duplicate_source_documents": 0,
+    "frontmatter_chunks": 0,
+    "index_boilerplate_chunks": 0,
+    "junk_documents": 1,
+    "long_heading_paths": 0,
+    "long_source_anchors": 0,
+    "max_chunk_tokens": 1200,
+    "missing_source_anchors": 0,
+    "missing_token_counts": 0,
+    "oversized_chunks": 0,
+    "parent_child_chunks": 0,
+    "policy_rejected_documents": 33,
+    "rejected_documents": 34,
+    "source_documents": 243,
+    "symbols": 26
+  },
+  "passed": true,
+  "warnings": []
+}

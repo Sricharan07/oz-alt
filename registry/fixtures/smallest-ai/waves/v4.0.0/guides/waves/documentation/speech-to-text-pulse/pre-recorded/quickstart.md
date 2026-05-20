@@ -1,0 +1,203 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Quickstart
+
+> Get started with transcribing pre-recorded audio files using the Waves STT API
+
+This guide shows you how to convert an audio file into text using Smallest AI's Pulse STT model.
+
+# Pre-Recorded Audio
+
+> Transcribe pre-recorded audio files using synchronous HTTPS POST requests. Perfect for batch processing, archived media, and offline transcription workflows.
+
+The Pre-Recorded API allows you to upload audio files and receive complete transcripts in a single request. It can process an audio file uploaded as raw bytes or take a URL to retrieve one from a remote server.
+
+## When to Use Pre-Recorded Transcription
+
+* **Batch processing**: Transcribe multiple audio files at once
+* **Archived media**: Process existing recordings, podcasts, or videos
+* **Offline workflows**: Upload files that are already stored locally or in cloud storage
+* **Complete transcripts**: When you need the full transcription before proceeding
+
+## Endpoint
+
+```
+POST https://api.smallest.ai/waves/v1/pulse/get_text
+```
+
+## Authentication
+
+Head over to the [smallest console](https://app.smallest.ai/dashboard/api-keys) to generate an API key, if not done previously. Also look at [Authentication guide](/waves/documentation/getting-started/authentication) for more information about API keys and their usage.
+
+Include your API key in the Authorization header:
+
+```http
+Authorization: Bearer SMALLEST_API_KEY
+```
+
+## Example Request
+
+The API supports two input methods: **Raw Audio Bytes** and **Audio URL**. For details on both methods, see the [Audio Specifications](/waves/documentation/speech-to-text-pulse/pre-recorded/audio-formats) guide.
+
+### Method 1: Raw Audio Bytes
+
+Upload audio files directly by sending raw audio data:
+
+```bash cURL
+# Download sample audio
+curl -L -o sample.wav "https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav"
+
+# Transcribe
+curl --request POST \
+  --url "https://api.smallest.ai/waves/v1/pulse/get_text?language=en&word_timestamps=true" \
+  --header "Authorization: Bearer $SMALLEST_API_KEY" \
+  --header "Content-Type: audio/wav" \
+  --data-binary "@sample.wav"
+```
+
+```python Python
+import os
+import requests
+
+API_KEY = os.environ["SMALLEST_API_KEY"]
+SAMPLE_URL = "https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav"
+
+# Download sample audio
+audio_data = requests.get(SAMPLE_URL).content
+
+response = requests.post(
+    "https://api.smallest.ai/waves/v1/pulse/get_text",
+    params={"language": "en", "word_timestamps": "true"},
+    headers={
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "audio/wav",
+    },
+    data=audio_data,
+    timeout=120,
+)
+
+response.raise_for_status()
+result = response.json()
+print(result["transcription"])
+```
+
+```javascript JavaScript
+const endpoint = "https://api.smallest.ai/waves/v1/pulse/get_text";
+const params = new URLSearchParams({ language: "en", word_timestamps: "true" });
+
+// Download sample audio
+const audioResponse = await fetch("https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav");
+const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+
+const response = await fetch(`${endpoint}?${params}`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.SMALLEST_API_KEY}`,
+    "Content-Type": "audio/wav",
+  },
+  body: audioBuffer,
+});
+
+const data = await response.json();
+console.log(data.transcription);
+```
+
+### Method 2: Audio URL
+
+Provide a URL to an audio file hosted remotely. This is useful when your audio files are stored in cloud storage (S3, Google Cloud Storage, etc.) or accessible via HTTP/HTTPS:
+
+```bash cURL
+curl --request POST \
+  --url "https://api.smallest.ai/waves/v1/pulse/get_text?language=en&word_timestamps=true" \
+  --header "Authorization: Bearer $SMALLEST_API_KEY" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "url": "https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav"
+  }'
+```
+
+```python Python
+import os
+import requests
+
+API_KEY = os.environ["SMALLEST_API_KEY"]
+endpoint = "https://api.smallest.ai/waves/v1/pulse/get_text"
+params = {
+    "language": "en",
+    "word_timestamps": "true",
+}
+headers = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json",
+}
+body = {
+    "url": "https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav"
+}
+
+response = requests.post(endpoint, params=params, headers=headers, json=body, timeout=120)
+response.raise_for_status()
+result = response.json()
+print(result["transcription"])
+```
+
+```javascript JavaScript
+import fetch from "node-fetch";
+
+const endpoint = "https://api.smallest.ai/waves/v1/pulse/get_text";
+const params = new URLSearchParams({
+  language: "en",
+  word_timestamps: "true",
+});
+
+const response = await fetch(`${endpoint}?${params}`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.SMALLEST_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    url: "https://github.com/smallest-inc/cookbook/raw/main/speech-to-text/getting-started/samples/audio.wav"
+  }),
+});
+
+if (!response.ok) throw new Error(await response.text());
+const data = await response.json();
+console.log(data.transcription);
+```
+
+Set `language` explicitly to match the audio for the best accuracy (`en`, `hi`, `es`, etc.). For unknown audio, pick the regional auto-detect scope: `multi-eu` (de, en, fr, it, nl, pt, ru, es), `multi-indic` (en, hi, mr, pa, gu, or, ka, ta, te, ml, bn), `multi-asian` (en, ja, ko, zh, yue), or `multi` for full multilingual auto-detection across all supported languages. Omitting `language` routes to `multi-eu` and can mis-detect on non-European audio.
+
+## Example Response
+
+A successful request returns a JSON object with the transcription:
+
+```json
+{
+  "status": "success",
+  "transcription": "Hello, this is a test transcription.",
+  "words": [
+    {"start": 0.48, "end": 1.12, "word": "Hello,"},
+    {"start": 1.12, "end": 1.28, "word": "this"},
+    {"start": 1.28, "end": 1.44, "word": "is"},
+    {"start": 1.44, "end": 2.16, "word": "a"},
+    {"start": 2.16, "end": 2.96, "word": "test"},
+    {"start": 2.96, "end": 3.76, "word": "transcription."}
+  ],
+  "utterances": [
+    {"start": 0.48, "end": 3.76, "text": "Hello, this is a test transcription."}
+  ]
+}
+```
+
+**Full runnable source files:** [Python](https://github.com/smallest-inc/cookbook/blob/main/speech-to-text/transcribe-python.py) | [JavaScript](https://github.com/smallest-inc/cookbook/blob/main/speech-to-text/transcribe-javascript.js) | [cURL](https://github.com/smallest-inc/cookbook/blob/main/speech-to-text/transcribe-curl.sh)
+
+## Next Steps
+
+* Learn about [supported audio formats](/waves/documentation/speech-to-text-pulse/pre-recorded/audio-formats).
+* Decide which enrichment options to enable in the [features guide](/waves/documentation/speech-to-text-pulse/pre-recorded/features).
+* Configure asynchronous callbacks with [webhooks](/waves/documentation/speech-to-text-pulse/pre-recorded/webhooks).
+* Review a full [code example](/waves/documentation/speech-to-text-pulse/pre-recorded/code-examples) here.

@@ -1,0 +1,34 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Authentication
+
+> Learn how to authenticate requests using API keys.
+
+## Obtaining Your API Key
+
+To access our API, you need an API key. You can generate your API key by visiting the [Smallest AI Console](https://app.smallest.ai/dashboard/api-keys?utm_source=documentation\&utm_medium=api-references).
+
+## Using API Keys
+
+Once you have an API key, you must include it in the `Authorization` header of each request using the **Bearer Token** scheme.
+
+### Example Request
+
+```http
+GET /v1/some-endpoint HTTP/1.1
+Host: api.smallest.ai
+Authorization: Bearer YOUR_API_KEY_HERE
+```
+
+## Security Best Practices
+
+* **Keep your API key private**: Do not expose your key in client-side applications.
+* **Rotate keys periodically**: Regularly regenerate your API keys to enhance security.
+* **Use environment variables**: Store API keys securely instead of hardcoding them in your source code.
+* **Monitor API usage**: Keep track of your API calls to detect any unauthorized access.
+
+For more details, visit our [API Documentation](/waves/documentation/getting-started/authentication#model-overview).

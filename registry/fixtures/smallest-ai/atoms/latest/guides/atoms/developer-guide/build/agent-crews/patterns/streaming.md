@@ -1,0 +1,213 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Streaming
+
+> Stream responses to minimize latency and improve user experience.
+
+Streaming sends response chunks to the user as they're generated, rather than waiting for the complete response. For voice agents, this is essential — users hear the first words immediately instead of waiting in silence.
+
+## Why Streaming Matters
+
+| Approach      | Time to First Audio | User Experience                     |
+| ------------- | ------------------- | ----------------------------------- |
+| Non-streaming | 800–1500ms          | Awkward silence, then full response |
+| Streaming     | 200–400ms           | Natural conversation flow           |
+
+## Basic Streaming
+
+Set `stream=True` and `yield` each `chunk.content` for instant TTS playback.
+
+```python
+async def generate_response(self):
+    response = await self.llm.chat(
+        messages=self.context.messages,
+        stream=True  # Required for streaming
+    )
+
+    async for chunk in response:
+        if chunk.content:
+            yield chunk.content  # Sent to TTS immediately
+```
+
+## Streaming with Tools
+
+Collect tool calls while streaming, execute them, then stream the follow-up response.
+
+```python
+async def generate_response(self):
+    response = await self.llm.chat(
+        messages=self.context.messages,
+        stream=True,
+        tools=self.tool_schemas
+    )
+
+    tool_calls = []
+
+    # Stream first response
+    async for chunk in response:
+        if chunk.content:
+            yield chunk.content
+        if chunk.tool_calls:
+            tool_calls.extend(chunk.tool_calls)
+
+    # Handle tools if present
+    if tool_calls:
+        results = await self.tool_registry.execute(
+            tool_calls=tool_calls, parallel=True
+        )
+
+        # Add tool calls and results to context
+        self.context.add_messages([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": str(tc.arguments)},
+                    }
+                    for tc in tool_calls
+                ],
+            },
+            *[
+                {"role": "tool", "tool_call_id": tc.id, "content": str(result)}
+                for tc, result in zip(tool_calls, results)
+            ],
+        ])
+
+        # Stream follow-up response
+        final_response = await self.llm.chat(
+            messages=self.context.messages, stream=True
+        )
+
+        async for chunk in final_response:
+            if chunk.content:
+                yield chunk.content
+```
+
+## Chunking Strategies
+
+### Word-by-Word (Default)
+
+LLMs typically stream tokens, which map roughly to words or word fragments:
+
+```python
+async for chunk in response:
+    if chunk.content:
+        yield chunk.content
+```
+
+### Sentence Buffering
+
+Buffer complete sentences for more natural speech boundaries:
+
+```python
+async def generate_response(self):
+    buffer = ""
+
+    async for chunk in response:
+        if chunk.content:
+            buffer += chunk.content
+
+            # Yield on sentence boundaries
+            while any(end in buffer for end in [". ", "! ", "? "]):
+                for end in [". ", "! ", "? "]:
+                    if end in buffer:
+                        sentence, buffer = buffer.split(end, 1)
+                        yield sentence + end.strip() + " "
+                        break
+
+    # Yield remaining content
+    if buffer.strip():
+        yield buffer
+```
+
+### Phrase Buffering
+
+Buffer by phrase for smoother speech rhythm:
+
+```python
+import re
+
+async def generate_response(self):
+    buffer = ""
+    min_phrase_length = 20  # Characters
+
+    async for chunk in response:
+        if chunk.content:
+            buffer += chunk.content
+
+            # Yield on commas, periods, or at minimum length
+            if len(buffer) >= min_phrase_length:
+                if re.search(r'[,.:;!?]\s', buffer):
+                    match = re.search(r'[,.:;!?]\s', buffer)
+                    phrase = buffer[:match.end()]
+                    buffer = buffer[match.end():]
+                    yield phrase
+
+    if buffer.strip():
+        yield buffer
+```
+
+## Intermediate Feedback
+
+Provide feedback while processing long operations:
+
+```python
+async def generate_response(self):
+    response = await self.llm.chat(...)
+
+    tool_calls = []
+    async for chunk in response:
+        if chunk.content:
+            yield chunk.content
+        if chunk.tool_calls:
+            tool_calls.extend(chunk.tool_calls)
+
+    if tool_calls:
+        # Immediate feedback
+        yield "One moment while I look that up."
+
+        # Long operation
+        results = await self.tool_registry.execute(tool_calls, parallel=True)
+
+        # Continue with results
+        # ...
+```
+
+## Streaming Best Practices
+
+**Do:** Always set `stream=True` for LLM calls. Yield chunks as soon as they're available. Provide intermediate feedback during long operations. Keep responses concise since shorter means faster to speak.
+
+**Don't:** Buffer the entire response before yielding. Never leave users in silence for more than 2 seconds. Avoid yielding empty strings or whitespace-only chunks.
+
+## Measuring Stream Performance
+
+Track time-to-first-chunk:
+
+```python
+import time
+
+async def generate_response(self):
+    start = time.time()
+    first_chunk_sent = False
+
+    response = await self.llm.chat(
+        messages=self.context.messages,
+        stream=True
+    )
+
+    async for chunk in response:
+        if chunk.content:
+            if not first_chunk_sent:
+                ttfc = (time.time() - start) * 1000
+                logger.info(f"Time to first chunk: {ttfc:.0f}ms")
+                first_chunk_sent = True
+
+            yield chunk.content
+```

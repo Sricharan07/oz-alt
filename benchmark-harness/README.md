@@ -9,12 +9,13 @@ The first benchmark scope is intentionally small:
 - `tiangolo/fastapi`
 - 10 queries per library
 
-The harness measures two layers:
+The harness measures three layers:
 
 1. Retrieval: Oz pull/search/context, expected-path hits, materialization, rough token budget.
 2. Agent evidence: an optional `gpt-5.4-mini` Codex agent must use local Oz docs and write a grounded `benchmark_answer.json`.
+3. Optional external-provider and multi-judge passes for apples-to-apples context comparison.
 
-The judge is not automated by default. The harness writes `judge_packet.md` files with the task, Oz results, agent answer, and evidence so a judge LLM or human can score consistently.
+The judge is not automated by default. The harness writes `judge_packet.md` files with the task, Oz results, agent answer, oracle text when present, and evidence so a judge LLM or human can score consistently. Use `judge.py` when you intentionally want paid model judging.
 
 ## Quick Start
 
@@ -107,6 +108,32 @@ CONTEXT7_API_KEY=... python3 benchmark-harness/context7_compare.py \
   --out benchmark-harness/runs/<run-id>
 ```
 
+Preferred provider-runner form:
+
+```bash
+CONTEXT7_API_KEY=... python3 benchmark-harness/provider_runner.py \
+  --cases benchmark-harness/cases-nextjs-expanded.json \
+  --provider context7 \
+  --library vercel/next.js \
+  --out benchmark-harness/runs/<run-id>/providers
+```
+
+Run optional multi-model judging over an existing Oz run:
+
+```bash
+OPENROUTER_API_KEY=... python3 benchmark-harness/judge.py \
+  benchmark-harness/runs/<run-id> \
+  --provider-summary benchmark-harness/runs/<run-id>/providers/context7_summary.json
+```
+
+Build a compact report:
+
+```bash
+python3 benchmark-harness/report.py \
+  benchmark-harness/runs/<run-id> \
+  --provider-summary benchmark-harness/runs/<run-id>/providers/context7_summary.json
+```
+
 ## Modes
 
 `retrieval` runs only Oz commands:
@@ -143,6 +170,21 @@ cases/<case-id>/
   agent_stderr.log
   benchmark_answer.json
   judge_packet.md
+```
+
+Provider runs write under the directory passed to `--out`:
+
+```txt
+context7_raw_results.json
+context7_case_scores.json
+context7_summary.json
+```
+
+Automated judging writes:
+
+```txt
+judge_prompts/<case-id>.md
+judge_results.json
 ```
 
 ## What This Measures
@@ -183,3 +225,17 @@ Track separately:
 - expected source used: yes/no
 - excessive context: yes/no
 - version mismatch: yes/no
+
+## Provider And Judge Design
+
+External provider comparisons are secondary. They normalize another context source into:
+
+- output token estimate
+- required-term coverage
+- expected-source signal
+- latency
+- snippet/source count
+
+That lets us compare snippet-heavy providers without changing the primary Oz path-first benchmark.
+
+The optional multi-judge pass uses an OpenAI-compatible chat API, OpenRouter by default, and a majority vote across configured models. It should be used for release analysis, not for every local edit loop.

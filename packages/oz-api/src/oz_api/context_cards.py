@@ -48,6 +48,11 @@ TASK_PATTERNS: tuple[tuple[str, str], ...] = (
     ("forms", r"\bforms?\b|\bsubmissions?\b"),
     ("typescript", r"\btypescript\b|typedroutes|types?\b"),
     ("observability", r"\binstrumentation\b|opentelemetry|web vitals|analytics"),
+    ("webhooks", r"\bwebhooks?\b|\bevents?\b|\bcallback\b"),
+    ("realtime", r"\breal[- ]?time\b|\bstream(?:ing)?\b|\bwebsocket\b|\bsse\b|server-sent events?"),
+    ("speech", r"\bspeech\b|\baudio\b|\btranscri(?:be|ption)\b|\btts\b|\bstt\b|\bvoice\b"),
+    ("sdk", r"\bsdk\b|\bclient library\b|\bpython\b|\btypescript\b|\bjavascript\b"),
+    ("auth", r"\bauth\b|\bauthentication\b|\bauthorization\b|\bapi key\b|\bbearer\b"),
 )
 
 ENTITY_STOPWORDS = {
@@ -113,6 +118,9 @@ PHRASE_FACET_PATTERNS: tuple[tuple[str, str], ...] = (
     ("webvitals", r"\bweb vitals\b"),
     ("opentelemetry", r"\bopen telemetry\b|\bopentelemetry\b"),
     ("opengraphimage", r"\bopengraph image\b|\bog image\b"),
+    ("websocket", r"\bwebsocket\b|\bweb socket\b"),
+    ("serverevents", r"\bserver-sent events?\b|\bsse\b"),
+    ("apikey", r"\bapi key\b|\bbearer token\b"),
 )
 
 FACET_SURFACES: dict[str, tuple[str, ...]] = {
@@ -129,6 +137,9 @@ FACET_SURFACES: dict[str, tuple[str, ...]] = {
     "errorboundary": ("error boundary", "error boundaries", "error-boundary"),
     "webvitals": ("web vitals", "web-vitals"),
     "opengraphimage": ("opengraph image", "opengraph-image", "og image"),
+    "websocket": ("websocket", "web socket"),
+    "serverevents": ("server-sent events", "sse", "event-stream"),
+    "apikey": ("api key", "bearer token", "authorization"),
 }
 
 
@@ -147,6 +158,7 @@ class SourceSection:
     content: str
     token_count: int
     quality_score: float
+    metadata_json: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -175,6 +187,7 @@ class ContextSnippet:
     content: str
     token_count: int
     quality_score: float
+    metadata_json: dict[str, Any]
 
 
 def build_source_sections(rows: list[dict[str, Any]]) -> list[SourceSection]:
@@ -206,6 +219,7 @@ def build_source_sections(rows: list[dict[str, Any]]) -> list[SourceSection]:
                 content=content,
                 token_count=approximate_tokens(content),
                 quality_score=max(float(row.get("quality_score") or 1.0) for row in group),
+                metadata_json=merged_metadata(group),
             )
         )
     return sections
@@ -276,6 +290,7 @@ def section_snippet_from_group(key: str, group: list[dict[str, Any]], source_sec
         content=content,
         token_count=approximate_tokens(content),
         quality_score=max(float(row.get("quality_score") or 1.0) for row in group),
+        metadata_json=merged_metadata(group),
     )
 
 
@@ -317,6 +332,7 @@ def chunk_snippet_from_row(row: dict[str, Any], source_section_id: int | None, k
         content=content,
         token_count=approximate_tokens(content),
         quality_score=float(row.get("quality_score") or 1.0),
+        metadata_json=row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {},
     )
 
 
@@ -380,6 +396,12 @@ def assembly_score(
     role = str(row.get("role") or row.get("content_type") or "")
     if role in {"code_example", "api_reference", "workflow"}:
         score += 25.0
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    if metadata.get("current") is True:
+        score += 20.0
+    if metadata.get("deprecated") is True or metadata.get("legacy") is True:
+        legacy_requested = bool({"legacy", "deprecated", "old", "migration", "migrate", "version"} & facets)
+        score += 35.0 if legacy_requested else -260.0
     path = str(row.get("matched_path") or row.get("path") or "")
     path_count = used_paths.get(path, 0)
     if path_count:
@@ -424,6 +446,9 @@ def row_facets(row: dict[str, Any], facets: set[str]) -> set[str]:
             values.extend(str(item) for item in raw)
         else:
             values.append(str(raw or ""))
+    metadata = row.get("metadata_json")
+    if isinstance(metadata, dict):
+        values.extend(str(item) for item in metadata.values())
     blob = normalize_facet(" ".join(values))
     return {facet for facet in facets if facet and facet in blob}
 
@@ -752,6 +777,15 @@ def list_of_strings(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item).strip()]
     return []
+
+
+def merged_metadata(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for row in rows:
+        metadata = row.get("metadata_json")
+        if isinstance(metadata, dict):
+            output.update(metadata)
+    return output
 
 
 def unique_strings(values: Iterable[str]) -> list[str]:

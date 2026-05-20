@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from oz_api.context_cards import (
+    build_context_snippets,
+    build_source_sections,
+    select_context_snippets,
+)
 from oz_api.ranking import local_chunk_score, local_markdown_score
 from oz_api.retrieval_common import read_jsonl
 from oz_api.storage import RegistryStorage, normalize_query
@@ -146,6 +152,242 @@ def search_from_fixtures(
         if len(deduped) >= max_results:
             break
     return deduped
+
+
+def context_snippets_from_fixtures(
+    storage: RegistryStorage,
+    query: str,
+    *,
+    library_scope: str | None,
+    max_results: int,
+    max_tokens: int,
+    content_types: list[str] | None = None,
+    fixtures_root: Any | None = None,
+) -> list[dict[str, Any]]:
+    terms = normalize_query(query)
+    scope = parse_versioned_scope(library_scope)
+    root = fixtures_root or storage.fixtures_root
+    selected_versions = selected_fixture_versions(storage, scope, fixtures_root=root)
+    candidates: list[dict[str, Any]] = []
+    synthetic_id = 1
+
+    for fixture in root.glob("*/*/*"):
+        if not fixture.is_dir():
+            continue
+        vendor, library, version = fixture.parts[-3:]
+        if (vendor, library, version) not in selected_versions:
+            continue
+        chunk_path = fixture / "_chunks.jsonl"
+        if not chunk_path.exists():
+            continue
+        for row in read_jsonl(chunk_path):
+            content_type = str(row.get("content_type") or "guide")
+            if content_types and content_type not in content_types:
+                continue
+            text = str(row.get("text") or "")
+            if not text.strip():
+                continue
+            score = context_fixture_score(row, terms, query)
+            if score <= 0:
+                continue
+            metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+            candidates.append(
+                {
+                    "id": synthetic_id,
+                    "source_document_id": None,
+                    "path": row.get("path") or "README.md",
+                    "start_line": int(row.get("start_line") or 1),
+                    "end_line": row.get("end_line"),
+                    "source_url": row.get("source_url") or row.get("canonical_url") or "",
+                    "ordinal": int(row.get("ordinal") or synthetic_id),
+                    "chunk_key": row.get("chunk_key") or f"{row.get('path')}#{synthetic_id}",
+                    "parent_chunk_key": row.get("parent_chunk_key"),
+                    "chunk_sha": row.get("chunk_sha"),
+                    "content_sha": row.get("content_sha"),
+                    "heading_path": row.get("heading_path") or [],
+                    "symbols": row.get("symbols") or [],
+                    "content_type": content_type,
+                    "role": content_type,
+                    "quality_score": float(row.get("quality_score") or 1.0),
+                    "token_count": int(row.get("token_count") or 0),
+                    "source_anchor": row.get("source_anchor") or row.get("source_url") or "",
+                    "content": text,
+                    "dedupe_canonical": row.get("dedupe_canonical", True),
+                    "source_title": "",
+                    "source_kind": row.get("source_kind") or metadata.get("source_kind") or metadata.get("source_type") or "",
+                    "source_priority": int(row.get("source_priority") or 50),
+                    "metadata_json": {
+                        **metadata,
+                        "source_kind": row.get("source_kind") or metadata.get("source_kind") or metadata.get("source_type") or "",
+                        "source_priority": row.get("source_priority"),
+                    },
+                    "library": f"{vendor}/{library}",
+                    "vendor": vendor,
+                    "version": version,
+                    "_fixture_score": score,
+                }
+            )
+            synthetic_id += 1
+
+    if not candidates:
+        return []
+    sections = build_source_sections(candidates)
+    section_ids = {section.section_key: index + 1 for index, section in enumerate(sections)}
+    snippets = build_context_snippets(candidates, section_ids)
+    rows: list[dict[str, Any]] = []
+    by_id = {int(row["id"]): row for row in candidates if row.get("id")}
+    by_path = {(str(row.get("path")), int(row.get("start_line") or 1)): row for row in candidates}
+    for snippet in snippets:
+        source = by_id.get(int(snippet.primary_chunk_id or 0)) or by_path.get((snippet.path, snippet.start_line)) or {}
+        score = context_fixture_score(
+            {
+                "text": snippet.content,
+                "path": snippet.path,
+                "content_type": snippet.role,
+                "heading_path": snippet.heading_path,
+                "symbols": snippet.symbols,
+                "metadata_json": snippet.metadata_json,
+                "source_priority": source.get("source_priority", 50),
+            },
+            terms,
+            query,
+        )
+        if score <= 0:
+            continue
+        rows.append(
+            {
+                "path": f".codo/vendors/{source.get('vendor')}/{str(source.get('library', '')).split('/')[-1]}@{source.get('version')}/{snippet.path}",
+                "line": snippet.start_line,
+                "end_line": snippet.end_line,
+                "score": score,
+                "library": source.get("library", ""),
+                "vendor": source.get("vendor", ""),
+                "version": source.get("version", ""),
+                "relative_path": snippet.path,
+                "heading_path": snippet.heading_path,
+                "symbols": snippet.symbols,
+                "content_type": snippet.role,
+                "role": snippet.role,
+                "quality_score": snippet.quality_score,
+                "matched_path": snippet.path,
+                "source_anchor": snippet.source_anchor,
+                "token_count": snippet.token_count,
+                "title": snippet.title,
+                "description": snippet.description,
+                "applies_to": snippet.applies_to,
+                "entities": snippet.entities,
+                "task_tags": snippet.task_tags,
+                "code_language": snippet.code_language,
+                "code": snippet.code,
+                "constraints": snippet.constraints,
+                "metadata_json": snippet.metadata_json,
+                "retrieval_mode": "fixture_context_snippets",
+                "degraded": True,
+                "_matched_text": snippet.content,
+                "_parent_text": "",
+            }
+        )
+    rows.sort(key=lambda row: (-float(row.get("score") or 0), str(row.get("path") or ""), int(row.get("line") or 1)))
+    return select_context_snippets(rows[: max(max_results * 8, 40)], query, max_results=max_results, max_tokens=max_tokens)
+
+
+def context_fixture_score(row: dict[str, Any], terms: list[str], query: str) -> int:
+    base = local_chunk_score(row, terms)
+    text = str(row.get("text") or row.get("content") or "").lower()
+    path = str(row.get("path") or "").lower()
+    headings = " ".join(str(item).lower() for item in row.get("heading_path") or [])
+    symbols = " ".join(str(item).lower() for item in row.get("symbols") or [])
+    content_type = str(row.get("content_type") or row.get("role") or "")
+    query_lower = query.lower()
+    score = base
+
+    setup_query = any(term in query_lower for term in ("install", "initialize", "api key", "authenticate", "environment", "quickstart", "setup"))
+    code_query = any(term in query_lower for term in ("build", "example", "how do i", "write", "create", "call", "upload", "stream", "save"))
+    schema_query = any(term in query_lower for term in ("schema", "request body", "fields", "model", "response", "dto"))
+    credential_query = any(term in query_lower for term in ("api key", "authenticate", "auth", "credential", "environment", "secret"))
+    host_query = any(term in query_lower for term in ("custom host", "api host", "host endpoint", "endpoint", "base url", "base_url", "host"))
+
+    if setup_query:
+        if "pip install" in text or "npm install" in text:
+            score += 260
+        if "api key" in text or "smallest_api_key" in text or "environment variable" in text:
+            score += 170
+        if re.search(r"\b[A-Za-z_]*Client\(\)", row_text(row)) or " client =" in text:
+            score += 130
+        if "installation" in headings or "quickstart" in path or "getting-started" in path:
+            score += 150
+        if content_type == "cli":
+            score += 160
+        if any(term in headings for term in ("installation", "api key", "environment", "authenticate", "credentials")):
+            score += 180
+        if any(term in path for term in ("readme", "quickstart", "getting-started", "installation", "auth")):
+            score += 170
+        if generated_or_internal_path(path, symbols, row) and not any(term in headings for term in ("installation", "api key", "environment", "authenticate", "credentials")):
+            score -= 320
+    if credential_query:
+        if any(term in headings for term in ("api key", "environment", "authenticate", "credentials", "secret")):
+            score += 360
+        if re.search(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", row_text(row)):
+            score += 160
+        if "api key" in text or "environment variable" in text or "export " in text:
+            score += 180
+    if host_query:
+        if "configuration" in text and ("host" in text or "base url" in text or "endpoint" in text):
+            score += 520
+        if re.search(r"\bhost\s*=", row_text(row)) or "base_url" in text or "base url" in text:
+            score += 360
+        if "configuration" in headings or "configuration" in symbols:
+            score += 260
+    if code_query:
+        if "```" in text:
+            score += 90
+        if content_type == "code_example":
+            score += 70
+        if "from " in text or "import " in text:
+            score += 50
+    if schema_query:
+        if content_type == "api_reference" or "models/" in path or "request" in path or "response" in path:
+            score += 120
+    elif generated_or_internal_path(path, symbols, row):
+        score -= 180
+
+    if "readme" in path or "llms" in path:
+        score += 140
+    if "/examples/" in path or "example" in headings:
+        score += 70
+    source_priority = int(row.get("source_priority") or 50)
+    score += max(0, 40 - min(source_priority, 40))
+    if content_type == "index":
+        score -= 200
+    score += query_overlap_bonus(terms, " ".join([path, headings, symbols, text[:1200]]))
+    return max(score, 0)
+
+
+def row_text(row: dict[str, Any]) -> str:
+    return str(row.get("text") or row.get("content") or "")
+
+
+def query_overlap_bonus(terms: list[str], corpus: str) -> int:
+    if not terms:
+        return 0
+    lowered = corpus.lower()
+    hits = sum(1 for term in set(terms) if term and term in lowered)
+    return min(hits * 18, 180)
+
+
+def generated_or_internal_path(path: str, symbols: str, row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    source_kind = str(metadata.get("source_kind") or metadata.get("source_type") or row.get("source_kind") or "")
+    compact = "".join(ch for ch in symbols.lower() if ch.isalnum())
+    if source_kind == "source_code" and any(term in compact for term in ("response", "request", "dto", "schema")):
+        return True
+    return (
+        "api-reference/source/" in path
+        or "/models/" in path
+        or path.endswith("-init-py.md")
+        or "response" in path
+        or "request" in path
+    )
 
 
 def default_catalog_entries(storage: RegistryStorage) -> list[dict[str, Any]]:

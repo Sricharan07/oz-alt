@@ -346,7 +346,6 @@ struct SearchHit {
     score: usize,
     preview: String,
     content_type: String,
-    snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -424,6 +423,19 @@ struct SearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ContextResponse {
+    #[serde(
+        rename = "codeSnippets",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    code_snippets: Vec<CodeSnippet>,
+    #[serde(
+        rename = "infoSnippets",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    info_snippets: Vec<InfoSnippet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     results: Vec<ContextResult>,
     #[serde(default)]
     libraries_to_pull: Vec<LibraryToPull>,
@@ -433,6 +445,58 @@ struct ContextResponse {
     retrieval_mode: Option<String>,
     #[serde(default)]
     degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodeSnippet {
+    #[serde(rename = "codeTitle", default)]
+    code_title: String,
+    #[serde(rename = "codeDescription", default)]
+    code_description: String,
+    #[serde(rename = "codeId", default)]
+    code_id: String,
+    #[serde(rename = "codeLanguage", default)]
+    code_language: String,
+    #[serde(rename = "codeTokens", default)]
+    code_tokens: usize,
+    #[serde(
+        rename = "generationDate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    generation_date: Option<String>,
+    #[serde(rename = "pageTitle", default)]
+    page_title: String,
+    #[serde(rename = "codeList", default)]
+    code_list: Vec<CodeBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CodeBlock {
+    #[serde(default)]
+    language: String,
+    #[serde(default)]
+    code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InfoSnippet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(rename = "pageId", default, skip_serializing_if = "Option::is_none")]
+    page_id: Option<String>,
+    #[serde(rename = "pageTitle", default, skip_serializing_if = "Option::is_none")]
+    page_title: Option<String>,
+    #[serde(default)]
+    content: String,
+    #[serde(rename = "contentTokens", default)]
+    content_tokens: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

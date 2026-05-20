@@ -1,0 +1,2626 @@
+{
+  "document_count": 243,
+  "library": "waves",
+  "schema_version": 1,
+  "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/streaming",
+  "sources": [
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/llms-full.txt",
+      "metadata_json": {
+        "current": true,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "llms_full",
+        "source_type": "llms_full"
+      },
+      "path": "guides/waves/llms-full.txt.md",
+      "source_kind": "llms_full",
+      "source_url": "https://docs.smallest.ai/waves/llms-full.txt"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/cookbook/main/README.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-cookbook-readme-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/cookbook/main/README.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/AgentsApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-agentsapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/AgentsApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/AgentTemplatesApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-agenttemplatesapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/AgentTemplatesApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/Api.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-api-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/Api.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/CallsApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-callsapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/CallsApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/CampaignsApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-campaignsapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/CampaignsApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/KnowledgeBaseApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-knowledgebaseapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/KnowledgeBaseApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/LogsApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-logsapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/LogsApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsDelete200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionsdelete200response.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsDelete200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionsget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsGet404Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionsget404response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsGet404Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPost201Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionspost201response-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPost201Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPost400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionspost400response-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPost400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentagentidwebhooksubscriptionspostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentAgentIdWebhookSubscriptionsPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTO.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentdto-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTO.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOLanguage.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentdtolanguage-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOLanguage.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOLanguageSwitching.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentdtolanguageswitching-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOLanguageSwitching.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOSynthesizer.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentdtosynthesizer-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOSynthesizer.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOSynthesizerVoiceConfig.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentdtosynthesizervoiceconfig-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentDTOSynthesizerVoiceConfig.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentFromTemplatePost200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentfromtemplatepost200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentFromTemplatePost200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdDelete200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentiddelete200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdDelete200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatch200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatch200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatch200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestLanguage.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestlanguage-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestLanguage.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestLanguageSwitching.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestlanguageswitching-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestLanguageSwitching.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizer.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestsynthesizer-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizer.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfig.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestsynthesizervoiceconfig-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfig.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfigOneOf.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestsynthesizervoiceconfigoneof-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfigOneOf.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfigOneOf1.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidpatchrequestsynthesizervoiceconfigoneof1-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdPatchRequestSynthesizerVoiceConfigOneOf1.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedataedgesinner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInnerData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedataedgesinnerdata-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInnerData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInnerMarkerEnd.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedataedgesinnermarker.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataEdgesInnerMarkerEnd.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedatanodesinner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedatanodesinnerdata-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerDataVariables.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedatanodesinnerdatava.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerDataVariables.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerPosition.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget200responsedatanodesinnerpositi.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet200ResponseDataNodesInnerPosition.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet404Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agentidworkflowget404response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentIdWorkflowGet404Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplateGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agenttemplateget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplateGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplateGet200ResponseDataInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agenttemplateget200responsedatainner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplateGet200ResponseDataInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplatesApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-agenttemplatesapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AgentTemplatesApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ApiResponse.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-apiresponse-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ApiResponse.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceGet200ResponseDataInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceget200responsedatainner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceGet200ResponseDataInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdDelete200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceiddelete200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdDelete200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdDelete400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceiddelete400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdDelete400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidget400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet403Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidget403response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet403Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet404Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidget404response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdGet404Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDelete200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersdelete200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDelete200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDelete200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersdelete200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDelete200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDeleteRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersdeleterequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersDeleteRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200ResponseDataMembersInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersget200responsedatamembersinner-m.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet200ResponseDataMembersInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersget400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet500Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmembersget500response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersGet500Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspost200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200ResponseDataInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspost200responsedatainner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200ResponseDataInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200ResponseDataInnerData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspost200responsedatainnerdata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost200ResponseDataInnerData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspost400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost403Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspost403response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPost403Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberspostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "protocol": "sse",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberssearchget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "protocol": "sse",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberssearchget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200ResponseDataSearchInfo.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "protocol": "sse",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberssearchget200responsedatasearchin.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet200ResponseDataSearchInfo.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "protocol": "sse",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberssearchget400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet500Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "protocol": "sse",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audienceidmemberssearchget500response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudienceIdMembersSearchGet500Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audiencepost200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audiencepost200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost400Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-audiencepost400response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/AudiencePost400Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/BadRequestErrorResponse.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-badrequesterrorresponse-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/BadRequestErrorResponse.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGetRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaigngetrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignGetRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignIdGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignidget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignIdGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignIdGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignidget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignIdGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignPost201Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignpost201response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignPost201Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-campaignpostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CampaignPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationIdGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-conversationidget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationIdGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationIdGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-conversationidget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationIdGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPost200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-conversationoutboundpost200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPost200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPost200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-conversationoutboundpost200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPost200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-conversationoutboundpostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ConversationOutboundPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentFromTemplateRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-createagentfromtemplaterequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentFromTemplateRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-createagentrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguage.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-createagentrequestlanguage-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguage.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguageSynthesizer.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-createagentrequestlanguagesynthesizer-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguageSynthesizer.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguageSynthesizerVoiceConfig.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-createagentrequestlanguagesynthesizervoiceconfig-.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/CreateAgentRequestLanguageSynthesizerVoiceConfig.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/InternalServerErrorResponse.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-internalservererrorresponse-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/InternalServerErrorResponse.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgeBase.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebase-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgeBase.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebaseget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebaseidget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdItemsGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebaseiditemsget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdItemsGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdItemsUploadTextPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebaseiditemsuploadtextpostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebaseIdItemsUploadTextPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgeBaseItem.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebaseitem-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgeBaseItem.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebasePost201Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebasepost201response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebasePost201Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebasePostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-knowledgebasepostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/KnowledgebasePostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-organizationget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-organizationget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseDataMembersInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-organizationget200responsedatamembersinner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseDataMembersInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseDataSubscription.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-organizationget200responsedatasubscription-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/OrganizationGet200ResponseDataSubscription.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-productphonenumbersget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200ResponseDataInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-productphonenumbersget200responsedatainner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200ResponseDataInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200ResponseDataInnerAttributes.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-productphonenumbersget200responsedatainnerattribu.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/ProductPhoneNumbersGet200ResponseDataInnerAttributes.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UnauthorizedErrorReponse.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-unauthorizederrorreponse-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UnauthorizedErrorReponse.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UserGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-userget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UserGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UserGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-userget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/UserGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/Webhook.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhook-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/Webhook.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookAgent.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookagent-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookAgent.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookEvent.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookevent-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookEvent.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookGet200Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookget200response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookGet200Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookGet200ResponseData.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookget200responsedata-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookGet200ResponseData.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookIdDelete404Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookiddelete404response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookIdDelete404Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPost201Response.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookpost201response-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPost201Response.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPostRequest.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookpostrequest-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPostRequest.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPostRequestEventsInner.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhookpostrequesteventsinner-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookPostRequestEventsInner.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookSubscription.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhooksubscription-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookSubscription.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookSubscriptionPopulated.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-models-webhooksubscriptionpopulated-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/models/WebhookSubscriptionPopulated.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/OrganizationApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-organizationapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/OrganizationApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/UserApi.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-docs-atoms-userapi-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/docs/atoms/UserApi.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/examples/tool_calling-1/README.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-examples-tool-calling-1-readme-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/examples/tool_calling-1/README.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/README.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-smallest-python-sdk-readme-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/smallest-python-sdk/main/README.md"
+    },
+    {
+      "canonical_url": "https://raw.githubusercontent.com/smallest-inc/waves-examples/main/README.md",
+      "metadata_json": {
+        "current": false,
+        "deprecated": false,
+        "legacy": false,
+        "product": "waves",
+        "source_kind": "github",
+        "source_type": "github"
+      },
+      "path": "guides/github-smallest-inc-waves-examples-readme-md.md",
+      "source_kind": "github",
+      "source_url": "https://raw.githubusercontent.com/smallest-inc/waves-examples/main/README.md"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/create-pronunciation-dict",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/pronunciation-dictionaries/create-pronunciation-dict.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/create-pronunciation-dict"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/delete-pronunciation-dict",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/pronunciation-dictionaries/delete-pronunciation-dict.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/delete-pronunciation-dict"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/get-pronunciation-dicts",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/pronunciation-dictionaries/get-pronunciation-dicts.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/get-pronunciation-dicts"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/update-pronunciation-dict",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/pronunciation-dictionaries/update-pronunciation-dict.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/pronunciation-dictionaries/update-pronunciation-dict"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/speech-to-text/pulse-speech-to-text",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/speech-to-text/pulse-speech-to-text.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/speech-to-text/pulse-speech-to-text"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/speech-to-text/speech-to-text",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/speech-to-text/speech-to-text.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/speech-to-text/speech-to-text"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/stream-lightning-v-31-speech",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/stream-lightning-v-31-speech.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/stream-lightning-v-31-speech"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/stream-lightningv-2-speech",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/stream-lightningv-2-speech.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/stream-lightningv-2-speech"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/synthesize-lightning-v-31-speech",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/synthesize-lightning-v-31-speech.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/synthesize-lightning-v-31-speech"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/synthesize-lightningv-2-speech",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/synthesize-lightningv-2-speech.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/synthesize-lightningv-2-speech"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-2",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-2.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-2"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-3-1",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-3-1.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/text-to-speech/text-to-speech-v-3-1"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/add-voice-to-model",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voice-cloning/add-voice-to-model.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/add-voice-to-model"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/create-voice-clone",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voice-cloning/create-voice-clone.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/create-voice-clone"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/delete-voice-clone",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voice-cloning/delete-voice-clone.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/delete-voice-clone"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/get-cloned-voices",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voice-cloning/get-cloned-voices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/get-cloned-voices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/list-voice-clones",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voice-cloning/list-voice-clones.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voice-cloning/list-voice-clones"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voices/get-waves-voices",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-reference/voices/get-waves-voices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-reference/voices/get-waves-voices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-references/authentication",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-references/authentication.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-references/authentication"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-references/concurrency-and-limits",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-references/concurrency-and-limits.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-references/concurrency-and-limits"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/api-reference/api-references/web-socket",
+      "metadata_json": {},
+      "path": "api-reference/waves/api-reference/api-references/web-socket.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/api-reference/api-references/web-socket"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/best-practices/tts-best-practices",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/best-practices/tts-best-practices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/best-practices/tts-best-practices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/best-practices/voice-cloning-best-practices",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/best-practices/voice-cloning-best-practices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/best-practices/voice-cloning-best-practices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/cookbooks/speech-to-text",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/cookbooks/speech-to-text.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/cookbooks/speech-to-text"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/cookbooks/text-to-speech",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/cookbooks/text-to-speech.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/cookbooks/text-to-speech"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/getting-started/authentication",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/getting-started/authentication.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/getting-started/authentication"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/getting-started/introduction",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/getting-started/introduction.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/getting-started/introduction"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/getting-started/models",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/getting-started/models.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/getting-started/models"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/evaluation-walkthrough",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/benchmarks/evaluation-walkthrough.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/evaluation-walkthrough"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/metrics-overview",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/benchmarks/metrics-overview.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/metrics-overview"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/performance",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/benchmarks/performance.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/benchmarks/performance"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/diarization",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/diarization.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/diarization"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/emotion-detection",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/emotion-detection.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/emotion-detection"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/end-of-utterance-timeout",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/end-of-utterance-timeout.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/end-of-utterance-timeout"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/finalize-control",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/finalize-control.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/finalize-control"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/gender-detection",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/gender-detection.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/gender-detection"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/inverse-text-normalization",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/inverse-text-normalization.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/inverse-text-normalization"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/keyword-boosting",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/keyword-boosting.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/keyword-boosting"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/language-detection",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/language-detection.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/language-detection"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/numeric-formatting",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/numeric-formatting.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/numeric-formatting"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/punctuation-formatting",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/punctuation-formatting.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/punctuation-formatting"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/redaction",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/redaction.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/redaction"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/utterances",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/features/utterances.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/utterances"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/word-timestamps",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/features/word-timestamps.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/features/word-timestamps"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/overview",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/overview.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/overview"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/audio-formats",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/pre-recorded/audio-formats.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/audio-formats"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/best-practices",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/pre-recorded/best-practices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/best-practices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/code-examples",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/pre-recorded/code-examples.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/code-examples"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/features",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/pre-recorded/features.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/features"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/quickstart",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/pre-recorded/quickstart.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/quickstart"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/troubleshooting",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/pre-recorded/troubleshooting.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/troubleshooting"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/webhooks",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/pre-recorded/webhooks.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/pre-recorded/webhooks"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/quickstart",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/speech-to-text-pulse/quickstart.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/quickstart"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/audio-formats",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/audio-formats.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/audio-formats"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/best-practices",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/best-practices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/best-practices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/code-examples",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/code-examples.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/code-examples"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/features",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/features.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/features"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/quickstart",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/quickstart.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/quickstart"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/response-format",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/response-format.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/response-format"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/troubleshooting",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/speech-to-text-pulse/realtime-web-socket/troubleshooting.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/speech-to-text-pulse/realtime-web-socket/troubleshooting"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/http-vs-streaming-vs-web-sockets",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/http-vs-streaming-vs-web-sockets.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/http-vs-streaming-vs-web-sockets"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/overview",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/overview.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/overview"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/pronunciation-dictionaries",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/pronunciation-dictionaries.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/pronunciation-dictionaries"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/quickstart",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/text-to-speech-lightning/quickstart.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/quickstart"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/streaming",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/streaming.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/streaming"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/sync-async",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/sync-async.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/sync-async"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/voices-languages",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/text-to-speech-lightning/voices-languages.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/text-to-speech-lightning/voices-languages"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/troubleshooting/error-reference",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/troubleshooting/error-reference.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/troubleshooting/error-reference"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/delete-cloned-voice",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/voice-cloning/delete-cloned-voice.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/delete-cloned-voice"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-api",
+      "metadata_json": {},
+      "path": "api-reference/waves/documentation/voice-cloning/instant-clone-api.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-api"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-python-sdk",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/voice-cloning/instant-clone-python-sdk.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-python-sdk"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-ui",
+      "metadata_json": {},
+      "path": "guides/waves/documentation/voice-cloning/instant-clone-ui.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/documentation/voice-cloning/instant-clone-ui"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/model-cards/speech-to-text/pulse",
+      "metadata_json": {},
+      "path": "guides/waves/model-cards/speech-to-text/pulse.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/model-cards/speech-to-text/pulse"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/api-reference/authentication",
+      "metadata_json": {},
+      "path": "api-reference/waves/self-host/api-reference/authentication.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/api-reference/authentication"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/api-reference/endpoints/health-check",
+      "metadata_json": {},
+      "path": "api-reference/waves/self-host/api-reference/endpoints/health-check.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/api-reference/endpoints/health-check"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/api-reference/endpoints/transcription",
+      "metadata_json": {},
+      "path": "api-reference/waves/self-host/api-reference/endpoints/transcription.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/api-reference/endpoints/transcription"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/api-reference/examples",
+      "metadata_json": {},
+      "path": "api-reference/waves/self-host/api-reference/examples.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/api-reference/examples"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/getting-started/architecture",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/getting-started/architecture.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/getting-started/architecture"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/getting-started/introduction",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/getting-started/introduction.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/getting-started/introduction"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/getting-started/prerequisites",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/getting-started/prerequisites.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/getting-started/prerequisites"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/getting-started/why-self-host",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/getting-started/why-self-host.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/getting-started/why-self-host"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/eks-setup",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/kubernetes-setup/aws/eks-setup.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/eks-setup"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/gpu-nodes",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/kubernetes-setup/aws/gpu-nodes.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/gpu-nodes"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/iam-irsa",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/kubernetes-setup/aws/iam-irsa.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/aws/iam-irsa"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/quick-start",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/kubernetes-setup/quick-start.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/kubernetes-setup/quick-start"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/common-issues",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/troubleshooting/common-issues.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/common-issues"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/debugging-guide",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/troubleshooting/debugging-guide.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/debugging-guide"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/logs-analysis",
+      "metadata_json": {},
+      "path": "guides/waves/self-host/troubleshooting/logs-analysis.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/self-host/troubleshooting/logs-analysis"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/add-voice",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/add-voice.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/add-voice"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/delete-voice",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/delete-voice.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/delete-voice"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/get-cloned-voices",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/get-cloned-voices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/get-cloned-voices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/get-voices",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/get-voices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/get-voices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/lightning-v-2-tts",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/lightning-v-2-tts.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/lightning-v-2-tts"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-lightning-v-2",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-lightning-v-2.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-lightning-v-2"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-sse-lightning-v-2",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-sse-lightning-v-2.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/lightning-v-2/synthesize-sse-lightning-v-2"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning-large",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning-large.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-lightning-large"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-sse-lightning-large",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/api-reference/api-reference/synthesize-sse-lightning-large.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/api-reference/api-reference/synthesize-sse-lightning-large"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/best-practices/pvc-best-practices",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/best-practices/pvc-best-practices.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/best-practices/pvc-best-practices"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/getting-started/http-streaming",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/getting-started/http-streaming.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/getting-started/http-streaming"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/getting-started/quickstart",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/documentation/getting-started/quickstart.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/getting-started/quickstart"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/live-kit",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/integrations/live-kit.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/live-kit"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/plivo",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/integrations/plivo.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/plivo"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/vonage",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/integrations/vonage.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/integrations/vonage"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/introduction/introduction",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/introduction/introduction.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/introduction/introduction"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/product/projects",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/product/projects.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/product/projects"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/how-to-tts",
+      "metadata_json": {},
+      "path": "api-reference/waves/v-3-0-1/documentation/text-to-speech/how-to-tts.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/how-to-tts"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/llm-to-tts",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/text-to-speech/llm-to-tts.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/llm-to-tts"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/voice-models-languages",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/text-to-speech/voice-models-languages.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/text-to-speech/voice-models-languages"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/how-to-voice-clone",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/voice-cloning/how-to-voice-clone.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/how-to-voice-clone"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/professional-voice-cloning",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/voice-cloning/professional-voice-cloning.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/professional-voice-cloning"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/types-of-cloning",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/voice-cloning/types-of-cloning.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/types-of-cloning"
+    },
+    {
+      "canonical_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/voice-clone-via-ui",
+      "metadata_json": {},
+      "path": "guides/waves/v-3-0-1/documentation/voice-cloning/voice-clone-via-ui.md",
+      "source_kind": "website",
+      "source_url": "https://docs.smallest.ai/waves/v-3-0-1/documentation/voice-cloning/voice-clone-via-ui"
+    }
+  ],
+  "vendor": "smallest-ai",
+  "version": "v4.0.0"
+}

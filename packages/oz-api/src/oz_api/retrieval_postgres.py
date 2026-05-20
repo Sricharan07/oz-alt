@@ -46,6 +46,7 @@ def suggest_from_postgres(
                      coalesce(l.description, '') as reason,
                      greatest(
                        coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
+                       coalesce(ts_rank_cd(setweight(to_tsvector('english', coalesce(l.aliases::text, '')), 'A'), websearch_to_tsquery('english', %s)), 0),
                        coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
                      ) as fts_score,
                      0::float8 as vector_score,
@@ -60,6 +61,7 @@ def suggest_from_postgres(
               left join chunks c on c.version_id = lv.id and coalesce(c.dedupe_canonical, true)
               left join trust_scores ts on ts.library_id = l.id
               where l.search_document @@ websearch_to_tsquery('english', %s)
+                 or setweight(to_tsvector('english', coalesce(l.aliases::text, '')), 'A') @@ websearch_to_tsquery('english', %s)
                  or c.search_document @@ websearch_to_tsquery('english', %s)
               order by fts_score desc, v.name asc, l.name asc
               limit %s
@@ -100,12 +102,13 @@ def suggest_from_postgres(
             order by score desc, vendor asc, library asc, version asc
             limit %s
         """
-        params: list[Any] = [terms, terms, terms, terms, candidates, vector, vector, candidates, max_results]
+        params: list[Any] = [terms, terms, terms, terms, terms, terms, candidates, vector, vector, candidates, max_results]
     else:
         sql = """
             select v.name as vendor, l.name as library, lv.version,
                    max(greatest(
                      coalesce(ts_rank_cd(l.search_document, websearch_to_tsquery('english', %s)), 0),
+                     coalesce(ts_rank_cd(setweight(to_tsvector('english', coalesce(l.aliases::text, '')), 'A'), websearch_to_tsquery('english', %s)), 0),
                      coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0)
                    )) + (max(greatest(coalesce(c.quality_score, 1), 0)) * 0.15)
                    + (max(coalesce(ts.value, 0)) * 0.08)
@@ -119,12 +122,13 @@ def suggest_from_postgres(
             left join chunks c on c.version_id = lv.id and coalesce(c.dedupe_canonical, true)
             left join trust_scores ts on ts.library_id = l.id
             where l.search_document @@ websearch_to_tsquery('english', %s)
+               or setweight(to_tsvector('english', coalesce(l.aliases::text, '')), 'A') @@ websearch_to_tsquery('english', %s)
                or c.search_document @@ websearch_to_tsquery('english', %s)
             group by v.name, l.name, lv.version, l.description
             order by score desc, v.name asc, l.name asc, lv.version asc
             limit %s
         """
-        params = [terms, terms, terms, terms, max_results]
+        params = [terms, terms, terms, terms, terms, terms, max_results]
     try:
         with observe_duration("oz_db_query_duration_seconds", {"operation": "suggest", "mode": "vector" if vector else "fts"}):
             with connection:
@@ -160,6 +164,7 @@ def search_from_postgres(
     query_plan = plan_query(query)
     terms = normalized_tsquery(query_plan.important_terms or query)
     intent = query_plan.content_type
+    legacy_requested = legacy_query(query)
     query_intent = query_plan
     symbol_pattern = like_pattern(query_intent.symbols) if query_intent.symbols else "__oz_no_exact_symbol_match__"
     exact_symbol_keys = [compact_key(symbol) for symbol in query_intent.symbols if compact_key(symbol)]
@@ -273,7 +278,7 @@ def search_from_postgres(
         ranked_chunks as (
           select path, start_line, matched_path, source_anchor, token_count,
                  library, vendor, version, relative_path, heading_path, symbols,
-                 content_type, quality_score, content, parent_content,
+                 content_type, quality_score, content, parent_content, metadata_json,
                  (sum(rrf_score) * 900.0)
                  + (max(fts_score) * 2.4) + (max(vector_score) * 2.8) + (max(exact_score) * 3.0)
                  + (max(quality_score) * 0.15) + max(type_score)
@@ -287,19 +292,19 @@ def search_from_postgres(
           ) candidates
           group by path, start_line, matched_path, source_anchor, token_count,
                    library, vendor, version, relative_path, heading_path, symbols,
-                   content_type, quality_score, content, parent_content
+                   content_type, quality_score, content, parent_content, metadata_json
         ),
         ranked_files as (
           select distinct on (path)
                  path, start_line, score, library, vendor, version, relative_path,
                  heading_path, symbols, content_type, quality_score, content,
-                 matched_path, source_anchor, token_count, parent_content
+                 matched_path, source_anchor, token_count, parent_content, metadata_json
           from ranked_chunks
           order by path, score desc, start_line asc
         )
         select path, start_line, score, library, vendor, version, relative_path,
                heading_path, symbols, content_type, quality_score, content,
-               matched_path, source_anchor, token_count, parent_content
+               matched_path, source_anchor, token_count, parent_content, metadata_json
         from ranked_files
         order by score desc, path asc, start_line asc
         limit %s
@@ -368,6 +373,7 @@ def context_snippets_from_postgres(
     params: list[Any] = [
         terms,
         intent,
+        legacy_requested,
         exact_keys,
         exact_keys,
         exact_keys,
@@ -396,6 +402,11 @@ def context_snippets_from_postgres(
             greatest(coalesce(ts_rank_cd(cs.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 45.0
             + (content_type_score(cs.role) * 90.0)
             + (content_type_intent_score(cs.role, %s) * 160.0)
+            + case when coalesce((cs.metadata_json->>'current')::boolean, false) then 35.0 else 0.0 end
+            - case when not %s and (
+                coalesce((cs.metadata_json->>'deprecated')::boolean, false)
+                or coalesce((cs.metadata_json->>'legacy')::boolean, false)
+              ) then 360.0 else 0.0 end
             + (
               case when compact_key_sql(cs.title) = any(%s::text[]) then 140.0 else 0.0 end
               + case when compact_basename(cs.path) = any(%s::text[]) then 120.0 else 0.0 end
@@ -436,7 +447,8 @@ def context_snippets_from_postgres(
           cs.code_language,
           cs.code,
           cs.constraints,
-          cs.end_line
+          cs.end_line,
+          cs.metadata_json
         from context_snippets cs
         join library_versions lv on lv.id = cs.version_id
         join libraries l on l.id = lv.library_id
@@ -509,7 +521,8 @@ def candidate_select(fts_score: str, vector_score: str, exact_score: str) -> str
           c.symbols,
           c.content_type,
           c.content,
-          coalesce(p.content, c.content) as parent_content
+          coalesce(p.content, c.content) as parent_content,
+          c.metadata_json
         from chunks c
         join library_versions lv on lv.id = c.version_id
         join libraries l on l.id = lv.library_id
@@ -580,6 +593,7 @@ def empty_vector_cte() -> str:
                null::text as library, null::text as vendor, null::text as version,
                null::text as relative_path, '[]'::jsonb as heading_path, '[]'::jsonb as symbols,
                null::text as content_type, null::text as content, null::text as parent_content,
+               '{}'::jsonb as metadata_json,
                0::float8 as rrf_score
         where false
     """
@@ -607,6 +621,10 @@ def compact_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def legacy_query(query: str) -> bool:
+    return bool(re.search(r"\b(?:legacy|deprecated|old|previous|migration|migrate|v\d+|version\s+\d+)\b", query, re.I))
+
+
 def candidate_limit(max_results: int) -> int:
     return max(max_results * 10, 50)
 
@@ -620,6 +638,7 @@ def score_postgres_rows(
 ) -> list[dict[str, Any]]:
     scored: list[dict[str, Any]] = []
     for row in rows:
+        metadata = row[16] if len(row) > 16 and isinstance(row[16], dict) else {}
         chunk = {
             "path": row[6],
             "heading_path": row[7],
@@ -629,6 +648,10 @@ def score_postgres_rows(
             "text": row[11],
         }
         score = float(row[2]) + (planned_chunk_score(chunk, query) / 4.0)
+        if metadata.get("current") is True:
+            score += 20.0
+        if (metadata.get("deprecated") is True or metadata.get("legacy") is True) and not legacy_query(query):
+            score -= 240.0
         scored.append(
             {
                 "path": row[0],
@@ -647,6 +670,7 @@ def score_postgres_rows(
                 "degraded": degraded,
                 "_matched_text": row[11] or "",
                 "_parent_text": row[15] or "",
+                "metadata_json": metadata,
                 "_rerank_text": rerank_text(row),
             }
         )
@@ -683,6 +707,7 @@ def score_context_snippet_rows(rows: list[Any]) -> list[dict[str, Any]]:
                 "code_language": row[20],
                 "code": row[21],
                 "constraints": row[22] or [],
+                "metadata_json": row[24] if isinstance(row[24], dict) else {},
                 "retrieval_mode": "context_snippets",
                 "degraded": False,
                 "_matched_text": row[11] or "",

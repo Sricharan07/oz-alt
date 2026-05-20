@@ -128,6 +128,9 @@ def validate_cases(spec: dict[str, Any]) -> list[str]:
                     errors.append(f"{case_id}: missing {key}")
             if not str(case.get("query", "")).strip():
                 errors.append(f"{case_id}: empty query")
+            oracle_path = str(case.get("oracle_path", ""))
+            if oracle_path and not (HARNESS / oracle_path).exists() and not Path(oracle_path).exists():
+                errors.append(f"{case_id}: oracle_path does not exist: {oracle_path}")
     return errors
 
 
@@ -515,6 +518,7 @@ def write_judge_packet(
     answer_path = case_dir / "benchmark_answer.json"
     answer = answer_path.read_text(encoding="utf-8", errors="ignore") if answer_path.exists() else "(no agent answer)"
     rubric = JUDGE_RUBRIC.read_text(encoding="utf-8")
+    oracle = case_oracle_text(case)
     lines = [
         "# Judge Packet",
         "",
@@ -526,6 +530,10 @@ def write_judge_packet(
         f"- Intent: `{case.get('intent', '')}`",
         f"- Expected paths: {case.get('expected_paths', [])}",
         f"- Required terms: {case.get('required_terms', [])}",
+        "",
+        "## Oracle",
+        "",
+        oracle or "(none provided; judge against expected paths, required terms, and retrieved evidence)",
         "",
         "## Retrieval Metrics",
         "",
@@ -565,6 +573,21 @@ def write_judge_packet(
         )
     lines.extend(["## Rubric", "", rubric])
     write_text(case_dir / "judge_packet.md", "\n".join(lines).strip() + "\n")
+
+
+def case_oracle_text(case: dict[str, Any]) -> str:
+    inline = str(case.get("oracle") or case.get("expected_answer") or "").strip()
+    if inline:
+        return inline
+    oracle_path = str(case.get("oracle_path") or "").strip()
+    if not oracle_path:
+        return ""
+    path = Path(oracle_path)
+    if not path.is_absolute():
+        path = HARNESS / oracle_path
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
+    return ""
 
 
 def aggregate_results(run_id: str, results: list[dict[str, Any]], args: argparse.Namespace | None = None) -> dict[str, Any]:

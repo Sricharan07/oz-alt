@@ -53,6 +53,14 @@ class LibraryProfile:
     allowed_paths: list[str] = field(default_factory=list)
     denied_paths: list[str] = field(default_factory=list)
     preferred_urls: list[str] = field(default_factory=list)
+    source_roots: list[str] = field(default_factory=list)
+    source_priorities: dict[str, int] = field(default_factory=dict)
+    aliases: list[str] = field(default_factory=list)
+    products: list[str] = field(default_factory=list)
+    current_patterns: list[str] = field(default_factory=list)
+    deprecated_patterns: list[str] = field(default_factory=list)
+    legacy_patterns: list[str] = field(default_factory=list)
+    version_strategy: str = "semver"
     required_topics: list[str] = field(default_factory=list)
     expected_symbols: list[str] = field(default_factory=list)
     source_file_patterns: list[str] = field(default_factory=list)
@@ -98,6 +106,14 @@ def profile_from_row(row: dict[str, Any], *, vendor: str, library: str) -> Libra
         allowed_paths=list_of_strings(row.get("allowed_paths")),
         denied_paths=list_of_strings(row.get("denied_paths")),
         preferred_urls=list_of_strings(row.get("preferred_urls")),
+        source_roots=list_of_strings(row.get("source_roots")),
+        source_priorities=dict_of_ints(row.get("source_priorities")),
+        aliases=list_of_strings(row.get("aliases")),
+        products=list_of_strings(row.get("products")),
+        current_patterns=list_of_strings(row.get("current_patterns")),
+        deprecated_patterns=list_of_strings(row.get("deprecated_patterns")),
+        legacy_patterns=list_of_strings(row.get("legacy_patterns")),
+        version_strategy=str(row.get("version_strategy") or "semver").strip().lower() or "semver",
         required_topics=list_of_strings(row.get("required_topics")),
         expected_symbols=list_of_strings(row.get("expected_symbols")),
         source_file_patterns=list_of_strings(row.get("source_file_patterns")),
@@ -114,6 +130,18 @@ def list_of_strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item).strip()]
+
+
+def dict_of_ints(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    output: dict[str, int] = {}
+    for key, item in value.items():
+        try:
+            output[str(key)] = int(item)
+        except (TypeError, ValueError):
+            continue
+    return output
 
 
 def bool_value(value: Any) -> bool:

@@ -375,13 +375,14 @@ async def context(request: Request):
         return JSONResponse(exc.response_payload(), status_code=exc.status_code)
     finally:
         record_retrieval_latency("context", variant, time.perf_counter() - started)
-    rows = result["results"]
+    rows = result.get("results", [])
+    result_count = len(result.get("codeSnippets", [])) + len(result.get("infoSnippets", [])) or len(rows)
     record_usage_event(
         principal_for_request(request),
         "context",
         library=str(library_scope or "") or None,
         query_length=len(query),
-        result_count=len(rows),
+        result_count=result_count,
         project_fingerprint=fingerprint,
     )
     return {

@@ -1,0 +1,319 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Code Examples
+
+> Complete code examples for real-time WebSocket transcription in Python, Node.js, and Browser JavaScript
+
+This guide contains complete examples demonstrating real-time audio transcription for various use cases in different programming languages.
+
+* [Python Example](#python-example): Shows how to use websockets to transcribe a pre-recorded file in chunks.
+* [Node.js Example](#nodejs-example): Imitates real websocket usage by chunking a pre-recorded file in Node JS.
+* [JavaScript Example](#browser-javascript-example): Shows a browser example using Javascript.
+* [Streaming from Microphone](#streaming-from-microphone): Shows real-time transcription from microphone audio.
+
+## Prerequisites
+
+### Python
+
+```bash
+pip install websockets
+```
+
+### Node.js
+
+```bash
+npm install ws
+```
+
+## Python Example
+
+This example shows how to stream audio from a file and receive real-time transcriptions:
+
+```python
+import asyncio
+import websockets
+import json
+import os
+import requests
+from urllib.parse import urlencode
+
+BASE_WS_URL = "wss://api.smallest.ai/waves/v1/pulse/get_text"
+SAMPLE_URL = (
+    "https://github.com/smallest-inc/cookbook/raw/main/"
+    "speech-to-text/getting-started/samples/audio.wav"
+)
+params = {
+    "language": "en",
+    "encoding": "linear16",
+    "sample_rate": "24000",   # must match the source audio sample rate
+    "word_timestamps": "true",
+}
+WS_URL = f"{BASE_WS_URL}?{urlencode(params)}"
+
+API_KEY = os.environ["SMALLEST_API_KEY"]
+
+async def stream_audio():
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    async with websockets.connect(WS_URL, additional_headers=headers) as ws:
+        print("Connected to STT WebSocket")
+
+        # Download sample audio (or replace with your own bytes)
+        audio_bytes = requests.get(SAMPLE_URL).content
+        chunk_size = 4096
+        offset = 0
+
+        print(f"Streaming {len(audio_bytes)} bytes")
+
+        async def send_chunks():
+            nonlocal offset
+            while offset  {
+  console.log("Connected to STT WebSocket");
+
+  const audioBuffer = fs.readFileSync(AUDIO_FILE);
+  const chunkSize = 4096;
+  let offset = 0;
+
+  const sendChunk = () => {
+    if (offset >= audioBuffer.length) {
+      console.log("Finished sending audio, closing stream...");
+      ws.send(JSON.stringify({ type: "close_stream" }));
+      return;
+    }
+
+    const chunk = audioBuffer.slice(offset, offset + chunkSize);
+    ws.send(chunk);
+    offset += chunkSize;
+
+    setTimeout(sendChunk, 50); // 50ms delay between chunks
+  };
+
+  sendChunk();
+});
+
+let fullTranscript = "";
+
+ws.on("message", (data) => {
+  try {
+    const message = JSON.parse(data.toString());
+    console.log("Received:", JSON.stringify(message, null, 2));
+
+    // Handle partial transcripts
+    if (!message.is_final) {
+      console.log(`Partial: ${message.transcript}`);
+    } else {
+      console.log(`Final: ${message.transcript}`);
+      fullTranscript += message.transcript ?? "";
+
+      if (message.is_last) {
+        console.log("Transcription complete!");
+        console.log(`Full Transcript: ${fullTranscript}`);
+        ws.close();
+      }
+    }
+  } catch (error) {
+    console.error("Error parsing message:", error);
+  }
+});
+
+ws.on("error", (error) => {
+  console.error("WebSocket error:", error.message);
+});
+
+ws.on("close", (code, reason) => {
+  console.log(`Connection closed: ${code} - ${reason.toString()}`);
+});
+```
+
+## Browser JavaScript Example
+
+This example shows how to stream audio from a file input in the browser:
+
+```javascript
+const API_KEY = "SMALLEST_API_KEY";
+
+async function transcribeAudio(audioFile) {
+  const url = new URL("wss://api.smallest.ai/waves/v1/pulse/get_text");
+  url.searchParams.append("language", "en");
+  url.searchParams.append("encoding", "linear16");
+  url.searchParams.append("sample_rate", "16000");
+  url.searchParams.append("word_timestamps", "true");
+
+  const ws = new WebSocket(url.toString());
+
+  ws.onopen = async () => {
+    console.log("Connected to STT WebSocket");
+
+    const arrayBuffer = await audioFile.arrayBuffer();
+    const chunkSize = 4096;
+    let offset = 0;
+
+    const sendChunk = () => {
+      if (offset >= arrayBuffer.byteLength) {
+        console.log("Finished sending audio, closing stream...");
+        ws.send(JSON.stringify({ type: "close_stream" }));
+        return;
+      }
+
+      const chunk = arrayBuffer.slice(offset, offset + chunkSize);
+      ws.send(chunk);
+      offset += chunkSize;
+
+      setTimeout(sendChunk, 50); // 50ms delay between chunks
+    };
+
+    sendChunk();
+  };
+
+  let fullTranscript = "";
+
+  ws.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data);
+      console.log("Received:", message);
+
+      // Update UI with transcript
+      if (message.is_final) {
+        updateTranscript(message.transcript);
+        fullTranscript += message.transcript ?? "";
+      } else {
+        updatePartialTranscript(message.transcript);
+      }
+
+      if (message.is_last) {
+        console.log("Transcription complete!");
+        console.log("Full Transcript:", fullTranscript);
+        ws.close();
+      }
+    } catch (error) {
+      console.error("Error parsing message:", error);
+    }
+  };
+
+  ws.onerror = (error) => {
+    console.error("WebSocket error:", error);
+  };
+
+  ws.onclose = (event) => {
+    console.log(`Connection closed: ${event.code}`);
+  };
+}
+
+// Example usage with file input
+const fileInput = document.getElementById("audioFile");
+fileInput.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    transcribeAudio(file);
+  }
+});
+```
+
+## Streaming from Microphone
+
+Here's an example of streaming live audio from a microphone in the browser:
+
+```javascript
+const API_KEY = "SMALLEST_API_KEY";
+
+async function streamMicrophone() {
+  // Get microphone access
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const audioContext = new AudioContext({ sampleRate: 16000 });
+  const source = audioContext.createMediaStreamSource(stream);
+
+  // Create script processor for audio chunks
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  const url = new URL("wss://api.smallest.ai/waves/v1/pulse/get_text");
+  url.searchParams.append("language", "en");
+  url.searchParams.append("encoding", "linear16");
+  url.searchParams.append("sample_rate", "16000");
+
+  const ws = new WebSocket(url.toString());
+
+  ws.onopen = () => {
+    console.log("Connected, starting microphone stream");
+
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      // Convert Float32Array to Int16Array
+      const int16Data = new Int16Array(inputData.length);
+      for (let i = 0; i  {
+    const message = JSON.parse(event.data);
+    if (message.is_final) {
+      console.log("Transcript:", message.transcript);
+      fullTranscript += message.transcript ?? "";
+    }
+    if (message.is_last) {
+      console.log("Full Transcript:", fullTranscript);
+      ws.close();
+    }
+  };
+
+  // Stop streaming after 30 seconds (example)
+  setTimeout(() => {
+    processor.disconnect();
+    source.disconnect();
+    stream.getTracks().forEach(track => track.stop());
+    ws.send(JSON.stringify({ type: "close_stream" }));
+  }, 30000);
+}
+
+// Start streaming
+streamMicrophone().catch(console.error);
+```
+
+## Handling Responses
+
+The WebSocket API sends JSON messages with the following structure:
+
+```json
+{
+  "session_id": "sess_12345abcde",
+  "transcript": "Hello, how are you?",
+  "is_final": true,
+  "is_last": false,
+  "language": "en",
+  "word_timestamps": [
+    {
+      "word": "Hello",
+      "start": 0.0,
+      "end": 0.5
+    }
+  ]
+}
+```
+
+### Key Response Fields
+
+* **`is_final`**: `false` indicates a partial/interim transcript; `true` indicates a final transcript
+* **`is_last`**: `true` when the session is complete
+* **`transcript`**: Current segment text. Concatenate each `is_final=true` value to build a session-level transcript on the client.
+* **`word_timestamps`**: Only included when `word_timestamps=true` in query params
+
+### Browser
+
+No additional dependencies required - uses native WebSocket API.
+
+## Error Handling
+
+Always implement proper error handling for production use:
+
+```javascript
+ws.onerror = (error) => {
+  console.error("WebSocket error:", error);
+  // Implement retry logic or user notification
+};
+
+ws.onclose = (event) => {
+  if (event.code !== 1000) { // Not a normal closure
+    console.error(`Unexpected closure: ${event.code} - ${event.reason}`);
+    // Implement reconnection logic
+  }
+};
+```

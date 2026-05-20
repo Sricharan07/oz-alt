@@ -1,0 +1,171 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Bring Your Own Model
+
+> Run Atoms agents with your own models.
+
+For privacy, cost control, or specialized models, you can run LLMs locally or on your own servers. The `OpenAIClient` works with any endpoint that implements the OpenAI chat completions API.
+
+## Complete Example
+
+Here's a full agent using a local Ollama model:
+
+```python
+import os
+from smallestai.atoms.crew.nodes import OutputCrewNode
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+from smallestai.atoms.crew.server import AtomsCrewApp
+from smallestai.atoms.crew.session import CrewSession
+
+class LocalAgent(OutputCrewNode):
+    def __init__(self):
+        super().__init__(name="local-agent")
+
+        # Connect to your local model
+        self.llm = OpenAIClient(
+            model="llama3",
+            base_url="http://localhost:11434/v1",
+            api_key="ollama"  # Not required for Ollama
+        )
+
+        self.context.add_message(
+            "system",
+            "You are a helpful assistant running on local hardware."
+        )
+
+    async def generate_response(self):
+        response = await self.llm.chat(
+            messages=self.context.messages,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.content:
+                yield chunk.content
+
+async def on_start(session: CrewSession):
+    session.add_node(LocalAgent())
+    await session.start()
+    await session.wait_until_complete()
+
+if __name__ == "__main__":
+    app = AtomsCrewApp(setup_handler=on_start)
+    app.run()
+```
+
+## Requirements
+
+Your model server must implement the [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat/create):
+
+| Feature                      | Required  | Notes                          |
+| ---------------------------- | --------- | ------------------------------ |
+| `/chat/completions` endpoint | Yes       | Standard OpenAI format         |
+| Streaming                    | Yes       | `stream=True` must work        |
+| Tool calling                 | For tools | OpenAI-format function calling |
+
+## Custom Endpoints
+
+Connect to any custom model server:
+
+```python
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+llm = OpenAIClient(
+    model="your-model-name",
+    base_url="https://your-server.example.com/v1",
+    api_key=os.getenv("YOUR_API_KEY")
+)
+```
+
+## Ollama
+
+[Ollama](https://ollama.com) is the easiest way to run models locally. It handles model downloads and serving automatically.
+
+### Setup
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model
+ollama pull llama3
+
+# Start the server (runs on port 11434)
+ollama serve
+```
+
+### Usage
+
+```python
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+llm = OpenAIClient(
+    model="llama3",
+    base_url="http://localhost:11434/v1",
+    api_key="ollama"  # Doesn't require a real key
+)
+```
+
+## vLLM
+
+[vLLM](https://github.com/vllm-project/vllm) is a high-performance inference server for production workloads.
+
+### Setup
+
+```bash
+pip install vllm
+
+python -m vllm.entrypoints.openai.api_server \
+    --model meta-llama/Llama-3-8B-Instruct \
+    --port 8000
+```
+
+### Usage
+
+```python
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+llm = OpenAIClient(
+    model="meta-llama/Llama-3-8B-Instruct",
+    base_url="http://localhost:8000/v1",
+    api_key="vllm"
+)
+```
+
+## LM Studio
+
+[LM Studio](https://lmstudio.ai/) provides a desktop UI for running models locally.
+
+1. Download from [lmstudio.ai](https://lmstudio.ai/)
+2. Load a model
+3. Start the local server (Settings → Local Server)
+
+```python
+from smallestai.atoms.crew.clients.openai import OpenAIClient
+
+llm = OpenAIClient(
+    model="local-model",
+    base_url="http://localhost:1234/v1",
+    api_key="lmstudio"
+)
+```
+
+## Troubleshooting
+
+| Issue              | Cause              | Fix                                  |
+| ------------------ | ------------------ | ------------------------------------ |
+| Connection refused | Server not running | Start Ollama/vLLM                    |
+| Model not found    | Wrong name         | Check `ollama list` or server logs   |
+| No streaming       | Server config      | Ensure streaming is enabled          |
+| Tool calls ignored | Model limitation   | Use a larger model or cloud fallback |
+
+## Tips
+
+Ollama is great for local development. For production, consider vLLM or a cloud provider for reliability.
+
+Local models can fail. Configure a cloud fallback (e.g., OpenAI) to catch errors and keep the conversation going.
+
+Not all local models support function calling. Test your tools or use a model known to support them.

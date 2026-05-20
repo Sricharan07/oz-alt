@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 try:
     from bs4 import BeautifulSoup
@@ -63,6 +64,7 @@ class NormalizedPage:
     canonical_url: str | None = None
     source_priority: int = 50
     discovered_from: str | None = None
+    source_metadata: dict[str, Any] | None = None
 
 
 def normalize_html(html: str, *, source_url: str, title: str | None = None) -> NormalizedPage:

@@ -219,27 +219,7 @@ fn call_mcp_tool(project_root: &Path, params: serde_json::Value) -> Result<serde
                 max_results,
                 content_type,
             )?;
-            let mut blocks = response
-                .results
-                .iter()
-                .map(|snippet| {
-                    format!(
-                        "{}:{}{}\n{}",
-                        snippet.path,
-                        snippet.line.unwrap_or(1),
-                        snippet
-                            .content_type
-                            .as_deref()
-                            .map(|kind| format!(" [{kind}]"))
-                            .unwrap_or_default(),
-                        snippet.snippet
-                    )
-                })
-                .collect::<Vec<_>>();
-            if blocks.is_empty() {
-                blocks.push("no matching Oz context found".to_string());
-            }
-            Ok(text_tool_result(blocks.join("\n\n")))
+            Ok(text_tool_result(context_response_text(&response)))
         }
         "oz_pull" => {
             let library = arguments

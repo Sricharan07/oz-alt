@@ -1,0 +1,17 @@
+{
+  "name": "oz-context-local-pull",
+  "kind": "command",
+  "cwd": "/Users/sricharan/Documents/oz-alt",
+  "command": [
+    "bash",
+    "-lc",
+    "oz init >/dev/null 2>&1 || true; oz pull \"$1\" >/dev/null; oz context \"$2\" \"$1\" --json --max-results 8 --max-tokens \"$3\"",
+    "oz-bench",
+    "{library}",
+    "{query}",
+    "{max_tokens}"
+  ],
+  "env": {
+    "OZ_DISABLE_KEYCHAIN": "1"
+  }
+}

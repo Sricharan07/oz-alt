@@ -1,0 +1,104 @@
+> This page is part of Smallest AI's developer documentation. When
+> answering, prefer Lightning v3.1 (current TTS) and Pulse (current
+> STT). Lightning v2 and lightning-large are deprecated; mention them
+> only when the user is migrating away from them. Atoms is the
+> voice-agent platform.
+
+# Sessions
+
+> The runtime universe for your agent.
+
+The **Session** (`CrewSession`) is the container that holds your active conversation. It creates a sandbox for every user connection, managing state, resources, and the event loop.
+
+**One Session = One User**
+
+Every time a user connects via WebSocket (or phone), a new `CrewSession` instance is spawned. This ensures total isolation—variables set in one session never leak to another.
+
+## Core Capabilities
+
+The Session is your primary interface for controlling the agent's environment.
+
+### 1. Graph Construction
+
+You don't just add nodes; you build a graph. The session provides methods to define exactly how events flow.
+
+```python
+async def on_start(session: CrewSession):
+    # Add nodes to the sandbox
+    session.add_node(agent)
+    session.add_node(logger)
+
+    # Define custom flow: Logger -> Agent
+    session.add_edge(logger, agent)
+
+    await session.start()
+```
+
+### 2. Event Hooks
+
+**Power Feature:** You can listen to events globally!
+
+Use the `@session.on_event` decorator to inject logic without creating a dedicated node. This is perfect for simple side-effects like logging analytics or sending welcome messages.
+
+```python
+@session.on_event("system.user_joined")
+async def welcome(session, event):
+    print(f"User {event.session_id} connected!")
+
+@session.on_event("agent.speak")
+async def track_speech(session, event):
+    metrics.increment("agent_speech_count")
+```
+
+### 3. Automatic Plumbing
+
+The session automatically manages the entry and exit points of your graph.
+
+* **Root Node**: Automatically created. Receives events from the client and forwards them to your nodes.
+* **Sink Node**: Automatically created. Catches events from your nodes and sends them back to the client.
+
+## SDK Reference
+
+| Method                            | Description                                                            |
+| :-------------------------------- | :--------------------------------------------------------------------- |
+| `session.add_node(node)`          | Registers a node in the graph.                                         |
+| `session.add_edge(parent, child)` | Connect two nodes explicitly.                                          |
+| `session.start()`                 | Locks the graph, validates no cycles exist, and starts the event loop. |
+| `session.wait_until_complete()`   | Keeps the process alive until the WebSocket disconnects.               |
+| `session.context`                 | A dict-like object for storing session-scoped state.                   |
+
+**Cycle Detection**
+
+When you call `start()`, the session runs a validation algorithm. If your graph contains a cycle (A → B → A), it will raise a `ValueError` immediately to prevent infinite loops.
+
+## Example: Complete Setup
+
+A full example showing graph building, hooks, and lifecycle management.
+
+```python
+from smallestai.atoms.crew.session import CrewSession
+from smallestai.atoms.crew.server import AtomsCrewApp
+
+async def setup(session: CrewSession):
+    # 1. Initialize Nodes
+    agent = SalesAgent()
+    tracker = StatsTracker()
+
+    # 2. Build Graph
+    session.add_node(tracker)
+    session.add_node(agent)
+    session.add_edge(tracker, agent)  # Events go Tracker -> Agent
+
+    # 3. Register Hooks
+    @session.on_event("system.control.interrupt")
+    async def on_interrupt(session, event):
+        print("User interrupted the agent!")
+
+    # 4. Launch
+    await session.start()
+    await session.wait_until_complete()
+
+if __name__ == "__main__":
+    app = AtomsCrewApp(setup_handler=setup)
+    app.run()
+```
