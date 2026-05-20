@@ -428,6 +428,8 @@ def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[d
         score += 260.0
     if role in {"code_example", "workflow", "cli"}:
         score += 160.0
+    if text_lower.lstrip().startswith(":param") or "\n:param " in text_lower[:600]:
+        score -= 900.0
     if inline_install_command(text) or "pip install" in text_lower or "npm install" in text_lower:
         score += 1450.0
     if "install" in query_lower and any(term in title for term in ("installation", "dependencies", "install")):
@@ -1128,9 +1130,25 @@ def focused_code_blocks_for_query(blocks: list[dict[str, str]], query: str) -> l
     focused: list[dict[str, str]] = []
     for block in blocks:
         code = block.get("code") or ""
+        if not usable_code_block(block, query):
+            continue
         next_code = focused_code_for_query(code, query, token_budget=620)
         focused.append({"language": block.get("language") or "", "code": next_code or code})
     return focused
+
+
+def usable_code_block(block: dict[str, str], query: str) -> bool:
+    code = (block.get("code") or "").strip()
+    if not code:
+        return False
+    lowered = code.lower()
+    if lowered.startswith(":param") or lowered.startswith("parameters") or "\n:param " in lowered[:800]:
+        return False
+    language = canonical_language(str(block.get("language") or ""))
+    query_lower = query.lower()
+    if language in {"yaml", "json"} and not any(term in query_lower for term in ("schema", "openapi", "asyncapi", "config", "configuration", "request body", "yaml", "json")):
+        return False
+    return True
 
 
 def focused_code_for_query(code: str, query: str, *, token_budget: int) -> str:
