@@ -39,6 +39,8 @@ PHRASE_CANDIDATES = (
     "server components",
     "client component",
     "client components",
+    "use client",
+    "use server",
     "search params",
     "route groups",
     "cache tags",

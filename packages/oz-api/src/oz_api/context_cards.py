@@ -351,7 +351,7 @@ def row_facets(row: dict[str, Any], facets: set[str]) -> set[str]:
     if not facets:
         return set()
     values: list[str] = []
-    for key in ("title", "description", "path", "matched_path", "content_type", "role"):
+    for key in ("title", "description", "path", "matched_path", "content_type", "role", "_matched_text", "content"):
         values.append(str(row.get(key) or ""))
     for key in ("entities", "task_tags", "applies_to", "symbols", "heading_path"):
         raw = row.get(key)

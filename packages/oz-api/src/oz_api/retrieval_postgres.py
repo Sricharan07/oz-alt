@@ -372,10 +372,12 @@ def context_snippets_from_postgres(
         exact_keys,
         exact_keys,
         exact_keys,
+        exact_keys,
         exact_patterns,
         terms,
         exact_patterns,
         exact_patterns,
+        exact_keys,
         exact_keys,
         exact_keys,
         exact_keys,
@@ -403,6 +405,10 @@ def context_snippets_from_postgres(
                 ) then 110.0 else 0.0 end
               + case when exists (
                   select 1 from jsonb_array_elements_text(cs.task_tags) value
+                  where compact_key_sql(value) = any(%s::text[])
+                ) then 80.0 else 0.0 end
+              + case when exists (
+                  select 1 from jsonb_array_elements_text(cs.applies_to) value
                   where compact_key_sql(value) = any(%s::text[])
                 ) then 80.0 else 0.0 end
               + case when compact_key_sql(cs.path) ilike any(%s::text[]) then 65.0 else 0.0 end
@@ -454,6 +460,10 @@ def context_snippets_from_postgres(
             )
             or exists (
               select 1 from jsonb_array_elements_text(cs.heading_path) value
+              where compact_key_sql(value) = any(%s::text[])
+            )
+            or exists (
+              select 1 from jsonb_array_elements_text(cs.applies_to) value
               where compact_key_sql(value) = any(%s::text[])
             )
           )

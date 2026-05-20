@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -155,8 +154,10 @@ def context(
             "retrieval_mode": row.get("retrieval_mode", retrieval_mode),
             "degraded": bool(row.get("degraded", degraded)),
         }
-        metadata_tokens = approximate_tokens(json.dumps(metadata, sort_keys=True))
-        snippet_budget = remaining - metadata_tokens
+        # max_tokens is a context-content budget. Metadata is already bounded
+        # field-by-field and must not starve multi-facet answers.
+        metadata_tokens = 0
+        snippet_budget = remaining
         if snippet_budget <= 0:
             break
         snippet = trim_to_token_budget(text, snippet_budget)
