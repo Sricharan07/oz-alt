@@ -1,6 +1,9 @@
 create index if not exists libraries_search_document_idx on libraries using gin (search_document);
 create index if not exists chunks_search_document_idx on chunks using gin (search_document);
 create index if not exists chunks_embedding_idx on chunks using hnsw (embedding vector_cosine_ops);
+create index if not exists source_documents_version_kind_idx on source_documents(version_id, source_kind, source_priority);
+create index if not exists source_documents_canonical_url_idx on source_documents(version_id, md5(coalesce(canonical_url, '')));
+create index if not exists chunks_source_document_idx on chunks(source_document_id);
 create index if not exists chunks_version_path_idx on chunks (version_id, path);
 alter table chunks add column if not exists content_sha text;
 create index if not exists chunks_content_sha_idx on chunks(content_sha);

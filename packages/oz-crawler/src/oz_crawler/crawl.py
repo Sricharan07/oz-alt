@@ -136,12 +136,11 @@ def crawl_single_page(
         relative = page.path or f"guides/{slugify(page.title or page.source_url)}.md"
         guide_links.append((relative, page.title or page.source_url))
         (target / relative).parent.mkdir(parents=True, exist_ok=True)
-        (target / relative).write_text(
-            f"# {page.title}\n\n**Source:** {page.source_url}\n\n{page.markdown}",
-            encoding="utf-8",
-        )
+        (target / relative).write_text(page.markdown, encoding="utf-8")
     write_rejections(target, rejected)
     state.write_artifacts(target)
+    write_source_documents(target, all_pages)
+    write_user_manifest(target, vendor=vendor, library=library, version=version, pages=all_pages, source_url=url)
     write_chunks(target, all_pages)
     write_symbols(target, all_pages, profile=profile)
     (target / "INDEX.md").write_text(
@@ -174,6 +173,65 @@ def crawl_single_page(
     return target
 
 
+def write_source_documents(target: Path, pages: list[NormalizedPage]) -> None:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for page in pages:
+        key = canonical_source_key(page)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "source_document_key": key,
+                "source_kind": page.source_kind,
+                "canonical_url": page.canonical_url or page.source_url,
+                "source_url": page.source_url,
+                "path": page.path,
+                "title": page.title,
+                "source_priority": page.source_priority,
+                "discovered_from": page.discovered_from,
+            }
+        )
+    (target / "_sources.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def write_user_manifest(
+    target: Path,
+    *,
+    vendor: str,
+    library: str,
+    version: str,
+    pages: list[NormalizedPage],
+    source_url: str,
+) -> None:
+    oz_dir = target / ".oz"
+    oz_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": 1,
+        "vendor": vendor,
+        "library": library,
+        "version": version,
+        "source_url": source_url,
+        "document_count": len(pages),
+        "sources": [
+            {
+                "path": page.path,
+                "source_url": page.source_url,
+                "canonical_url": page.canonical_url or page.source_url,
+                "source_kind": page.source_kind,
+            }
+            for page in pages
+        ],
+    }
+    (oz_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def canonical_source_key(page: NormalizedPage) -> str:
+    value = page.canonical_url or page.source_url or page.path or page.title
+    return str(value).split("#", 1)[0].rstrip("/")
+
+
 def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[NormalizedPage]:
     return [
         NormalizedPage(
@@ -181,6 +239,10 @@ def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[Normalize
             markdown=clean_markdown(artifact.markdown),
             source_url=artifact.source_url,
             path=artifact.path,
+            source_kind=artifact.source_kind,
+            canonical_url=artifact.canonical_url or artifact.source_url,
+            source_priority=artifact.source_priority,
+            discovered_from=artifact.discovered_from,
         )
         for artifact in artifacts
         if artifact.markdown.strip()
@@ -538,7 +600,9 @@ def prepare_pages(
     sanitized_pages = [
         replace(page, title=sanitize_secret_tokens(page.title), markdown=clean_markdown(page.markdown)) for page in pages
     ]
-    unique_pages, duplicate_rejections = dedupe_pages_by_content(sanitized_pages)
+    unique_sources, source_rejections = dedupe_pages_by_source(sanitized_pages)
+    rejected.extend(source_rejections)
+    unique_pages, duplicate_rejections = dedupe_pages_by_content(unique_sources)
     rejected.extend(duplicate_rejections)
     assigned_pages, version_rejections = filter_current_version(assign_page_paths(unique_pages), target_version=version)
     rejected.extend(version_rejections)
@@ -590,6 +654,46 @@ def dedupe_pages_by_content(pages: list[NormalizedPage]) -> tuple[list[Normalize
         seen[key] = page
         accepted.append(page)
     return accepted, rejected
+
+
+def dedupe_pages_by_source(pages: list[NormalizedPage]) -> tuple[list[NormalizedPage], list[dict[str, Any]]]:
+    groups: dict[str, list[NormalizedPage]] = {}
+    for page in pages:
+        groups.setdefault(canonical_source_key(page), []).append(page)
+    accepted: list[NormalizedPage] = []
+    rejected: list[dict[str, Any]] = []
+    for _key, group in groups.items():
+        best = min(group, key=page_source_rank)
+        accepted.append(best)
+        for page in group:
+            if page is best:
+                continue
+            rejected.append(
+                {
+                    "title": page.title,
+                    "source_url": page.source_url,
+                    "score": 0,
+                    "reasons": ["duplicate source", f"canonical source: {best.source_url}"],
+                    "content_type": "duplicate_source",
+                }
+            )
+    accepted.sort(key=page_source_rank)
+    return accepted, rejected
+
+
+def page_source_rank(page: NormalizedPage) -> tuple[int, int, str]:
+    path = (page.path or "").lower()
+    if path.startswith("api-reference/") or "/api-reference/" in path:
+        path_rank = 0
+    elif path.startswith("_symbols/"):
+        path_rank = 1
+    elif path.startswith("examples/"):
+        path_rank = 2
+    elif path.startswith("guides/"):
+        path_rank = 3
+    else:
+        path_rank = 9
+    return (page.source_priority, path_rank, page.path or page.source_url)
 
 
 def page_content_key(markdown: str) -> str:

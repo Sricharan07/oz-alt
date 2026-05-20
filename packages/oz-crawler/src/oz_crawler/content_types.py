@@ -8,7 +8,7 @@ CONFIG_LANGS = {"json", "yaml", "yml", "toml", "ini", "env", "dotenv"}
 CLI_RE = re.compile(r"(?m)^\s*(?:\$|npx|npm|pnpm|yarn|cargo|pip|uv|docker|kubectl|aws|oz)\s+\S+")
 ERROR_RE = re.compile(r"\b(?:ERR_[A-Z0-9_]+|[A-Za-z_$][\w$]*Error|HTTP\s+[45]\d{2}|[45]\d{2})\b")
 API_HEADING_RE = re.compile(r"(?mi)^#{1,4}\s+.*\b(api|reference|parameters?|returns?|methods?|functions?|classes?)\b")
-CODE_FENCE_RE = re.compile(r"(?ms)```([A-Za-z0-9_+.-]*)\n(.*?)```")
+CODE_FENCE_RE = re.compile(r"(?ms)^\s*(?:`{3,}|~{3,})([A-Za-z0-9_+.-]*)\n(.*?)(?:^\s*(?:`{3,}|~{3,})\s*$)")
 INDENTED_CODE_RE = re.compile(r"(?m)^(?: {4}|\t)(?:const|let|var|import|export|def|class|function|return|curl|npm|npx|pip|uv|docker)\b")
 CONFIG_FILE_RE = re.compile(r"\b(?:package\.json|tsconfig\.json|next\.config\.[cm]?[jt]s|vite\.config\.[cm]?[jt]s|tailwind\.config\.[cm]?[jt]s|docker-compose\.ya?ml|\.env)\b", re.I)
 API_PATH_RE = re.compile(r"(?:^|/)(?:api-reference|reference|api)(?:/|$)", re.I)
@@ -27,6 +27,8 @@ def classify_content_type(source_url: str, markdown: str) -> str:
         return "index"
     if lower_url.endswith((".d.ts", ".pyi")) or "type definitions" in lower_head:
         return "api_reference"
+    if API_PATH_RE.search(lower_path) or API_HEADING_RE.search(text_head):
+        return "api_reference"
     if has_config_block(text_head):
         return "config"
     if CLI_RE.search(text_head):
@@ -37,7 +39,7 @@ def classify_content_type(source_url: str, markdown: str) -> str:
         return "code_example"
     if CODE_FENCE_RE.search(text_head):
         return "code_example"
-    if API_PATH_RE.search(lower_path) or API_HEADING_RE.search(text_head) or API_SIGNATURE_RE.search(text_head):
+    if API_SIGNATURE_RE.search(text_head):
         return "api_reference"
     return "prose"
 

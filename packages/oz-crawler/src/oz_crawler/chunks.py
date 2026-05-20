@@ -13,6 +13,11 @@ from oz_crawler.content_types import block_content_type
 from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.token_counting import token_count
 
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+FULL_FENCE_RE = re.compile(r"^(`{3,}|~{3,})([^\n]*)\n(?P<body>.*)\n\1$", re.S)
+MAX_HEADING_TEXT_CHARS = 160
+MAX_SOURCE_ANCHOR_CHARS = 240
+
 
 @dataclass(frozen=True)
 class MarkdownChunk:
@@ -53,12 +58,17 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                     "parent_chunk_key": parent_chunk_key,
                     "chunk_sha": chunk_sha,
                     "content_sha": content_sha,
-                    "start_line": chunk.start_line + 4,
-                    "end_line": chunk.end_line + 4,
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
                     "heading_path": chunk.heading_path,
                     "symbols": chunk_symbols(chunk.text, page.symbols),
                     "content_type": chunk.content_type,
                     "quality_score": page.quality_score,
+                    "source_kind": page.source_kind,
+                    "canonical_url": page.canonical_url or page.source_url,
+                    "source_document_key": source_document_key(page.canonical_url or page.source_url or page.path or page.title),
+                    "source_priority": page.source_priority,
+                    "discovered_from": page.discovered_from,
                     "token_count": token_count(chunk.text),
                     "text": chunk.text,
                 }
@@ -85,24 +95,7 @@ def chunk_markdown(
         section_text = "\n\n".join(block[0] for block in section).strip()
         heading_path = next((block[3] for block in reversed(section) if block[3]), [])
         section_type = block_content_type(source_url, section_text, page_type)
-        if section_type == "api_reference" and len(section) > 1:
-            children = chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None)
-            if len(children) > 1:
-                parent_key = f"section-{section_idx}-{slugify(' '.join(heading_path) or 'api')}"
-                chunks.append(
-                    MarkdownChunk(
-                        text=limit_section_text(section_text, max_tokens),
-                        heading_path=heading_path,
-                        start_line=section[0][1],
-                        end_line=section[-1][2],
-                        content_type="api_reference",
-                        chunk_key=parent_key,
-                    )
-                )
-                children = [replace(child, parent_key=parent_key) for child in children]
-            chunks.extend(children)
-        else:
-            chunks.extend(chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None))
+        chunks.extend(chunk_section(section, source_url=source_url, page_type=section_type, max_tokens=max_tokens, parent_key=None))
     return [chunk for chunk in enforce_chunk_token_limit(chunks, max_tokens) if chunk.text.strip()]
 
 
@@ -137,11 +130,18 @@ def markdown_blocks(markdown: str) -> list[tuple[str, int, int, list[str]]]:
     current: list[str] = []
     start_line = 1
     in_code = False
+    fence_marker = ""
     heading_path: list[str] = []
     block_heading = list(heading_path)
     for line_number, line in enumerate(markdown.splitlines(), start=1):
-        if line.startswith("```"):
-            in_code = not in_code
+        marker = fence_marker_for_line(line)
+        if marker:
+            if not in_code:
+                in_code = True
+                fence_marker = marker[0]
+            elif marker[0] == fence_marker:
+                in_code = False
+                fence_marker = ""
         if not in_code and not line.strip():
             if current:
                 output.append(("\n".join(current).strip(), start_line, line_number - 1, block_heading))
@@ -221,23 +221,24 @@ def split_large_indivisible_block(
     max_tokens: int,
 ) -> list[MarkdownChunk]:
     text, start_line, _, heading_path = block
-    fence = re.match(r"^```([^\n]*)\n(?P<body>.*)\n```$", text.strip(), re.S)
+    fence = FULL_FENCE_RE.match(text.strip())
     if not fence:
         return split_large_block(block, page_type=page_type, parent_key=parent_key, max_tokens=max_tokens)
-    language = fence.group(1).strip()
+    marker = fence.group(1)
+    language = fence.group(2).strip()
     body_lines = fence.group("body").splitlines()
     chunks: list[MarkdownChunk] = []
     current: list[str] = []
-    current_tokens = token_count(f"```{language}\n```")
+    current_tokens = token_count(f"{marker}{language}\n{marker}")
     current_start = start_line + 1
-    body_budget = max(1, max_tokens - token_count(f"```{language}\n```") - 8)
+    body_budget = max(1, max_tokens - token_count(f"{marker}{language}\n{marker}") - 8)
     for offset, line in enumerate(body_lines, start=1):
         for segment in split_text_by_token_budget(line, body_budget):
             line_tokens = token_count(segment)
             if current and current_tokens + line_tokens > max_tokens:
                 chunks.append(
                     MarkdownChunk(
-                        text=f"```{language}\n" + "\n".join(current).strip() + "\n```",
+                        text=f"{marker}{language}\n" + "\n".join(current).strip() + f"\n{marker}",
                         heading_path=list(heading_path),
                         start_line=current_start - 1,
                         end_line=start_line + offset,
@@ -246,14 +247,14 @@ def split_large_indivisible_block(
                     )
                 )
                 current = []
-                current_tokens = token_count(f"```{language}\n```")
+                current_tokens = token_count(f"{marker}{language}\n{marker}")
                 current_start = start_line + offset
             current.append(segment)
             current_tokens += line_tokens
     if current:
         chunks.append(
             MarkdownChunk(
-                text=f"```{language}\n" + "\n".join(current).strip() + "\n```",
+                text=f"{marker}{language}\n" + "\n".join(current).strip() + f"\n{marker}",
                 heading_path=list(heading_path),
                 start_line=current_start - 1,
                 end_line=start_line + len(body_lines) + 1,
@@ -365,7 +366,8 @@ def heading_text(line: str) -> str | None:
     match = re.match(r"^(#{1,6})\s+(.+)$", line.strip())
     if not match:
         return None
-    return re.sub(r"\s+\{#[^}]+\}\s*$", "", match.group(2)).strip()
+    heading = re.sub(r"\s+\{#[^}]+\}\s*$", "", match.group(2)).strip()
+    return bounded_text(heading, MAX_HEADING_TEXT_CHARS)
 
 
 def update_heading_path(current: list[str], line: str, heading: str) -> list[str]:
@@ -376,7 +378,12 @@ def update_heading_path(current: list[str], line: str, heading: str) -> list[str
 def source_anchor(source_url: str, heading_path: list[str], ordinal: int) -> str:
     base, _ = urldefrag(source_url)
     heading_slug = slugify(heading_path[-1]) if heading_path else "page"
-    return f"{base}#{heading_slug}-_snippet_{ordinal}"
+    anchor = f"{shorten_anchor_base(base)}#{heading_slug}-_snippet_{ordinal}"
+    if len(anchor) <= MAX_SOURCE_ANCHOR_CHARS:
+        return anchor
+    suffix = f"-_snippet_{ordinal}"
+    available = max(16, MAX_SOURCE_ANCHOR_CHARS - len(shorten_anchor_base(base)) - len("#") - len(suffix))
+    return f"{shorten_anchor_base(base)}#{heading_slug[:available].strip('-') or 'page'}{suffix}"
 
 
 def limit_section_text(text: str, max_tokens: int) -> str:
@@ -393,7 +400,27 @@ def limit_section_text(text: str, max_tokens: int) -> str:
 
 
 def has_code_fence(text: str) -> bool:
-    return "```" in text
+    return bool(re.search(r"(?m)^\s*(?:`{3,}|~{3,})", text))
+
+
+def fence_marker_for_line(line: str) -> str:
+    match = FENCE_RE.match(line)
+    return match.group(1) if match else ""
+
+
+def bounded_text(value: str, max_chars: int) -> str:
+    normalized = re.sub(r"\s+", " ", value).strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+    return normalized[: max_chars - 9].rstrip(" -") + "-" + digest
+
+
+def shorten_anchor_base(base: str) -> str:
+    if len(base) <= 150:
+        return base
+    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:10]
+    return base[:139].rstrip("/#?&=-") + "-" + digest
 
 
 def source_path_for_page(page: NormalizedPage) -> str:
@@ -402,6 +429,10 @@ def source_path_for_page(page: NormalizedPage) -> str:
     if page.source_url.startswith("oz-artifact:"):
         return page.source_url.removeprefix("oz-artifact:")
     return f"guides/{slugify(page.title or page.source_url)}.md"
+
+
+def source_document_key(value: str) -> str:
+    return str(value or "").split("#", 1)[0].rstrip("/")
 
 
 def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) -> str:

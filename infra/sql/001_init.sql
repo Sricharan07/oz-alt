@@ -138,9 +138,29 @@ create table if not exists blobs_meta (
   first_seen_at timestamptz not null default now()
 );
 
+create table if not exists source_documents (
+  id bigserial primary key,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  source_document_key text not null,
+  source_kind text not null default 'website',
+  canonical_url text,
+  source_url text,
+  path text,
+  title text,
+  source_priority integer not null default 50,
+  discovered_from text,
+  raw_artifact_key text,
+  etag text,
+  last_modified text,
+  fetched_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (version_id, source_document_key)
+);
+
 create table if not exists chunks (
   id bigserial primary key,
   version_id bigint not null references library_versions(id) on delete cascade,
+  source_document_id bigint references source_documents(id) on delete set null,
   path text not null,
   start_line integer not null default 1,
   end_line integer,

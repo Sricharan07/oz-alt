@@ -11,6 +11,10 @@ from typing import Any
 from oz_crawler.profiles import LibraryProfile
 
 USEFUL_CONTENT_TYPES = {"api_reference", "code_example", "prose", "config", "cli", "error_ref", "types", "example"}
+DOC_AUTHORING_PATH_RE = re.compile(
+    r"(?:^|/)(?:community|contributing|contribution-guide|docs-contribution|docs-writing|style-guide|styleguides|authors|maintainers|governance|roadmap)(?:/|\.|$)",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,7 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     rejected = rejected_pages(target)
     symbols = symbol_names(target)
     chunks = chunk_rows(target)
+    sources = source_rows(target)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -76,6 +81,21 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     if chunks and oversized_chunks:
         errors.append(f"{oversized_chunks} chunks exceed {max_allowed_tokens} tokens")
     parent_child_chunks = sum(1 for row in chunks if row.get("parent_chunk_key"))
+    long_source_anchors = sum(1 for row in chunks if len(str(row.get("source_anchor") or "")) > 240)
+    if chunks and long_source_anchors:
+        errors.append(f"{long_source_anchors} chunks have source anchors longer than 240 chars")
+    long_heading_paths = sum(1 for row in chunks if any(len(str(item)) > 160 for item in row.get("heading_path") or []))
+    if chunks and long_heading_paths:
+        errors.append(f"{long_heading_paths} chunks have heading path entries longer than 160 chars")
+    docs_authoring_chunks = sum(1 for row in chunks if DOC_AUTHORING_PATH_RE.search(str(row.get("path") or "")))
+    if chunks and docs_authoring_chunks:
+        errors.append(f"{docs_authoring_chunks} chunks come from docs-authoring paths")
+    index_boilerplate_chunks = sum(1 for row in chunks if "index of all docs" in str(row.get("text") or "").lower())
+    if chunks and index_boilerplate_chunks:
+        errors.append(f"{index_boilerplate_chunks} chunks contain docs index boilerplate")
+    duplicate_source_documents = duplicate_source_document_count(sources)
+    if sources and duplicate_source_documents:
+        errors.append(f"{duplicate_source_documents} duplicate canonical source documents")
 
     metrics = {
         "documents": len(pages),
@@ -92,6 +112,12 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         "oversized_chunks": oversized_chunks,
         "max_chunk_tokens": max_allowed_tokens,
         "parent_child_chunks": parent_child_chunks,
+        "source_documents": len(sources),
+        "duplicate_source_documents": duplicate_source_documents,
+        "long_source_anchors": long_source_anchors,
+        "long_heading_paths": long_heading_paths,
+        "docs_authoring_chunks": docs_authoring_chunks,
+        "index_boilerplate_chunks": index_boilerplate_chunks,
     }
     return ValidationResult(not errors, errors, warnings, metrics)
 
@@ -129,7 +155,7 @@ def is_policy_rejection(row: dict[str, Any]) -> bool:
     reasons = [str(reason).lower() for reason in row.get("reasons") or []]
     content_type = str(row.get("content_type") or "").lower()
     return (
-        content_type in {"duplicate", "archived_version", "network_page_fetch", "network_source_fetch"}
+        content_type in {"duplicate", "duplicate_source", "archived_version", "network_page_fetch", "network_source_fetch"}
         or any(reason.startswith("duplicate content") for reason in reasons)
         or any("version" in reason and ("archived" in reason or "target" in reason) for reason in reasons)
     )
@@ -151,6 +177,31 @@ def chunk_rows(target: Path) -> list[dict[str, Any]]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+def source_rows(target: Path) -> list[dict[str, Any]]:
+    path = target / "_sources.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def duplicate_source_document_count(rows: list[dict[str, Any]]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for row in rows:
+        key = str(row.get("canonical_url") or row.get("source_url") or row.get("path") or "").split("#", 1)[0].rstrip("/")
+        if not key:
+            continue
+        if key in seen:
+            duplicates += 1
+        else:
+            seen.add(key)
+    return duplicates
 
 
 def missing_required_topics(target: Path, topics: list[str]) -> list[str]:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -108,16 +110,57 @@ class FastApiServerTests(unittest.TestCase):
         self.assertEqual(response.json()["error"], "request_body_too_large")
 
     def test_context_route_returns_snippets_and_retrieval_mode(self) -> None:
-        with self.client() as client:
-            response = client.post(
-                "/context",
-                json={
-                    "query": "middleware jwt cookies",
-                    "library_scope": "vercel/next.js",
-                    "max_tokens": 800,
-                    "max_results": 2,
-                },
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "registry" / "fixtures" / "vercel" / "next.js" / "15"
+            (fixture / "guides").mkdir(parents=True)
+            (fixture / "guides" / "middleware.md").write_text(
+                "# Middleware\n\nUse middleware to read JWT cookies before routing requests, validate the session, and continue to the correct route.",
+                encoding="utf-8",
             )
+            snippet = "Use middleware to read JWT cookies before routing requests, validate the session, and continue to the correct route."
+            (fixture / "_chunks.jsonl").write_text(
+                json.dumps(
+                    {
+                        "path": "guides/middleware.md",
+                        "text": snippet,
+                        "start_line": 3,
+                        "content_type": "prose",
+                        "token_count": 18,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "registry").mkdir(exist_ok=True)
+            (root / "registry" / "catalog.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "libraries": [
+                            {
+                                "vendor": "vercel",
+                                "library": "next.js",
+                                "version": "15",
+                                "fixture_path": "registry/fixtures/vercel/next.js/15",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = ServerState(repo_root=root, require_auth=False, bearer_token="test-token")
+            with EnvPatch(OZ_DATABASE_URL=None, DATABASE_URL=None):
+                with TestClient(create_app(state)) as client:
+                    response = client.post(
+                        "/context",
+                        json={
+                            "query": "middleware jwt cookies",
+                            "library_scope": "vercel/next.js",
+                            "max_tokens": 800,
+                            "max_results": 2,
+                        },
+                    )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()

@@ -9,27 +9,103 @@ from oz_crawler.normalize import NormalizedPage, clean_markdown
 from oz_crawler.content_types import classify_content_type
 
 
-FRONTMATTER_BLOCK = re.compile(r"(?ms)^---\s*\n(.*?)\n---\s*\n")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
-    matches = list(FRONTMATTER_BLOCK.finditer(text))
-    if not matches:
+    boundaries = llms_frontmatter_boundaries(text)
+    if not boundaries:
         markdown = clean_markdown(text)
-        return [NormalizedPage(title=title_from_markdown(markdown, source_url), markdown=markdown, source_url=source_url)]
+        return [
+            NormalizedPage(
+                title=title_from_markdown(markdown, source_url),
+                markdown=markdown,
+                source_url=source_url,
+                canonical_url=source_url,
+                source_kind="llms_full",
+                source_priority=20,
+            )
+        ]
 
     pages: list[NormalizedPage] = []
-    for index, match in enumerate(matches):
-        body_start = match.end()
-        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        frontmatter = parse_frontmatter(match.group(1))
+    for index, (start, end, frontmatter) in enumerate(boundaries):
+        body_start = end
+        body_end = boundaries[index + 1][0] if index + 1 < len(boundaries) else len(text)
         body = clean_markdown(text[body_start:body_end])
         if not body:
             continue
         page_url = frontmatter.get("url") or source_url
         title = frontmatter.get("title") or title_from_markdown(body, page_url)
-        pages.append(NormalizedPage(title=title, markdown=body, source_url=page_url))
+        pages.append(
+            NormalizedPage(
+                title=title,
+                markdown=body,
+                source_url=page_url,
+                canonical_url=page_url,
+                source_kind="llms_full",
+                source_priority=20,
+                discovered_from=source_url,
+            )
+        )
     return pages
+
+
+def llms_frontmatter_boundaries(text: str) -> list[tuple[int, int, dict[str, str]]]:
+    offsets = line_offsets(text)
+    lines = text.splitlines(keepends=True)
+    boundaries: list[tuple[int, int, dict[str, str]]] = []
+    in_fence = False
+    fence_marker = ""
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        marker = fence_marker_for_line(lines[index])
+        if marker:
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker[0] == fence_marker:
+                in_fence = False
+                fence_marker = ""
+        if in_fence or stripped != "---":
+            index += 1
+            continue
+        close = index + 1
+        payload_lines: list[str] = []
+        while close < len(lines):
+            if lines[close].strip() == "---":
+                payload = "".join(payload_lines)
+                frontmatter = parse_frontmatter(payload)
+                if looks_like_llms_page_frontmatter(frontmatter):
+                    boundaries.append((offsets[index], offsets[close] + len(lines[close]), frontmatter))
+                    index = close
+                    break
+                break
+            payload_lines.append(lines[close])
+            close += 1
+        index += 1
+    return boundaries
+
+
+def line_offsets(text: str) -> list[int]:
+    offsets: list[int] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        offsets.append(offset)
+        offset += len(line)
+    return offsets
+
+
+def fence_marker_for_line(line: str) -> str:
+    match = FENCE_RE.match(line)
+    return match.group(1) if match else ""
+
+
+def looks_like_llms_page_frontmatter(frontmatter: dict[str, str]) -> bool:
+    if not frontmatter:
+        return False
+    keys = {key.lower() for key in frontmatter}
+    return bool(keys & {"url", "title", "source", "path"})
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:
@@ -55,7 +131,7 @@ def assign_page_paths(pages: Iterable[NormalizedPage]) -> list[NormalizedPage]:
     seen: dict[str, int] = {}
     for page in pages:
         content_type = classify_content_type(page.source_url, page.markdown)
-        path = document_path(page.source_url, page.title, content_type)
+        path = page.path or document_path(page.canonical_url or page.source_url, page.title, content_type)
         count = seen.get(path, 0)
         seen[path] = count + 1
         if count:
@@ -71,18 +147,7 @@ def document_path(source_url: str, title: str, content_type: str) -> str:
     if source_url.startswith("oz-artifact:"):
         return source_url.removeprefix("oz-artifact:")
 
-    prefix = {
-        "api_reference": "api-reference",
-        "types": "api-reference",
-        "code_example": "examples",
-        "example": "examples",
-        "config": "guides",
-        "cli": "guides",
-        "error_ref": "guides",
-        "prose": "guides",
-        "index": "guides",
-        "guide": "guides",
-    }.get(content_type, "guides")
+    prefix = path_prefix_from_url(parsed.path, content_type)
 
     if url_path:
         slug = slug_from_url_path(url_path)
@@ -96,6 +161,19 @@ def slug_from_url_path(path: str) -> str:
     if not parts:
         return "index"
     return "/".join(slugify(part.removesuffix(".html").removesuffix(".md")) for part in parts)
+
+
+def path_prefix_from_url(path: str, content_type: str) -> str:
+    lower = path.lower()
+    if re.search(r"(?:^|/)(?:api-reference|reference|api)(?:/|$)", lower):
+        return "api-reference"
+    if re.search(r"(?:^|/)(?:examples?|sample|tutorials?)(?:/|$)", lower):
+        return "examples"
+    if content_type in {"api_reference", "types"}:
+        return "api-reference"
+    if content_type in {"code_example", "example"} and not lower:
+        return "examples"
+    return "guides"
 
 
 def slugify(value: str) -> str:

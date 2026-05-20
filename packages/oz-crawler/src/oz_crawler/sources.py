@@ -26,6 +26,10 @@ class SourceArtifact:
     title: str
     source_url: str
     markdown: str
+    source_kind: str = "website"
+    canonical_url: str | None = None
+    source_priority: int = 50
+    discovered_from: str | None = None
 
 
 def collect_source_artifacts(
@@ -122,6 +126,8 @@ def max_source_artifacts(max_documents: int) -> int:
 
 
 def artifact_priority(artifact: SourceArtifact) -> int:
+    if artifact.source_priority >= 0:
+        return artifact.source_priority
     path = artifact.path.lower()
     if path.startswith("api-reference/openapi/"):
         return 0
@@ -172,6 +178,10 @@ def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, state: Craw
                     title=page.title,
                     source_url=page.source_url,
                     markdown=artifact_markdown(page.title, page.markdown),
+                    source_kind="llms_full",
+                    canonical_url=page.canonical_url or page.source_url,
+                    source_priority=20,
+                    discovered_from=url,
                 )
             )
             if len(output) >= limit:
@@ -203,6 +213,9 @@ def markdown_url_artifacts(
                 title=title,
                 source_url=url,
                 markdown=artifact_markdown(title, text),
+                source_kind="markdown",
+                canonical_url=url,
+                source_priority=30,
             )
         )
         if len(output) >= limit:
@@ -222,7 +235,16 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, state:
         if not text or looks_like_html(text):
             continue
         structured = openapi_chunks(text, url, limit=limit - len(output))
-        output.extend(SourceArtifact(**item) for item in structured)
+        output.extend(
+            SourceArtifact(
+                **item,
+                source_kind="openapi",
+                canonical_url=str(item.get("source_url") or url),
+                source_priority=10,
+                discovered_from=url,
+            )
+            for item in structured
+        )
         if not structured:
             output.append(
                 SourceArtifact(
@@ -230,6 +252,9 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, state:
                     title="OpenAPI Reference",
                     source_url=url,
                     markdown=render_openapi(text, url),
+                    source_kind="openapi",
+                    canonical_url=url,
+                    source_priority=10,
                 )
             )
         if len(output) >= limit:
@@ -250,7 +275,16 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
             continue
         language = "typescript" if path.endswith(".d.ts") else "python"
         structured = type_definition_chunks(text, url, language=language, limit=limit - len(output))
-        output.extend(SourceArtifact(**item) for item in structured)
+        output.extend(
+            SourceArtifact(
+                **item,
+                source_kind="type_defs",
+                canonical_url=str(item.get("source_url") or url),
+                source_priority=12,
+                discovered_from=url,
+            )
+            for item in structured
+        )
         if not structured:
             output.append(
                 SourceArtifact(
@@ -258,6 +292,9 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
                     title="Type Definitions",
                     source_url=url,
                     markdown=code_artifact_markdown("Type Definitions", language, text),
+                    source_kind="type_defs",
+                    canonical_url=url,
+                    source_priority=12,
                 )
             )
         if len(output) >= limit:
@@ -359,12 +396,22 @@ def github_file_artifact(
         language = source_language_for_path(name)
         structured = source_code_chunks(text, str(download_url), language=language, limit=1)
         if structured:
-            return SourceArtifact(**structured[0])
+            return SourceArtifact(
+                **structured[0],
+                source_kind="source_code",
+                canonical_url=str(structured[0].get("source_url") or download_url),
+                source_priority=15,
+                discovered_from=f"https://github.com/{owner}/{repo}",
+            )
     return SourceArtifact(
         path=f"guides/github-{slugify(owner + '-' + repo + '-' + name)}.md",
         title=f"{owner}/{repo} {name}",
         source_url=str(download_url),
         markdown=markdown_for_github_file(name, text, str(download_url)),
+        source_kind="github",
+        canonical_url=str(download_url),
+        source_priority=25,
+        discovered_from=f"https://github.com/{owner}/{repo}",
     )
 
 
@@ -551,16 +598,24 @@ def fetch_text(url: str, *, state: CrawlRunState | None = None) -> str | None:
 
 
 def dedupe_artifacts(artifacts: list[SourceArtifact]) -> list[SourceArtifact]:
-    seen: set[str] = set()
-    output: list[SourceArtifact] = []
-    for artifact in artifacts:
-        key = artifact.source_url or artifact.path
-        if key in seen or artifact.path in seen:
-            continue
-        seen.add(key)
-        seen.add(artifact.path)
-        output.append(artifact)
-    return output
+    best_by_source: dict[str, SourceArtifact] = {}
+    for artifact in sorted(artifacts, key=lambda item: (artifact_priority(item), item.path)):
+        key = canonical_source_key(artifact)
+        current = best_by_source.get(key)
+        if current is None or artifact_priority(artifact) < artifact_priority(current):
+            best_by_source[key] = artifact
+
+    best_by_path: dict[str, SourceArtifact] = {}
+    for artifact in sorted(best_by_source.values(), key=lambda item: (artifact_priority(item), item.path)):
+        current = best_by_path.get(artifact.path)
+        if current is None or artifact_priority(artifact) < artifact_priority(current):
+            best_by_path[artifact.path] = artifact
+    return list(best_by_path.values())
+
+
+def canonical_source_key(artifact: SourceArtifact) -> str:
+    key = artifact.canonical_url or artifact.source_url or artifact.path
+    return str(key).split("#", 1)[0].rstrip("/")
 
 
 def slugify(value: str) -> str:

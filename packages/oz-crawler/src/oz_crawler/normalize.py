@@ -45,6 +45,7 @@ BOILERPLATE_LINE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^(?:last updated|updated)\s*:?\s+.+$", re.I),
     re.compile(r"^</?(?:Intro|InlineToc|TableOfContents|Cards?|Card|Steps?|Tabs?|Tab|FileTree|PagesOnly|AppOnly|PagesRouter|AppRouter)\b[^>]*?/?>$", re.I),
 )
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,10 @@ class NormalizedPage:
     content_type: str = "prose"
     quality_score: float = 1.0
     symbols: tuple[str, ...] = ()
+    source_kind: str = "website"
+    canonical_url: str | None = None
+    source_priority: int = 50
+    discovered_from: str | None = None
 
 
 def normalize_html(html: str, *, source_url: str, title: str | None = None) -> NormalizedPage:
@@ -110,11 +115,18 @@ def clean_markdown(markdown: str) -> str:
     lines: list[str] = []
     previous_blank = False
     in_code = False
+    fence_marker = ""
     for raw_line in strip_frontmatter(sanitize_secret_tokens(markdown)).splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
-        if stripped.startswith("```"):
-            in_code = not in_code
+        marker = fence_marker_for_line(line)
+        if marker:
+            if not in_code:
+                in_code = True
+                fence_marker = marker[0]
+            elif marker[0] == fence_marker:
+                in_code = False
+                fence_marker = ""
         if not in_code and is_markdown_separator(stripped):
             continue
         if not in_code and is_boilerplate_line(stripped):
@@ -125,6 +137,11 @@ def clean_markdown(markdown: str) -> str:
         lines.append(line)
         previous_blank = blank
     return "\n".join(lines).strip() + "\n"
+
+
+def fence_marker_for_line(line: str) -> str:
+    match = FENCE_RE.match(line)
+    return match.group(1) if match else ""
 
 
 def strip_frontmatter(markdown: str) -> str:

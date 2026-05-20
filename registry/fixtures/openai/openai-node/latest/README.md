@@ -1,3 +1,0 @@
-# Search code, repositories, users, issues, pull requests...
-
-Documentation crawled from https://github.com/openai/openai-node.

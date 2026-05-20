@@ -23,6 +23,8 @@ def build_pack_bytes(source_root: Path, vendor: str, library: str, version: str)
         if not path.is_file():
             continue
         relative = path.relative_to(source_root).as_posix()
+        if not pack_path_allowed(relative):
+            continue
         body = path.read_bytes()
         sha = sha256_hex(body)
         size = len(body)
@@ -48,6 +50,14 @@ def build_pack_bytes(source_root: Path, vendor: str, library: str, version: str)
     sign_manifest(manifest)
     pack = {"manifest": manifest, "blobs": pack_blobs}
     return canonical_json(pack), manifest
+
+
+def pack_path_allowed(relative: str) -> bool:
+    if relative in {"INDEX.md", "README.md"}:
+        return True
+    if relative.startswith((".oz/", "guides/", "api-reference/", "examples/", "_symbols/")):
+        return True
+    return False
 
 
 def canonical_json(value: dict[str, Any]) -> bytes:

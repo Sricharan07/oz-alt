@@ -48,10 +48,11 @@ from oz_crawler.normalize import NormalizedPage
 from oz_crawler.normalize import clean_markdown
 from oz_crawler.parsers.source_code import source_code_chunks, source_path_allowed
 from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
-from oz_crawler.splitting import split_llms_full
+from oz_crawler.pack import build_pack_bytes
+from oz_crawler.splitting import document_path, split_llms_full
 from oz_crawler.sources import artifact_markdown, extract_urls, prioritized_urls
 from oz_crawler.token_counting import token_count
-from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections
+from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections, validate_fixture
 
 
 class RetrievalQualityTests(unittest.TestCase):
@@ -212,6 +213,25 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0].title, "Routing")
         self.assertNotIn("title:", pages[0].markdown)
+
+    def test_llms_full_split_ignores_frontmatter_inside_code_fences(self) -> None:
+        pages = split_llms_full(
+            "---\ntitle: Config Guide\nurl: https://docs.example/config\n---\n"
+            "# Config Guide\n\n````md\n---\ntitle: Nested Example\n---\n````\n\nUse config.",
+            source_url="https://docs.example/llms-full.txt",
+        )
+
+        self.assertEqual(len(pages), 1)
+        self.assertIn("Nested Example", pages[0].markdown)
+
+    def test_document_path_uses_canonical_url_not_content_type(self) -> None:
+        path = document_path(
+            "https://nextjs.org/docs/app/api-reference/functions/cookies",
+            "cookies",
+            "code_example",
+        )
+
+        self.assertEqual(path, "api-reference/app/api-reference/functions/cookies.md")
 
     def test_source_artifact_markdown_keeps_source_url_out_of_indexed_text(self) -> None:
         markdown = artifact_markdown("Routing", "---\ntitle: Routing\n---\n# Routing\n\nUse routes.")
@@ -394,7 +414,50 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertEqual(len(accepted), 1)
         self.assertEqual(len(rejected), 1)
-        self.assertIn("duplicate content", rejected[0]["reasons"])
+        self.assertIn("duplicate source", rejected[0]["reasons"])
+
+    def test_pack_excludes_internal_indexing_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "guides").mkdir()
+            (root / ".oz").mkdir()
+            (root / "guides" / "doc.md").write_text("Doc", encoding="utf-8")
+            (root / ".oz" / "manifest.json").write_text("{}", encoding="utf-8")
+            (root / "_chunks.jsonl").write_text("internal", encoding="utf-8")
+            body, manifest = build_pack_bytes(root, "v", "l", "1")
+
+        paths = {row["path"] for row in manifest["blobs"]}
+        self.assertIn("guides/doc.md", paths)
+        self.assertIn(".oz/manifest.json", paths)
+        self.assertNotIn("_chunks.jsonl", paths)
+        self.assertNotIn(b"_chunks.jsonl", body)
+
+    def test_validation_blocks_long_anchors_and_docs_authoring_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            (target / "guides" / "community").mkdir(parents=True)
+            (target / "guides" / "community" / "contribution-guide.md").write_text("Contribution guide", encoding="utf-8")
+            (target / "_chunks.jsonl").write_text(
+                json.dumps(
+                    {
+                        "path": "guides/community/contribution-guide.md",
+                        "text": "For an index of all docs, read this.",
+                        "source_anchor": "https://docs.example/" + ("x" * 260),
+                        "heading_path": ["h" * 170],
+                        "token_count": 12,
+                        "content_type": "prose",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = validate_fixture(target, profile=None)
+
+        self.assertFalse(result.passed)
+        self.assertGreater(result.metrics["long_source_anchors"], 0)
+        self.assertGreater(result.metrics["docs_authoring_chunks"], 0)
+        self.assertGreater(result.metrics["index_boilerplate_chunks"], 0)
 
     def test_write_chunks_dedupes_exact_chunk_content_across_pages(self) -> None:
         markdown = "# Shared\n\n" + "Use the same setup sequence. " * 25

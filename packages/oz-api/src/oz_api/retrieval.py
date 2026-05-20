@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -118,27 +119,34 @@ def context(
         text = context_source_text(row)
         if not useful_context_text(text, row):
             continue
-        snippet = trim_to_token_budget(text, remaining)
+        metadata = {
+            "path": row.get("path"),
+            "line": row.get("line"),
+            "score": row.get("score"),
+            "library": row.get("library"),
+            "vendor": row.get("vendor"),
+            "version": row.get("version"),
+            "matched_path": row.get("matched_path"),
+            "source_anchor": bounded_string(row.get("source_anchor"), 240),
+            "content_type": row.get("content_type"),
+            "heading_path": bounded_list(row.get("heading_path") or [], 160),
+            "symbols": row.get("symbols") or [],
+            "retrieval_mode": row.get("retrieval_mode", retrieval_mode),
+            "degraded": bool(row.get("degraded", degraded)),
+        }
+        metadata_tokens = approximate_tokens(json.dumps(metadata, sort_keys=True))
+        snippet_budget = remaining - metadata_tokens
+        if snippet_budget <= 0:
+            break
+        snippet = trim_to_token_budget(text, snippet_budget)
         tokens = approximate_tokens(snippet)
         if not snippet.strip() or tokens <= 0:
             continue
-        remaining -= tokens
+        remaining -= tokens + metadata_tokens
         snippets.append(
             {
-                "path": row.get("path"),
-                "line": row.get("line"),
-                "score": row.get("score"),
-                "library": row.get("library"),
-                "vendor": row.get("vendor"),
-                "version": row.get("version"),
-                "matched_path": row.get("matched_path"),
-                "source_anchor": row.get("source_anchor"),
-                "content_type": row.get("content_type"),
-                "heading_path": row.get("heading_path") or [],
-                "symbols": row.get("symbols") or [],
+                **metadata,
                 "token_count": tokens,
-                "retrieval_mode": row.get("retrieval_mode", retrieval_mode),
-                "degraded": bool(row.get("degraded", degraded)),
                 "snippet": snippet,
             }
         )
@@ -272,6 +280,18 @@ def trim_to_token_budget(text: str, budget: int) -> str:
 
 def approximate_tokens(text: str) -> int:
     return max(1, len(re.findall(r"\w+|[^\w\s]", text)))
+
+
+def bounded_string(value: Any, max_chars: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= max_chars else text[:max_chars].rstrip()
+
+
+def bounded_list(value: list[Any], max_chars: int) -> list[str]:
+    output: list[str] = []
+    for item in value:
+        output.append(bounded_string(item, max_chars))
+    return output
 
 
 __all__ = [

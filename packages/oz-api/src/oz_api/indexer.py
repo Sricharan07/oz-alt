@@ -103,6 +103,14 @@ def write_catalog_and_chunks(
         line_cache: dict[str, str] = {}
         current_chunk_shas: list[str] = []
         rows = chunk_rows(storage, entry)
+        source_ids: dict[str, int] = {}
+        current_source_keys: list[str] = []
+        for source in source_document_rows(fixture, rows):
+            source_id = writer.upsert_source_document(version_id, source)
+            key = str(source["source_document_key"])
+            source_ids[key] = source_id
+            current_source_keys.append(key)
+        writer.delete_stale_source_documents(version_id, current_source_keys)
         for row in rows:
             chunk_sha = chunk_sha_for_row(entry, row)
             current_chunk_shas.append(chunk_sha)
@@ -115,6 +123,7 @@ def write_catalog_and_chunks(
                 start_line=start_line,
                 end_line=end_line,
                 source_url=str(row.get("source_url") or ""),
+                source_document_id=source_ids.get(source_document_key_for_row(row)),
                 ordinal=int(row.get("ordinal") or 1),
                 chunk_key=str(row.get("chunk_key") or row.get("id") or ""),
                 parent_chunk_key=nullable_string(row.get("parent_chunk_key")),
@@ -154,7 +163,7 @@ def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str
                 append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
     for row in symbol_chunk_rows(fixture):
         append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
-    return add_parent_chunks(entry, fixture, [enrich_chunk_row(entry, row) for row in rows])
+        return [enrich_chunk_row(entry, row) for row in rows]
 
 
 def append_unique_chunk_row(
@@ -185,7 +194,56 @@ def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, An
     enriched["content_sha"] = content_sha_for_row(enriched)
     enriched["token_count"] = token_count(text)
     enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
+    enriched["source_document_key"] = source_document_key_for_row(enriched)
     return enriched
+
+
+def source_document_rows(fixture: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source_path = fixture / "_sources.jsonl"
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if source_path.exists():
+        for line in source_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            source = json.loads(line)
+            key = source_document_key_for_row(source)
+            if not key or key in seen:
+                continue
+            source["source_document_key"] = key
+            output.append(source)
+            seen.add(key)
+    for row in rows:
+        key = source_document_key_for_row(row)
+        if not key or key in seen:
+            continue
+        output.append(
+            {
+                "source_document_key": key,
+                "source_kind": str(row.get("source_kind") or "website"),
+                "canonical_url": str(row.get("canonical_url") or row.get("source_url") or ""),
+                "source_url": str(row.get("source_url") or ""),
+                "path": str(row.get("path") or ""),
+                "title": first_heading(str(row.get("text") or "")) or Path(str(row.get("path") or "")).stem,
+                "source_priority": int(row.get("source_priority") or 50),
+                "discovered_from": nullable_string(row.get("discovered_from")),
+            }
+        )
+        seen.add(key)
+    return output
+
+
+def source_document_key_for_row(row: dict[str, Any]) -> str:
+    value = row.get("source_document_key") or row.get("canonical_url") or row.get("source_url") or row.get("path") or ""
+    return str(value).split("#", 1)[0].rstrip("/")
+
+
+def first_heading(text: str) -> str:
+    for line in text.splitlines():
+        match = re.match(r"^#\s+(.+)$", line.strip())
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 def canonical_content_type(path: str, source_url: str, text: str, existing: str) -> str:
@@ -547,6 +605,12 @@ class IndexWriter:
     def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
         raise NotImplementedError
 
+    def upsert_source_document(self, version_id: int, source: dict[str, Any]) -> int:
+        raise NotImplementedError
+
+    def delete_stale_source_documents(self, version_id: int, current_source_keys: list[str]) -> None:
+        raise NotImplementedError
+
     def count_embedded_chunks(self) -> int:
         raise NotImplementedError
 
@@ -573,6 +637,7 @@ class IndexWriter:
         start_line: int,
         end_line: int | None,
         source_url: str,
+        source_document_id: int | None,
         ordinal: int,
         chunk_key: str | None,
         parent_chunk_key: str | None,
@@ -706,6 +771,49 @@ class PostgresWriter(IndexWriter):
             (version_id, *chunk_shas),
         )
 
+    def upsert_source_document(self, version_id: int, source: dict[str, Any]) -> int:
+        return self.scalar(
+            """
+            insert into source_documents(
+              version_id, source_document_key, source_kind, canonical_url, source_url,
+              path, title, source_priority, discovered_from, fetched_at
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+            on conflict (version_id, source_document_key) do update
+              set source_kind = excluded.source_kind,
+                  canonical_url = excluded.canonical_url,
+                  source_url = excluded.source_url,
+                  path = excluded.path,
+                  title = excluded.title,
+                  source_priority = excluded.source_priority,
+                  discovered_from = excluded.discovered_from,
+                  fetched_at = now()
+            returning id
+            """,
+            (
+                version_id,
+                str(source["source_document_key"]),
+                str(source.get("source_kind") or "website"),
+                nullable_string(source.get("canonical_url")),
+                nullable_string(source.get("source_url")),
+                nullable_string(source.get("path")),
+                nullable_string(source.get("title")),
+                int(source.get("source_priority") or 50),
+                nullable_string(source.get("discovered_from")),
+            ),
+        )
+
+    def delete_stale_source_documents(self, version_id: int, current_source_keys: list[str]) -> None:
+        keys = sorted(set(current_source_keys))
+        if not keys:
+            self.execute("delete from source_documents where version_id = %s", (version_id,))
+            return
+        placeholders = ", ".join(["%s"] * len(keys))
+        self.execute(
+            f"delete from source_documents where version_id = %s and source_document_key not in ({placeholders})",
+            (version_id, *keys),
+        )
+
     def count_embedded_chunks(self) -> int:
         with self.connection.cursor() as cursor:
             cursor.execute("select count(*) from chunks where embedding is not null")
@@ -757,7 +865,19 @@ class PostgresWriter(IndexWriter):
             with grouped as (
               select version_id,
                      md5(regexp_replace(lower(content), '\\s+', ' ', 'g')) as cluster_key,
-                     array_agg(id order by quality_score desc, token_count desc, id asc) as ids,
+                     array_agg(
+                       id order by
+                         case
+                           when path like '_symbols/%' then 0
+                           when path like 'api-reference/%' then 1
+                           when path like 'guides/%' then 2
+                           when path like 'examples/%' then 3
+                           else 9
+                         end asc,
+                         quality_score desc,
+                         token_count desc,
+                         id asc
+                     ) as ids,
                      count(*) as member_count
               from chunks
               where version_id = %s
@@ -788,6 +908,40 @@ class PostgresWriter(IndexWriter):
               select c.id as left_id,
                      n.id as right_id,
                      case
+                       when (
+                         case
+                           when c.path like '_symbols/%' then 0
+                           when c.path like 'api-reference/%' then 1
+                           when c.path like 'guides/%' then 2
+                           when c.path like 'examples/%' then 3
+                           else 9
+                         end
+                       ) < (
+                         case
+                           when n.path like '_symbols/%' then 0
+                           when n.path like 'api-reference/%' then 1
+                           when n.path like 'guides/%' then 2
+                           when n.path like 'examples/%' then 3
+                           else 9
+                         end
+                       ) then c.id
+                       when (
+                         case
+                           when c.path like '_symbols/%' then 0
+                           when c.path like 'api-reference/%' then 1
+                           when c.path like 'guides/%' then 2
+                           when c.path like 'examples/%' then 3
+                           else 9
+                         end
+                       ) > (
+                         case
+                           when n.path like '_symbols/%' then 0
+                           when n.path like 'api-reference/%' then 1
+                           when n.path like 'guides/%' then 2
+                           when n.path like 'examples/%' then 3
+                           else 9
+                         end
+                       ) then n.id
                        when c.quality_score > n.quality_score then c.id
                        when c.quality_score < n.quality_score then n.id
                        when c.token_count >= n.token_count then c.id
@@ -795,7 +949,7 @@ class PostgresWriter(IndexWriter):
                      end as canonical_id
               from chunks c
               join lateral (
-                select id, quality_score, token_count, embedding
+                select id, path, quality_score, token_count, embedding
                 from chunks candidate
                 where candidate.version_id = c.version_id
                   and candidate.id <> c.id
@@ -868,6 +1022,7 @@ class PostgresWriter(IndexWriter):
         start_line: int,
         end_line: int | None,
         source_url: str,
+        source_document_id: int | None,
         ordinal: int,
         chunk_key: str | None,
         parent_chunk_key: str | None,
@@ -888,14 +1043,15 @@ class PostgresWriter(IndexWriter):
         self.execute(
             """
             insert into chunks(
-              version_id, path, start_line, end_line, source_url, ordinal, chunk_key,
+              version_id, source_document_id, path, start_line, end_line, source_url, ordinal, chunk_key,
               parent_chunk_key, chunk_sha, content_sha, heading_path, symbols, content_type,
               quality_score, token_count, source_anchor, embedding_model,
               embedding_dimensions, content, embedding
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
-              set path = excluded.path,
+              set source_document_id = excluded.source_document_id,
+                  path = excluded.path,
                   start_line = excluded.start_line,
                   end_line = excluded.end_line,
                   source_url = excluded.source_url,
@@ -916,6 +1072,7 @@ class PostgresWriter(IndexWriter):
             """,
             (
                 version_id,
+                source_document_id,
                 path,
                 start_line,
                 end_line,

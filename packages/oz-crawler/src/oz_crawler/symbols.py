@@ -73,6 +73,8 @@ def extract_page_symbols(
     *,
     profile: LibraryProfile | None = None,
 ) -> list[tuple[ExtractedSymbol, str]]:
+    if not is_symbol_source_page(page):
+        return []
     output: list[tuple[ExtractedSymbol, str]] = []
     for language, code in code_blocks(page.markdown):
         for symbol in symbols_from_code(code, language):
@@ -80,6 +82,18 @@ def extract_page_symbols(
     for symbol in symbols_from_markdown(page, profile=profile):
         output.append((symbol, "markdown"))
     return output
+
+
+def is_symbol_source_page(page: NormalizedPage) -> bool:
+    path = (page.path or "").lower()
+    source_kind = page.source_kind.lower()
+    if path.startswith("_symbols/") or path.startswith("api-reference/"):
+        return True
+    if source_kind in {"openapi", "type_defs", "source_code"}:
+        return True
+    if page.content_type == "api_reference" and "/api" in page.source_url.lower():
+        return True
+    return False
 
 
 def symbols_from_code(code: str, language: str) -> list[ExtractedSymbol]:
