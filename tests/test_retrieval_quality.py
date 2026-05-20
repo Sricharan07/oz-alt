@@ -103,6 +103,14 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertIn("cache tags", plan.phrases)
         self.assertIn("cache-tags", plan.slugs)
 
+    def test_query_plan_turns_single_entities_into_exact_path_slugs(self) -> None:
+        plan = plan_query("When should I use redirect, notFound, unauthorized, and forbidden in Next.js?")
+
+        self.assertIn("redirect", plan.slugs)
+        self.assertIn("notfound", plan.slugs)
+        self.assertIn("unauthorized", plan.slugs)
+        self.assertIn("forbidden", plan.slugs)
+
     def test_local_eval_ranking_prefers_exact_api_reference_over_examples(self) -> None:
         terms = ["useeffect", "cleanup", "dependency", "array"]
         api_row = {
@@ -138,6 +146,63 @@ class RetrievalQualityTests(unittest.TestCase):
         }
 
         self.assertGreater(planned_chunk_score(route_row, query), planned_chunk_score(cli_row, query))
+
+    def test_planned_ranking_prefers_canonical_docs_over_symbol_page_for_config_query(self) -> None:
+        query = "How do I configure next/image remotePatterns for external image domains?"
+        docs_row = {
+            "path": "api-reference/app/api-reference/components/image.md",
+            "text": "Configure next/image remotePatterns in next.config.js for external image domains.",
+            "content_type": "api_reference",
+            "heading_path": ["Image", "remotePatterns"],
+            "symbols": ["remotePatterns"],
+        }
+        symbol_row = {
+            "path": "_symbols/remotePatterns.md",
+            "text": "remotePatterns config option.",
+            "content_type": "api_reference",
+            "heading_path": ["remotePatterns"],
+            "symbols": ["remotePatterns"],
+        }
+
+        self.assertGreater(planned_chunk_score(docs_row, query), planned_chunk_score(symbol_row, query))
+
+    def test_planned_ranking_prefers_app_router_docs_over_pages_by_default(self) -> None:
+        query = "How do I navigate on the client and read search params with useRouter and useSearchParams?"
+        app_row = {
+            "path": "api-reference/app/api-reference/functions/use-search-params.md",
+            "text": "useSearchParams is a Client Component hook in the App Router.",
+            "content_type": "api_reference",
+            "heading_path": ["useSearchParams"],
+            "symbols": ["useSearchParams"],
+        }
+        pages_row = {
+            "path": "api-reference/pages/api-reference/functions/use-search-params.md",
+            "text": "useSearchParams can be used in a Pages Router client component.",
+            "content_type": "api_reference",
+            "heading_path": ["useSearchParams"],
+            "symbols": ["useSearchParams"],
+        }
+
+        self.assertGreater(planned_chunk_score(app_row, query), planned_chunk_score(pages_row, query))
+
+    def test_planned_ranking_penalizes_upgrade_pages_when_query_is_not_upgrade(self) -> None:
+        query = "How do I implement authentication in Next.js middleware using cookies and NextRequest?"
+        docs_row = {
+            "path": "guides/app/guides/authentication.md",
+            "text": "Authentication can use Proxy, cookies, and NextRequest.",
+            "content_type": "prose",
+            "heading_path": ["Authentication"],
+            "symbols": ["NextRequest"],
+        }
+        upgrade_row = {
+            "path": "guides/messages/middleware-upgrade-guide.md",
+            "text": "Middleware upgrade guide mentions cookies and NextRequest.",
+            "content_type": "prose",
+            "heading_path": ["Middleware upgrade guide"],
+            "symbols": ["NextRequest"],
+        }
+
+        self.assertGreater(planned_chunk_score(docs_row, query), planned_chunk_score(upgrade_row, query))
 
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(

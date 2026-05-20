@@ -245,6 +245,12 @@ def query_slugs(phrases: list[str], symbols: list[str], terms: list[str]) -> lis
         slug = slugify(value)
         if slug and slug not in output:
             output.append(slug)
+    for term in terms:
+        if len(term) < 3 or term in TERM_STOPWORDS:
+            continue
+        slug = slugify(term)
+        if slug and slug not in output:
+            output.append(slug)
     for first, second in zip(terms, terms[1:]):
         if first in TERM_STOPWORDS or second in TERM_STOPWORDS:
             continue

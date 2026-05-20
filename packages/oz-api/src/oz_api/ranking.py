@@ -67,7 +67,9 @@ def planned_chunk_score(row: dict[str, Any], query: str) -> float:
     score += exact_entity_score(path, headings, symbols, text, plan)
     score += phrase_score(path, headings, text, plan)
     score += content_type_prior(content_type, path, plan)
+    score += path_scope_prior(path, plan)
     score -= broad_page_penalty(path, plan)
+    score -= symbol_page_penalty(path, plan)
     return round(score, 4)
 
 
@@ -82,7 +84,7 @@ def exact_entity_score(path: str, headings: str, symbols: str, text: str, plan: 
         if not key:
             continue
         if "_symbols/" in path and basename == key:
-            score += 260.0
+            score += 245.0 if plan.name == "api" else 95.0
         elif basename == key:
             score += 210.0
         elif key in compact_symbols:
@@ -135,13 +137,55 @@ def content_type_prior(content_type: str, path: str, plan: QueryIntent) -> float
     return score
 
 
+def path_scope_prior(path: str, plan: QueryIntent) -> float:
+    query_text = " ".join([*plan.important_terms, *plan.phrases]).lower()
+    score = 0.0
+    if "pages router" in query_text or "pages" in plan.important_terms:
+        if "/pages/" in path or "/pages/api-reference/" in path:
+            score += 45.0
+        if "/app/" in path or "/app/api-reference/" in path:
+            score -= 15.0
+        return score
+    if "app router" in query_text or "/pages/api-reference/" in path or "/app/api-reference/" in path:
+        if "/app/" in path or "/app/api-reference/" in path:
+            score += 35.0
+        if "/pages/" in path or "/pages/api-reference/" in path:
+            score -= 45.0
+    return score
+
+
+def symbol_page_penalty(path: str, plan: QueryIntent) -> float:
+    if "_symbols/" not in path:
+        return 0.0
+    if plan.name == "api":
+        return 0.0
+    if plan.name == "config":
+        return 95.0
+    if plan.name == "example":
+        return 55.0
+    return 35.0
+
+
 def broad_page_penalty(path: str, plan: QueryIntent) -> float:
     penalty = 0.0
-    broad = ("sitemap", "project-structure", "migrating", "migration", "contribution", "community")
+    broad = (
+        "sitemap",
+        "project-structure",
+        "migrating",
+        "migration",
+        "contribution",
+        "community",
+        "upgrading",
+        "upgrade-guide",
+        "/messages/",
+        "codemods",
+    )
     if any(token in path for token in broad):
         wanted = any(token in " ".join(plan.important_terms + plan.phrases) for token in broad)
         if not wanted:
             penalty += 75.0
+    if "data-security" in path and "security" not in plan.important_terms:
+        penalty += 65.0
     if path.endswith("/next.md") and "cli" not in plan.preferred_content_types:
         penalty += 120.0
     return penalty
