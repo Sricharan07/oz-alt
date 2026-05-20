@@ -428,6 +428,10 @@ def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[d
         score += 260.0
     if role in {"code_example", "workflow", "cli"}:
         score += 160.0
+    if inline_install_command(text) or "pip install" in text_lower or "npm install" in text_lower:
+        score += 1450.0
+    if "install" in query_lower and any(term in title for term in ("installation", "dependencies", "install")):
+        score += 900.0
     if re.search(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", text) or "api key" in text_lower or "access_token" in text_lower:
         score += 220.0
     if re.search(r"\bfrom\s+[\w.]+\s+import\s+\w*Client\b", target_text) or re.search(r"\b\w*Client\s*\(", target_text):
@@ -591,10 +595,10 @@ def row_task_query_boost(row: dict[str, Any], query: str) -> float:
     score = 0.0
     for term in positive:
         if term and term in text:
-            score += 260.0 if len(term) >= 8 else 160.0
+            score += 520.0 if "_" in term else (320.0 if len(term) >= 8 else 180.0)
     for term in negative:
         if term and term in text:
-            score -= 520.0 if len(term) >= 8 else 320.0
+            score -= 1250.0 if term in {"asyncapi", "openapi", "websocket", "realtime", "agent/connect"} else (620.0 if len(term) >= 8 else 380.0)
     query_terms = meaningful_query_terms(lowered)
     direct_hits = sum(1 for term in query_terms if term in text)
     score += min(420.0, direct_hits * 70.0)
@@ -604,6 +608,10 @@ def row_task_query_boost(row: dict[str, Any], query: str) -> float:
 def task_profile_terms(lowered_query: str) -> tuple[set[str], set[str]]:
     positive: set[str] = set()
     negative: set[str] = set()
+    if any(term in lowered_query for term in ("install", "setup", "quickstart", "initialize", "initialise", "authenticate", "api key", "credential", "environment variable")):
+        positive.update({"install", "installation", "pip install", "npm install", "api key", "api_key", "environment variable", "client", "configuration"})
+        if "create" not in lowered_query and "new" not in lowered_query:
+            negative.update({"create_agent", "new_agent", "websocket", "streaming", "synthesize", "transcribe"})
     if text_to_speech_query(lowered_query):
         positive.update({"text-to-speech", "text to speech", "tts", "synthesize", "synthesis", "speech", "audio", "voice"})
         negative.update({"speech-to-text", "speech to text", "stt", "transcribe", "transcription", "diarization"})
