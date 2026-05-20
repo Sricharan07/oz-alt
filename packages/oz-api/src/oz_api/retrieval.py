@@ -343,7 +343,7 @@ def score_context_candidates_for_packet(rows: list[dict[str, Any]], query: str) 
 
 def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> float:
     query_lower = query.lower()
-    score = row_library_query_boost(row, query)
+    score = row_library_query_boost(row, query) + row_language_query_boost(row, query)
     setup_query = any(term in query_lower for term in ("install", "initialize", "authenticate", "api key", "environment", "credential", "setup", "quickstart"))
     if not setup_query:
         return score
@@ -378,6 +378,58 @@ def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[d
     if "basellmclient" in code_lower or "standalone openai client" in text_lower:
         score -= 500.0
     return score
+
+
+LANGUAGE_ALIASES = {
+    "python": {"python", "py"},
+    "typescript": {"typescript", "ts", "tsx"},
+    "javascript": {"javascript", "js", "jsx", "node"},
+    "rust": {"rust", "rs"},
+    "go": {"go", "golang"},
+    "ruby": {"ruby", "rb"},
+    "php": {"php"},
+    "java": {"java"},
+    "csharp": {"csharp", "c#", "cs"},
+    "swift": {"swift"},
+    "kotlin": {"kotlin"},
+}
+
+
+def row_language_query_boost(row: dict[str, Any], query: str) -> float:
+    requested = requested_languages(query)
+    if not requested:
+        return 0.0
+    text = " ".join(
+        [
+            str(row.get("code_language") or ""),
+            str(row.get("matched_path") or row.get("path") or ""),
+            str(row.get("library") or ""),
+            str(row.get("title") or ""),
+            str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")[:1200],
+        ]
+    ).lower()
+    score = 0.0
+    for lang in requested:
+        aliases = LANGUAGE_ALIASES.get(lang, {lang})
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) for alias in aliases):
+            score += 520.0
+        else:
+            score -= 180.0
+    for lang, aliases in LANGUAGE_ALIASES.items():
+        if lang in requested:
+            continue
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) for alias in aliases):
+            score -= 120.0
+    return score
+
+
+def requested_languages(query: str) -> set[str]:
+    lowered = query.lower()
+    output: set[str] = set()
+    for lang, aliases in LANGUAGE_ALIASES.items():
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", lowered) for alias in aliases):
+            output.add(lang)
+    return output
 
 
 def row_library_query_boost(row: dict[str, Any], query: str) -> float:
