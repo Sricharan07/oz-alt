@@ -213,7 +213,8 @@ def context(
                 "snippet": snippet,
             }
         )
-    packet = context_packet(snippets, query=query, max_tokens=max_tokens, max_results=max_results)
+    packet_rows = candidate_rows if candidate_rows else snippets
+    packet = context_packet(packet_rows, query=query, max_tokens=max_tokens, max_results=max_results)
     return {
         **packet,
         "results": snippets,
@@ -689,7 +690,7 @@ def context_packet(
     for row in ordered:
         if remaining <= 0:
             break
-        text = str(row.get("snippet") or "").strip()
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "").strip()
         if not text:
             continue
         row_source = source_id(row)
@@ -829,7 +830,7 @@ def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, An
 
 def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, str] | None:
     for row in rows:
-        text = str(row.get("snippet") or "").strip()
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "").strip()
         if not text:
             continue
         for block in extract_code_blocks(text):
@@ -864,7 +865,7 @@ def inline_install_command(text: str) -> str:
 def best_code_block(rows: list[dict[str, Any]], predicate: Any, scorer: Any) -> dict[str, str] | None:
     best: tuple[float, dict[str, str]] | None = None
     for row in rows:
-        text = str(row.get("snippet") or "").strip()
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "").strip()
         if not text:
             continue
         for block in extract_code_blocks(text):
@@ -977,7 +978,7 @@ def env_var_names(rows: list[dict[str, Any]], query: str = "") -> list[str]:
     scores: dict[str, int] = {}
     query_terms = {term for term in re.findall(r"[a-z][a-z0-9]+", query.lower()) if len(term) >= 4}
     for row in rows:
-        text = str(row.get("snippet") or "")
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
         for name in re.findall(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|KEY)\b", text):
             lowered = name.lower()
             score = scores.get(name, 0) + 1
@@ -1000,7 +1001,7 @@ def composite_sources(blocks: list[dict[str, str] | None], rows: list[dict[str, 
 
 def packet_row_score(row: dict[str, Any], query: str) -> float:
     score = float(row.get("score") or 0)
-    text = str(row.get("snippet") or "").lower()
+    text = (context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")).lower()
     path = str(row.get("matched_path") or row.get("path") or "").lower()
     title = str(row.get("title") or "").lower()
     role = str(row.get("role") or row.get("content_type") or "")
