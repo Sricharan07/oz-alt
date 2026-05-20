@@ -472,7 +472,7 @@ def score_postgres_rows(
             "quality_score": row[10],
             "text": row[11],
         }
-        score = float(row[2]) + (planned_chunk_score(chunk, query) / 8.0)
+        score = float(row[2]) + (planned_chunk_score(chunk, query) / 4.0)
         scored.append(
             {
                 "path": row[0],
