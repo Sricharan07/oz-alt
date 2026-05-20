@@ -343,9 +343,10 @@ def score_context_candidates_for_packet(rows: list[dict[str, Any]], query: str) 
 
 def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> float:
     query_lower = query.lower()
+    score = row_library_query_boost(row, query)
     setup_query = any(term in query_lower for term in ("install", "initialize", "authenticate", "api key", "environment", "credential", "setup", "quickstart"))
     if not setup_query:
-        return 0.0
+        return score
     text = str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")
     text_lower = text.lower()
     path = str(row.get("matched_path") or row.get("relative_path") or row.get("path") or "").lower()
@@ -354,7 +355,6 @@ def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[d
     code_blocks = extract_code_blocks(text)
     code_lower = "\n".join(block["code"] for block in code_blocks).lower()
     target_text = code_lower or text_lower
-    score = 0.0
     if "readme" in path or "quickstart" in path or "getting-started" in path:
         score += 340.0
     if any(term in title for term in ("getting started", "quickstart", "installation", "api key", "creating your first", "first ")):
@@ -377,6 +377,26 @@ def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[d
         score -= 450.0
     if "basellmclient" in code_lower or "standalone openai client" in text_lower:
         score -= 500.0
+    return score
+
+
+def row_library_query_boost(row: dict[str, Any], query: str) -> float:
+    library = str(row.get("library") or "")
+    if "/" not in library:
+        return 0.0
+    vendor, name = library.split("/", 1)
+    query_terms = set(query_library_terms(query))
+    if not query_terms:
+        return 0.0
+    terms = library_specific_terms(vendor, name, [], "")
+    hits = query_terms & terms
+    if not hits:
+        return 0.0
+    score = 850.0 + len(hits) * 120.0
+    path = str(row.get("matched_path") or row.get("path") or "").lower()
+    title = str(row.get("title") or "").lower()
+    if any(term in f"{path} {title}" for term in hits):
+        score += 220.0
     return score
 
 
