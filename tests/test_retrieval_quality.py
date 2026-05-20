@@ -204,6 +204,25 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertGreater(planned_chunk_score(docs_row, query), planned_chunk_score(upgrade_row, query))
 
+    def test_planned_ranking_prefers_server_action_workflow_over_narrow_cache_reference(self) -> None:
+        query = "How do Server Actions mutate data and revalidate a path or cache tag?"
+        guide_row = {
+            "path": "guides/app/getting-started/mutating-data.md",
+            "text": "Server Actions mutate data and can revalidatePath or revalidateTag after a mutation.",
+            "content_type": "prose",
+            "heading_path": ["Mutating data", "Server Actions"],
+            "symbols": ["revalidatePath", "revalidateTag"],
+        }
+        reference_row = {
+            "path": "api-reference/app/api-reference/functions/cachetag.md",
+            "text": "cacheTag marks cached data with tags for later revalidation.",
+            "content_type": "api_reference",
+            "heading_path": ["cacheTag"],
+            "symbols": ["cacheTag"],
+        }
+
+        self.assertGreater(planned_chunk_score(guide_row, query), planned_chunk_score(reference_row, query))
+
     def test_content_type_classifier_detects_code_and_config(self) -> None:
         self.assertEqual(
             classify_content_type("https://example.com/docs/example", "```ts\nconst x = 1\n```"),

@@ -68,6 +68,7 @@ def planned_chunk_score(row: dict[str, Any], query: str) -> float:
     score += phrase_score(path, headings, text, plan)
     score += content_type_prior(content_type, path, plan)
     score += path_scope_prior(path, plan)
+    score += workflow_path_prior(path, plan)
     score -= broad_page_penalty(path, plan)
     score -= symbol_page_penalty(path, plan)
     return round(score, 4)
@@ -164,6 +165,17 @@ def symbol_page_penalty(path: str, plan: QueryIntent) -> float:
     if plan.name == "example":
         return 55.0
     return 35.0
+
+
+def workflow_path_prior(path: str, plan: QueryIntent) -> float:
+    score = 0.0
+    query_text = " ".join([*plan.important_terms, *plan.phrases]).lower()
+    if "server actions" in query_text and any(term in plan.important_terms for term in ("mutate", "mutation", "mutating")):
+        if "mutating-data" in path or "server-actions-and-mutations" in path:
+            score += 260.0
+        if path.endswith("/cachetag.md") or path.endswith("/revalidatetag.md") or path.endswith("/revalidatepath.md"):
+            score -= 55.0
+    return score
 
 
 def broad_page_penalty(path: str, plan: QueryIntent) -> float:
