@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from typing import Any
 
 from oz_api.context_cards import select_context_snippets
@@ -734,6 +735,10 @@ def context_packet(
 def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
     query_lower = query.lower()
     output: list[dict[str, Any]] = []
+    if any(term in query_lower for term in ("verify", "validate", "valid")) and any(term in query_lower for term in ("api key", "credential", "token")):
+        card = verify_credentials_card(rows, query, budget)
+        if card:
+            output.append(card)
     if any(term in query_lower for term in ("install", "setup", "authenticate", "api key", "environment", "credential", "quickstart")):
         card = setup_composite_card(rows, query, budget)
         if card:
@@ -791,6 +796,19 @@ def setup_composite_card(rows: list[dict[str, Any]], query: str, budget: int) ->
 
 
 def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, Any] | None:
+    usage = host_usage_code(rows)
+    if usage:
+        tokens = approximate_tokens(usage["code"])
+        return {
+            "codeTitle": "Configure a custom API host",
+            "codeDescription": "Minimal host override path inferred from the documented Configuration host parameter and adjacent client initialization examples.",
+            "codeId": "oz:composite:custom-host",
+            "codeLanguage": usage.get("language") or "python",
+            "codeTokens": tokens,
+            "pageTitle": "Configuration",
+            "codeList": [{"language": usage.get("language") or "python", "code": usage["code"]}],
+            "source": usage.get("source") or "",
+        }
     config = first_code_block(
         rows,
         lambda block, row, text: (
@@ -825,6 +843,34 @@ def host_composite_card(rows: list[dict[str, Any]], budget: int) -> dict[str, An
         "pageTitle": "Configuration",
         "codeList": code_list,
         "source": composite_sources([config, client], rows),
+    }
+
+
+def verify_credentials_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    block = best_code_block(
+        rows,
+        lambda block, row, text: any(
+            term in block["code"].lower()
+            for term in ("get_current_user", "current_user", "get_models", "get_languages", "get_voices")
+        ),
+        lambda block, row, text: packet_row_score(row, query)
+        + (900 if "get_current_user" in block["code"].lower() else 0)
+        + (260 if "api_key" in block["code"].lower() or "SMALLEST_API_KEY" in block["code"] else 0),
+    )
+    if not block:
+        return None
+    code = focused_code_for_query(block["code"], query, token_budget=min(max(budget, 1), 520))
+    if not code:
+        code = trim_to_token_budget(block["code"], min(max(budget, 1), 520))
+    return {
+        "codeTitle": "Verify credentials with a lightweight call",
+        "codeDescription": "A compact source-backed call that exercises authentication without performing a write operation.",
+        "codeId": "oz:composite:verify-credentials",
+        "codeLanguage": block.get("language") or "python",
+        "codeTokens": approximate_tokens(code),
+        "pageTitle": "Authentication",
+        "codeList": [{"language": block.get("language") or "python", "code": code}],
+        "source": block.get("source") or "",
     }
 
 
@@ -1209,10 +1255,10 @@ def focused_setup_code(code: str, lowered_query: str, token_budget: int) -> str:
             selected.extend(code_statement_window(lines, index))
         elif "api key" in lowered or "environment variable" in lowered:
             selected.append(line)
-    selected = compact_code_lines(selected)
+    selected = prune_unused_imports(compact_code_lines(selected))
     if not selected:
         return ""
-    focused = "\n".join(selected)
+    focused = normalize_code_indentation(selected)
     return trim_to_token_budget(focused, token_budget)
 
 
@@ -1234,8 +1280,8 @@ def focused_lines_around_terms(code: str, terms: set[str], token_budget: int) ->
         return ""
     selected = [lines[index] for index in sorted(selected_indexes)]
     imports = [line for line in lines if re.match(r"\s*(from\s+[\w.]+\s+import\s+.+|import\s+[\w.]+)", line)]
-    selected = compact_code_lines([*imports[:6], *selected])
-    return trim_to_token_budget("\n".join(selected), token_budget)
+    selected = prune_unused_imports(compact_code_lines([*imports[:6], *selected]))
+    return trim_to_token_budget(normalize_code_indentation(selected), token_budget)
 
 
 def code_statement_window(lines: list[str], start: int) -> list[str]:
@@ -1281,6 +1327,94 @@ def compact_code_lines(lines: list[str]) -> list[str]:
     while output and not output[-1].strip():
         output.pop()
     return output
+
+
+def prune_unused_imports(lines: list[str]) -> list[str]:
+    body = "\n".join(line for line in lines if not re.match(r"\s*(from\s+[\w.]+\s+import\s+.+|import\s+[\w.]+)", line))
+    output: list[str] = []
+    for line in lines:
+        match = re.match(r"(\s*from\s+[\w.]+\s+import\s+)(.+)", line)
+        if match:
+            names = [part.strip().split(" as ", 1)[-1] for part in match.group(2).split(",")]
+            used = [name for name in names if re.search(rf"\b{re.escape(name)}\b", body)]
+            if used:
+                output.append(match.group(1) + ", ".join(used))
+            continue
+        output.append(line)
+    return output
+
+
+def normalize_code_indentation(lines: list[str]) -> str:
+    import_prefix: list[str] = []
+    body: list[str] = []
+    for line in lines:
+        if re.match(r"\s*(from\s+[\w.]+\s+import\s+.+|import\s+[\w.]+)", line) and not body:
+            import_prefix.append(line.strip())
+        else:
+            body.append(line.rstrip())
+    nonblank_body = [line for line in body if line.strip()]
+    min_indent = min((len(line) - len(line.lstrip()) for line in nonblank_body), default=0)
+    if min_indent > 0:
+        body = [line[min_indent:] if len(line) >= min_indent else line for line in body]
+    parts = [*import_prefix]
+    if import_prefix and any(line.strip() for line in body):
+        parts.append("")
+    parts.extend(body)
+    return textwrap.dedent("\n".join(parts)).strip()
+
+
+def host_usage_code(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    client_name = requested_client_name(rows)
+    if not client_name:
+        return None
+    blob = "\n".join(context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "") for row in rows[:80])
+    if "Configuration" not in blob or "host" not in blob.lower():
+        return None
+    client_import = import_line_for_symbol(rows, client_name)
+    config_import = import_line_for_symbol(rows, "Configuration")
+    imports = compact_code_lines([line for line in (client_import, config_import) if line])
+    if not imports:
+        imports = [f"# Import {client_name} and Configuration from the SDK module shown in the adjacent docs."]
+    variable = re.sub(r"(?<!^)(?=[A-Z])", "_", client_name).lower()
+    code = "\n".join(
+        [
+            *imports,
+            "",
+            'config = Configuration(host="https://your-api-host")',
+            f"{variable} = {client_name}(config)",
+        ]
+    )
+    return {"language": "python", "code": code, "source": composite_sources_from_rows(rows, {"Configuration", client_name})}
+
+
+def requested_client_name(rows: list[dict[str, Any]]) -> str:
+    for row in rows[:40]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        for value in re.findall(r"\b[A-Z][A-Za-z0-9_]*Client\b", text):
+            if value not in {"ApiClient", "AsyncClient"}:
+                return value
+    return ""
+
+
+def import_line_for_symbol(rows: list[dict[str, Any]], symbol: str) -> str:
+    for row in rows[:80]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        for block in extract_code_blocks(text):
+            for line in block["code"].splitlines():
+                if re.match(r"\s*from\s+[\w.]+\s+import\s+.+", line) and re.search(rf"\b{re.escape(symbol)}\b", line):
+                    return line.strip()
+    return ""
+
+
+def composite_sources_from_rows(rows: list[dict[str, Any]], symbols: set[str]) -> str:
+    sources: list[str] = []
+    for row in rows[:80]:
+        text = context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")
+        if any(symbol in text for symbol in symbols):
+            source = source_id(row)
+            if source:
+                sources.append(source)
+    return ", ".join(dict.fromkeys(sources[:3]))
 
 
 def first_prose_before_code(text: str) -> str:
