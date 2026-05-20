@@ -259,7 +259,7 @@ def context_retrieval_queries(query: str) -> list[str]:
     if any(term in lowered for term in ("custom host", "api host", "host endpoint", "base url", "base_url", "endpoint")):
         candidates.append("configuration host base_url endpoint client custom api host")
     if any(term in lowered for term in ("verify", "validate", "valid")) and any(term in lowered for term in ("api key", "credential", "token")):
-        candidates.append("verify api key lightweight request list models list voices client call")
+        candidates.append("verify api key lightweight request current user get_current_user whoami account user details")
     if text_to_speech_query(lowered):
         candidates.append("text to speech tts synthesize synthesis generate speech audio python example")
     if any(term in lowered for term in ("stream", "streaming", "chunk", "chunks", "long input", "long text")):
@@ -854,7 +854,7 @@ def verify_credentials_card(rows: list[dict[str, Any]], query: str, budget: int)
             for term in ("get_current_user", "current_user", "get_models", "get_languages", "get_voices")
         ),
         lambda block, row, text: packet_row_score(row, query)
-        + (900 if "get_current_user" in block["code"].lower() else 0)
+        + (2200 if "get_current_user" in block["code"].lower() else 0)
         + (260 if "api_key" in block["code"].lower() or "SMALLEST_API_KEY" in block["code"] else 0),
     )
     if not block:
@@ -1245,6 +1245,10 @@ def focused_setup_code(code: str, lowered_query: str, token_budget: int) -> str:
         "base url",
         "os.getenv",
         "getenv",
+        "get_current_user",
+        "get_models",
+        "get_languages",
+        "get_voices",
     )
     skip_call_terms = ("create_agent(", "new_agent(", "synthesize(", "transcribe(")
     for index, line in enumerate(lines):
