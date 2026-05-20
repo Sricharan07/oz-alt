@@ -1066,6 +1066,7 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertIn("dynamicroutes", query_facets("generateStaticParams for dynamic routes"))
         self.assertIn("usecache", query_facets("how do use cache, cacheLife, and cacheTag work?"))
+        self.assertIn("reset", query_facets("recoverable route errors"))
 
     def test_context_assembly_prefers_uncovered_facets_over_duplicate_high_scores(self) -> None:
         rows = [
@@ -1154,6 +1155,35 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertLessEqual(token_count(selected[0]["_matched_text"]), 40)
         self.assertLessEqual(selected[0]["token_count"], 40)
+
+    def test_context_assembly_focuses_trimmed_text_on_new_facet(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "path": "error.md",
+                "matched_path": "error.md",
+                "line": 1,
+                "title": "Workflow: error.js",
+                "role": "workflow",
+                "entities": ["error.js"],
+                "applies_to": ["App Router"],
+                "task_tags": ["errors"],
+                "token_count": 1000,
+                "_matched_text": "\n".join(
+                    [
+                        "# error.js",
+                        *("General error boundary details." for _ in range(60)),
+                        "Call reset() from the fallback to retry rendering the route segment.",
+                        "More details after reset.",
+                    ]
+                ),
+            }
+        ]
+
+        selected = select_context_snippets(rows, "How do recoverable route errors work?", max_results=1, max_tokens=80)
+
+        self.assertIn("reset", selected[0]["_matched_text"])
+        self.assertLessEqual(token_count(selected[0]["_matched_text"]), 80)
 
 
 if __name__ == "__main__":

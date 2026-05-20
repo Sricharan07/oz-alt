@@ -109,10 +109,27 @@ PHRASE_FACET_PATTERNS: tuple[tuple[str, str], ...] = (
     ("clientcomponents", r"\bclient components?\b"),
     ("searchparams", r"\bsearch params?\b"),
     ("errorboundary", r"\berror boundar(?:y|ies)\b"),
+    ("reset", r"\brecover(?:able|y|ing)?\b.*\berrors?\b|\berrors?\b.*\brecover(?:able|y|ing)?\b"),
     ("webvitals", r"\bweb vitals\b"),
     ("opentelemetry", r"\bopen telemetry\b|\bopentelemetry\b"),
     ("opengraphimage", r"\bopengraph image\b|\bog image\b"),
 )
+
+FACET_SURFACES: dict[str, tuple[str, ...]] = {
+    "dynamicroutes": ("dynamic routes", "dynamic route", "dynamic-routes"),
+    "routehandlers": ("route handlers", "route handler", "route-handlers"),
+    "routesegment": ("route segment", "route segments", "route-segment"),
+    "serveractions": ("server actions", "server action", "server-actions"),
+    "servercomponents": ("server components", "server component", "server-components"),
+    "clientcomponents": ("client components", "client component", "client-components"),
+    "usecache": ("use cache", "use-cache"),
+    "useclient": ("use client", "use-client"),
+    "useserver": ("use server", "use-server"),
+    "searchparams": ("search params", "searchparams", "search-params"),
+    "errorboundary": ("error boundary", "error boundaries", "error-boundary"),
+    "webvitals": ("web vitals", "web-vitals"),
+    "opengraphimage": ("opengraph image", "opengraph-image", "og image"),
+}
 
 
 @dataclass(frozen=True)
@@ -322,10 +339,11 @@ def select_context_snippets(rows: list[dict[str, Any]], query: str, *, max_resul
         if best_index < 0:
             break
         row = candidates.pop(best_index)
+        new_coverage = row_facets(row, facets) - covered
         text = str(row.get("_matched_text") or row.get("content") or "").strip()
         tokens = approximate_tokens(text)
         if tokens <= 0 or tokens > remaining + 80:
-            text = trim_to_token_budget(text, remaining)
+            text = focus_text_for_facets(text, new_coverage, remaining) if new_coverage else trim_to_token_budget(text, remaining)
             tokens = approximate_tokens(text)
         if not text.strip() or tokens <= 0:
             continue
@@ -630,6 +648,60 @@ def trim_long_line(line: str, max_tokens: int) -> str:
         if tokens >= max_tokens:
             break
     return " ".join(item.strip() for item in output if item.strip()).strip()
+
+
+def focus_text_for_facets(text: str, facets: set[str], max_tokens: int) -> str:
+    if not facets or approximate_tokens(text) <= max_tokens:
+        return text.strip()
+    line_index = line_index_for_facets(text, facets)
+    if line_index is None:
+        return trim_to_token_budget(text, max_tokens)
+    lines = text.splitlines()
+    selected = [lines[line_index]]
+    tokens = approximate_tokens(selected[0])
+    left = line_index - 1
+    right = line_index + 1
+    while tokens < max_tokens and (left >= 0 or right < len(lines)):
+        added = False
+        if left >= 0:
+            candidate = lines[left]
+            candidate_tokens = approximate_tokens(candidate)
+            if tokens + candidate_tokens <= max_tokens or not selected:
+                selected.insert(0, candidate)
+                tokens += candidate_tokens
+                added = True
+            left -= 1
+        if right < len(lines):
+            candidate = lines[right]
+            candidate_tokens = approximate_tokens(candidate)
+            if tokens + candidate_tokens <= max_tokens or not selected:
+                selected.append(candidate)
+                tokens += candidate_tokens
+                added = True
+            right += 1
+        if not added and left < 0 and right >= len(lines):
+            break
+        if not added and tokens >= max_tokens:
+            break
+    focused = "\n".join(selected).strip()
+    if approximate_tokens(focused) > max_tokens:
+        return trim_to_token_budget(focused, max_tokens)
+    return focused
+
+
+def line_index_for_facets(text: str, facets: set[str]) -> int | None:
+    lowered_lines = [line.lower() for line in text.splitlines()]
+    for facet in facets:
+        for surface in facet_surfaces(facet):
+            needle = surface.lower()
+            for index, line in enumerate(lowered_lines):
+                if needle and needle in line:
+                    return index
+    return None
+
+
+def facet_surfaces(facet: str) -> tuple[str, ...]:
+    return FACET_SURFACES.get(facet, (facet,))
 
 
 def strip_code_fences(text: str) -> str:
