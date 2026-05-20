@@ -23,6 +23,7 @@ mod mcp;
 mod project;
 mod registry;
 mod search;
+mod search_local;
 mod settings;
 
 use api::*;
