@@ -702,7 +702,7 @@ def context_packet(
         if code_blocks:
             card = code_snippet_card(row, text, code_blocks, remaining, query=query)
             key = card_key(card)
-            if key and key not in seen_code and len(code_snippets) < max_code:
+            if key and key not in seen_code and card.get("codeList") and len(code_snippets) < max_code:
                 seen_code.add(key)
                 seen_sources.update(card_sources(card))
                 remaining -= int(card.get("codeTokens") or 0)
@@ -1142,10 +1142,12 @@ def usable_code_block(block: dict[str, str], query: str) -> bool:
     if not code:
         return False
     lowered = code.lower()
+    query_lower = query.lower()
     if lowered.startswith(":param") or lowered.startswith("parameters") or "\n:param " in lowered[:800]:
         return False
+    if lowered.count(":param") >= 2 and not any(term in query_lower for term in ("constructor", "class", "parameters", "schema", "request body")):
+        return False
     language = canonical_language(str(block.get("language") or ""))
-    query_lower = query.lower()
     if language in {"yaml", "json"} and not any(term in query_lower for term in ("schema", "openapi", "asyncapi", "config", "configuration", "request body", "yaml", "json")):
         return False
     return True
