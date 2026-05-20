@@ -622,9 +622,9 @@ def task_profile_terms(lowered_query: str) -> tuple[set[str], set[str]]:
     if any(term in lowered_query for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs")):
         positive.update({"request id", "request_id", "metadata", "headers", "debug", "logs", "logging"})
     if any(term in lowered_query for term in ("list", "available", "fetch", "details", "retrieve", "get ")) and "agent" in lowered_query:
-        positive.update({"list_agents", "get_agent", "retrieve", "details", "agent_id", "agents"})
+        positive.update({"list_agents", "get_agents", "get_agent", "get_agent_by_id", "retrieve", "details", "agent_id", "agents"})
         if "create" not in lowered_query and "new" not in lowered_query:
-            negative.update({"create_agent", "new_agent", "creating your first"})
+            negative.update({"create_agent", "new_agent", "creating your first", "asyncapi", "openapi", "websocket", "realtime", "agent/connect"})
     if any(term in lowered_query for term in ("create", "new", "build")) and "agent" in lowered_query:
         positive.update({"create_agent", "new_agent", "create", "agent"})
     if any(term in lowered_query for term in ("custom host", "api host", "host endpoint", "base url", "base_url", "endpoint")):
@@ -735,7 +735,7 @@ def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) ->
 
 
 def setup_composite_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
-    install = first_code_block(rows, lambda block, row, text: install_command(block["code"]))
+    install = first_code_block(rows, lambda block, row, text: install_command(block["code"])) or first_inline_install_command(rows)
     env_vars = env_var_names(rows, query=query)
     init = best_code_block(
         rows,
@@ -826,6 +826,29 @@ def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, st
             if predicate(block, row, text):
                 return {**block, "source": source_id(row)}
     return None
+
+
+def first_inline_install_command(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    for row in rows:
+        text = str(row.get("snippet") or "").strip()
+        if not text:
+            continue
+        command = inline_install_command(text)
+        if command:
+            return {"language": "bash", "code": command, "source": source_id(row)}
+    return None
+
+
+def inline_install_command(text: str) -> str:
+    match = re.search(
+        r"(?<![A-Za-z0-9_-])((?:python(?:3)?\s+-m\s+pip|pip(?:3)?|uv)\s+install\s+[^`\n]+|(?:npm|pnpm|yarn)\s+(?:install|add)\s+[^`\n]+)",
+        text,
+        flags=re.I,
+    )
+    if not match:
+        return ""
+    command = re.sub(r"\s+", " ", match.group(1)).strip()
+    return re.sub(r"\s+(?:when|to|and|or|but|if)\b.*$", "", command, flags=re.I).strip()
 
 
 def best_code_block(rows: list[dict[str, Any]], predicate: Any, scorer: Any) -> dict[str, str] | None:
@@ -1103,8 +1126,6 @@ def focused_code_blocks_for_query(blocks: list[dict[str, str]], query: str) -> l
 
 
 def focused_code_for_query(code: str, query: str, *, token_budget: int) -> str:
-    if approximate_tokens(code) <= token_budget:
-        return code.strip()
     lowered_query = query.lower()
     setup_like = any(
         term in lowered_query
@@ -1126,6 +1147,8 @@ def focused_code_for_query(code: str, query: str, *, token_budget: int) -> str:
         focused = focused_setup_code(code, lowered_query, token_budget)
         if focused:
             return focused
+    if approximate_tokens(code) <= token_budget:
+        return code.strip()
     focused = focused_lines_around_terms(code, meaningful_query_terms(lowered_query) | task_profile_terms(lowered_query)[0], token_budget)
     return focused or trim_to_token_budget(code, token_budget)
 
