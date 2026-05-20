@@ -399,20 +399,32 @@ def row_language_query_boost(row: dict[str, Any], query: str) -> float:
     requested = requested_languages(query)
     if not requested:
         return 0.0
+    text_content = str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")
+    block_languages = [block.get("language", "") for block in extract_code_blocks(text_content)]
+    explicit_languages = {
+        lang
+        for lang in [canonical_language(str(row.get("code_language") or "")), *(canonical_language(lang) for lang in block_languages)]
+        if lang
+    }
+    score = 0.0
+    if explicit_languages:
+        if explicit_languages & requested:
+            score += 820.0
+        else:
+            score -= 780.0
     text = " ".join(
         [
             str(row.get("code_language") or ""),
             str(row.get("matched_path") or row.get("path") or ""),
             str(row.get("library") or ""),
             str(row.get("title") or ""),
-            str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")[:1200],
+            text_content[:800],
         ]
     ).lower()
-    score = 0.0
     for lang in requested:
         aliases = LANGUAGE_ALIASES.get(lang, {lang})
         if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) for alias in aliases):
-            score += 520.0
+            score += 220.0 if explicit_languages else 520.0
         else:
             score -= 180.0
     for lang, aliases in LANGUAGE_ALIASES.items():
@@ -430,6 +442,19 @@ def requested_languages(query: str) -> set[str]:
         if any(re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", lowered) for alias in aliases):
             output.add(lang)
     return output
+
+
+def canonical_language(value: str) -> str:
+    lowered = value.lower().strip()
+    if not lowered:
+        return ""
+    normalized = lowered.removeprefix("language-")
+    for language, aliases in LANGUAGE_ALIASES.items():
+        if normalized == language or normalized in aliases:
+            return language
+    if normalized in {"yaml", "yml", "toml", "json", "bash", "sh", "shell", "dart", "html", "css"}:
+        return normalized
+    return ""
 
 
 def row_library_query_boost(row: dict[str, Any], query: str) -> float:
