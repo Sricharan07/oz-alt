@@ -254,6 +254,8 @@ def context_retrieval_queries(query: str) -> list[str]:
     candidates = [query]
     if any(term in lowered for term in ("install", "setup", "quickstart", "initialize", "initialise", "authenticate", "api key", "credential", "environment variable")):
         candidates.append("installation quickstart setup api key environment variables initialize client")
+    if any(term in lowered for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
+        candidates.append("install dependency requirements.txt version pin major version package version specifier")
     if any(term in lowered for term in ("default configuration", "initialize", "initialise", "client")):
         candidates.append("initialize client default configuration import client constructor")
     if any(term in lowered for term in ("custom host", "api host", "host endpoint", "base url", "base_url", "endpoint")):
@@ -265,15 +267,17 @@ def context_retrieval_queries(query: str) -> list[str]:
     if any(term in lowered for term in ("stream", "streaming", "chunk", "chunks", "long input", "long text")):
         candidates.append("streaming text to speech synthesize_streaming chunks continue_stream auto_flush websocket")
     if any(term in lowered for term in ("save", "wav", "mp3", "file", "write")) and any(term in lowered for term in ("audio", "speech", "tts", "synthesis")):
-        candidates.append("save generated audio wav mp3 output_format writeframes bytes file")
+        candidates.append("save generated audio wav mp3 save_as output_format write file synthesize")
     if any(term in lowered for term in ("voiceid", "voice id", "voice_id", "voice")):
-        candidates.append("voice_id voiceId voices list voices get voices synthesize request")
+        candidates.append("voice_id voiceId voices list voices get_voices synthesize request cloned voices")
+    if "model" in lowered and any(term in lowered for term in ("choose", "quality", "latency", "tradeoff", "trade-off", "available", "list")):
+        candidates.append("models available get_models model quality latency fast large synthesize model parameter")
     if any(term in lowered for term in ("request body", "required fields", "required parameters", "schema")):
         candidates.append("request body required fields schema parameters text voiceId model")
     if any(term in lowered for term in ("speed", "consistency", "similarity", "enhancement", "optional synthesis", "controls")):
-        candidates.append("speed consistency similarity enhancement synthesis controls optional parameters")
+        candidates.append("speed consistency similarity enhancement synthesis controls optional parameters synthesize")
     if any(term in lowered for term in ("failed", "failure", "recover", "retry", "exception", "error")):
-        candidates.append("error handling exceptions retry failed request status response")
+        candidates.append("error handling exceptions retry failed request status response synthesize generation")
     if any(term in lowered for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs")):
         candidates.append("request id response metadata headers logs debugging")
     if any(term in lowered for term in ("list", "available", "fetch", "details", "retrieve", "get ")) and "agent" in lowered:
@@ -616,21 +620,31 @@ def task_profile_terms(lowered_query: str) -> tuple[set[str], set[str]]:
         positive.update({"install", "installation", "pip install", "npm install", "api key", "api_key", "environment variable", "client", "configuration"})
         if "create" not in lowered_query and "new" not in lowered_query:
             negative.update({"create_agent", "new_agent", "websocket", "streaming", "synthesize", "transcribe"})
+    if any(term in lowered_query for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
+        positive.update({"requirements.txt", "requirements", "pin", "pinned", "version", "major version", "pip install", "install"})
+        negative.update({"websocket", "streaming", "synthesize", "transcribe", "create_agent", "new_agent"})
     if text_to_speech_query(lowered_query):
         positive.update({"text-to-speech", "text to speech", "tts", "synthesize", "synthesis", "speech", "audio", "voice"})
         negative.update({"speech-to-text", "speech to text", "stt", "transcribe", "transcription", "diarization"})
     if any(term in lowered_query for term in ("stream", "streaming", "chunk", "chunks", "long input", "long text")):
         positive.update({"stream", "streaming", "chunk", "chunks", "synthesize_streaming", "continue_stream", "auto_flush", "websocket", "buffer"})
     if any(term in lowered_query for term in ("save", "wav", "mp3", "file", "write")) and any(term in lowered_query for term in ("audio", "speech", "tts", "synthesis")):
-        positive.update({"save", "saved", "file", "wav", "mp3", "output_format", "writeframes", "write", "bytes"})
+        positive.update({"save", "saved", "save_as", "file", "wav", "mp3", "output_format", "writeframes", "write", "bytes", "synthesize"})
+        if "stream" not in lowered_query:
+            negative.update({"websocket", "streaming", "websocketapp", "connect(", "speech-to-text", "transcribe", "stt"})
     if any(term in lowered_query for term in ("voiceid", "voice id", "voice_id", "voice")):
-        positive.update({"voiceid", "voice_id", "voice id", "voices", "get_voices", "list voices"})
+        positive.update({"voiceid", "voice_id", "voice id", "voices", "get_voices", "list voices", "cloned voices", "synthesize"})
+    if "model" in lowered_query and any(term in lowered_query for term in ("choose", "quality", "latency", "tradeoff", "trade-off", "available", "list")):
+        positive.update({"model", "models", "get_models", "available models", "quality", "latency", "fast", "large", "lightning", "synthesize"})
+        negative.update({"websocket", "streaming", "protocol", "http vs", "asr", "transcribe", "dashboard", "prometheus"})
     if any(term in lowered_query for term in ("request body", "required fields", "required parameters", "schema")):
         positive.update({"request body", "required", "schema", "parameters", "field", "fields", "model", "voiceid", "voice_id"})
     if any(term in lowered_query for term in ("speed", "consistency", "similarity", "enhancement", "optional synthesis", "controls")):
-        positive.update({"speed", "consistency", "similarity", "enhancement", "controls", "optional"})
+        positive.update({"speed", "sample_rate", "consistency", "similarity", "enhancement", "controls", "optional", "synthesize"})
+        negative.update({"dashboard", "prometheus", "asr", "transcribe"})
     if any(term in lowered_query for term in ("failed", "failure", "recover", "retry", "exception", "error")):
-        positive.update({"error", "exception", "retry", "failed", "failure", "status", "recover"})
+        positive.update({"error", "exception", "retry", "failed", "failure", "status", "recover", "synthesize", "generation"})
+        negative.update({"dashboard", "prometheus", "asr", "transcribe", "grafana", "metric", "metrics", "speech-to-text"})
     if any(term in lowered_query for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs")):
         positive.update({"request id", "request_id", "metadata", "headers", "debug", "logs", "logging"})
     if any(term in lowered_query for term in ("list", "available", "fetch", "details", "retrieve", "get ")) and "agent" in lowered_query:
@@ -735,8 +749,32 @@ def context_packet(
 def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
     query_lower = query.lower()
     output: list[dict[str, Any]] = []
+    if any(term in query_lower for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
+        card = version_pin_card(rows, query, budget)
+        if card:
+            output.append(card)
     if any(term in query_lower for term in ("verify", "validate", "valid")) and any(term in query_lower for term in ("api key", "credential", "token")):
         card = verify_credentials_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("save", "wav", "mp3", "file", "write")) and any(term in query_lower for term in ("audio", "speech", "tts", "synthesis")):
+        card = save_audio_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if "model" in query_lower and any(term in query_lower for term in ("choose", "quality", "latency", "tradeoff", "trade-off", "available", "list")):
+        card = model_selection_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("voiceid", "voice id", "voice_id", "voice")):
+        card = voice_selection_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("speed", "consistency", "similarity", "enhancement", "optional synthesis", "controls")):
+        card = synthesis_controls_card(rows, query, budget)
+        if card:
+            output.append(card)
+    if any(term in query_lower for term in ("failed", "failure", "recover", "retry", "exception", "error")):
+        card = error_recovery_card(rows, query, budget)
         if card:
             output.append(card)
     if any(term in query_lower for term in ("install", "setup", "authenticate", "api key", "environment", "credential", "quickstart")):
@@ -748,6 +786,170 @@ def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) ->
         if card:
             output.insert(0, card)
     return output
+
+
+def version_pin_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    install = first_code_block(rows, lambda block, row, text: install_command(block["code"])) or first_inline_install_command(rows)
+    if not install:
+        return None
+    package = package_from_install_command(install["code"])
+    if not package:
+        return None
+    version_spec = version_specifier_from_rows(rows)
+    if not version_spec:
+        return None
+    code = f"{package}{version_spec}"
+    if approximate_tokens(code) > budget + 40:
+        return None
+    return {
+        "codeTitle": "Pin the dependency in requirements.txt",
+        "codeDescription": "A concrete requirements.txt line assembled from the documented install package and the documented version-pinning guidance.",
+        "codeId": "oz:composite:version-pin",
+        "codeLanguage": "text",
+        "codeTokens": approximate_tokens(code),
+        "pageTitle": "Dependency pinning",
+        "codeList": [{"language": "text", "code": code}],
+        "source": composite_sources([install], rows),
+    }
+
+
+def save_audio_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    block = best_code_block(
+        rows,
+        lambda block, row, text: save_audio_block(block["code"], query),
+        lambda block, row, text: packet_row_score(row, query) + save_audio_block_score(block["code"], text, query),
+    )
+    if not block:
+        return None
+    code = focused_code_for_query(block["code"], query, token_budget=min(max(budget, 1), 620))
+    code = code or trim_to_token_budget(block["code"], min(max(budget, 1), 620))
+    return simple_code_card(
+        title="Save generated audio to a file",
+        description="The strongest source-backed file-output example for the requested audio generation task.",
+        code_id="oz:composite:save-audio",
+        page_title="Audio output",
+        block={**block, "code": code},
+    )
+
+
+def model_selection_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    list_block = best_code_block(
+        rows,
+        lambda block, row, text: "get_models" in block["code"].lower(),
+        lambda block, row, text: packet_row_score(row, query) + model_block_score(block["code"], text),
+    )
+    usage_block = best_code_block(
+        rows,
+        lambda block, row, text: "model" in block["code"].lower() and any(term in block["code"].lower() for term in ("synthesize", "client", "tts")),
+        lambda block, row, text: packet_row_score(row, query) + model_block_score(block["code"], text),
+    )
+    info = model_info_snippet(rows)
+    if not list_block and not usage_block and not info:
+        return None
+    code_list: list[dict[str, str]] = []
+    for block in (list_block, usage_block):
+        if not block:
+            continue
+        code = focused_code_for_query(block["code"], query, token_budget=420) or trim_to_token_budget(block["code"], 420)
+        if code and code not in {item["code"] for item in code_list}:
+            code_list.append({"language": block.get("language") or "python", "code": code})
+    if info and not code_list:
+        code_list.append({"language": "text", "code": info})
+    elif info:
+        code_list.append({"language": "text", "code": trim_to_token_budget(info, 220)})
+    return code_list_card(
+        title="List and choose a model",
+        description="Combines the documented model-listing call with the nearest source-backed model-selection guidance.",
+        code_id="oz:composite:model-selection",
+        page_title="Model selection",
+        code_list=bounded_code_list(code_list, budget),
+        source=composite_sources([list_block, usage_block], rows),
+    )
+
+
+def voice_selection_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    list_block = best_code_block(
+        rows,
+        lambda block, row, text: any(term in block["code"].lower() for term in ("get_voices", "list_voices", "voices(")),
+        lambda block, row, text: packet_row_score(row, query) + (900 if "get_voices" in block["code"].lower() else 0),
+    )
+    usage_block = best_code_block(
+        rows,
+        lambda block, row, text: any(term in block["code"].lower() for term in ("voice_id", "voiceid")) and any(term in block["code"].lower() for term in ("synthesize", "request", "payload", "client")),
+        lambda block, row, text: packet_row_score(row, query) + (500 if "synthesize" in block["code"].lower() else 0),
+    )
+    if not list_block and not usage_block:
+        return None
+    code_list: list[dict[str, str]] = []
+    for block in (list_block, usage_block):
+        if not block:
+            continue
+        code = focused_code_for_query(block["code"], query, token_budget=480) or trim_to_token_budget(block["code"], 480)
+        if code and code not in {item["code"] for item in code_list}:
+            code_list.append({"language": block.get("language") or "python", "code": code})
+    return code_list_card(
+        title="Choose and set a voice",
+        description="Shows how the docs expose available voices and where the selected voice identifier is passed into synthesis.",
+        code_id="oz:composite:voice-selection",
+        page_title="Voice selection",
+        code_list=bounded_code_list(code_list, budget),
+        source=composite_sources([list_block, usage_block], rows),
+    )
+
+
+def synthesis_controls_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    block = best_code_block(
+        rows,
+        lambda block, row, text: any(term in block["code"].lower() for term in ("speed", "sample_rate", "consistency", "similarity", "enhancement"))
+        and any(term in block["code"].lower() for term in ("synthesize", "client", "payload", "request", "config")),
+        lambda block, row, text: packet_row_score(row, query) + controls_block_score(block["code"]),
+    )
+    if not block:
+        return None
+    code = focused_code_for_query(block["code"], query, token_budget=min(max(budget, 1), 620))
+    code = code or trim_to_token_budget(block["code"], min(max(budget, 1), 620))
+    return simple_code_card(
+        title="Pass optional synthesis controls",
+        description="The most direct source-backed example for setting optional synthesis parameters.",
+        code_id="oz:composite:synthesis-controls",
+        page_title="Synthesis controls",
+        block={**block, "code": code},
+    )
+
+
+def error_recovery_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
+    block = best_code_block(
+        rows,
+        lambda block, row, text: error_handling_block(block["code"], text, query),
+        lambda block, row, text: packet_row_score(row, query) + error_block_score(block["code"], text),
+    )
+    if block:
+        code = focused_code_for_query(block["code"], query, token_budget=min(max(budget, 1), 620))
+        code = code or trim_to_token_budget(block["code"], min(max(budget, 1), 620))
+        return simple_code_card(
+            title="Handle failed generation requests",
+            description="The nearest source-backed error path for the requested generation API.",
+            code_id="oz:composite:error-recovery",
+            page_title="Error handling",
+            block={**block, "code": code},
+        )
+    generation = best_code_block(
+        rows,
+        lambda block, row, text: any(term in block["code"].lower() for term in ("synthesize", "generate", "completion", "request")),
+        lambda block, row, text: packet_row_score(row, query),
+    )
+    if not generation:
+        return None
+    wrapped = retry_wrapper_from_generation_block(generation["code"], query)
+    if not wrapped:
+        return None
+    return simple_code_card(
+        title="Wrap generation with retry and failure handling",
+        description="A minimal recovery wrapper around the documented generation call. Keep the wrapped call aligned with the source example.",
+        code_id="oz:composite:error-recovery",
+        page_title="Error handling",
+        block={**generation, "language": generation.get("language") or "python", "code": trim_to_token_budget(wrapped, min(max(budget, 1), 620))},
+    )
 
 
 def setup_composite_card(rows: list[dict[str, Any]], query: str, budget: int) -> dict[str, Any] | None:
@@ -872,6 +1074,239 @@ def verify_credentials_card(rows: list[dict[str, Any]], query: str, budget: int)
         "codeList": [{"language": block.get("language") or "python", "code": code}],
         "source": block.get("source") or "",
     }
+
+
+def simple_code_card(
+    *,
+    title: str,
+    description: str,
+    code_id: str,
+    page_title: str,
+    block: dict[str, str],
+) -> dict[str, Any]:
+    code = block.get("code") or ""
+    return {
+        "codeTitle": title,
+        "codeDescription": description,
+        "codeId": code_id,
+        "codeLanguage": block.get("language") or "",
+        "codeTokens": approximate_tokens(code),
+        "pageTitle": page_title,
+        "codeList": [{"language": block.get("language") or "", "code": code}],
+        "source": block.get("source") or "",
+    }
+
+
+def code_list_card(
+    *,
+    title: str,
+    description: str,
+    code_id: str,
+    page_title: str,
+    code_list: list[dict[str, str]],
+    source: str,
+) -> dict[str, Any] | None:
+    code_list = [item for item in code_list if str(item.get("code") or "").strip()]
+    if not code_list:
+        return None
+    content = "\n\n".join(item["code"] for item in code_list)
+    return {
+        "codeTitle": title,
+        "codeDescription": description,
+        "codeId": code_id,
+        "codeLanguage": code_list[0].get("language") or "",
+        "codeTokens": approximate_tokens(content),
+        "pageTitle": page_title,
+        "codeList": code_list,
+        "source": source,
+    }
+
+
+def package_from_install_command(command: str) -> str:
+    parts = re.split(r"\s+", command.strip())
+    if not parts:
+        return ""
+    if parts[:3] in (["python", "-m", "pip"], ["python3", "-m", "pip"]):
+        parts = parts[3:]
+    if parts and parts[0] in {"pip", "pip3", "uv"}:
+        parts = parts[1:]
+    if parts and parts[0] in {"install", "add"}:
+        parts = parts[1:]
+    if parts and parts[0] in {"npm", "pnpm", "yarn"}:
+        parts = parts[1:]
+    if parts and parts[0] in {"install", "add"}:
+        parts = parts[1:]
+    for part in parts:
+        if not part or part.startswith("-"):
+            continue
+        return re.sub(r"[\"'`,].*$", "", part).strip()
+    return ""
+
+
+def version_specifier_from_rows(rows: list[dict[str, Any]]) -> str:
+    blob = "\n".join((context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or "")) for row in rows[:80])
+    patterns = [
+        r"(?P<spec>==\s*\d+(?:\.\d+){0,2}\.\*)",
+        r"(?P<spec>==\s*\d+(?:\.\d+){0,2})",
+        r"(?P<spec>~=\s*\d+(?:\.\d+){1,2})",
+        r"(?P<spec>>=\s*\d+(?:\.\d+){0,2}\s*,\s*<\s*\d+(?:\.\d+){0,2})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, blob)
+        if match:
+            return re.sub(r"\s+", "", match.group("spec"))
+    return ""
+
+
+def save_audio_block(code: str, query: str) -> bool:
+    lowered = code.lower()
+    if any(term in lowered for term in ("transcribe", "speech-to-text", "stt")):
+        return False
+    if "websocketapp" in lowered and "save_as" not in lowered and "writeframes" not in lowered:
+        return False
+    return any(term in lowered for term in ("save_as", "output_format", "writeframes", "open(", ".write(", "write(")) and any(
+        term in lowered for term in ("synthesize", "audio", "speech", "tts", "wav", "mp3")
+    )
+
+
+def save_audio_block_score(code: str, text: str, query: str) -> float:
+    lowered = code.lower()
+    score = 0.0
+    for term, weight in {
+        "save_as": 1800,
+        "output_format": 900,
+        "synthesize": 700,
+        "wavesclient": 400,
+        "asyncwavesclient": 400,
+        "with open": 320,
+        "writeframes": 320,
+        "mp3": 260,
+        "wav": 240,
+    }.items():
+        if term in lowered:
+            score += weight
+    if "websocketapp" in lowered:
+        score -= 1700
+    if "transcribe" in lowered or "speech-to-text" in lowered:
+        score -= 1800
+    return score
+
+
+def model_block_score(code: str, text: str) -> float:
+    lowered = f"{code}\n{text}".lower()
+    score = 0.0
+    for term, weight in {
+        "get_models": 1100,
+        "model=": 720,
+        '"model"': 360,
+        "quality": 320,
+        "latency": 320,
+        "lightning": 300,
+        "large": 180,
+        "synthesize": 260,
+    }.items():
+        if term in lowered:
+            score += weight
+    if "http vs" in lowered or "protocol" in lowered:
+        score -= 900
+    if "asr" in lowered or "dashboard" in lowered:
+        score -= 1200
+    return score
+
+
+def model_info_snippet(rows: list[dict[str, Any]]) -> str:
+    candidates: list[str] = []
+    for row in rows[:80]:
+        text = strip_code_blocks(context_source_text(row) if not row.get("snippet") else str(row.get("snippet") or ""))
+        lowered = text.lower()
+        if "model" not in lowered:
+            continue
+        if not any(term in lowered for term in ("quality", "latency", "fast", "large", "available", "get_models", "lightning")):
+            continue
+        if any(term in lowered for term in ("dashboard", "prometheus", "asr", "protocol")):
+            continue
+        candidates.append(trim_to_token_budget(text, 220))
+    unique = list(dict.fromkeys(candidate for candidate in candidates if candidate))
+    return "\n\n".join(unique[:2])
+
+
+def controls_block_score(code: str) -> float:
+    lowered = code.lower()
+    score = 0.0
+    for term, weight in {
+        "speed": 900,
+        "sample_rate": 620,
+        "consistency": 760,
+        "similarity": 760,
+        "enhancement": 760,
+        "synthesize": 420,
+        "client": 260,
+    }.items():
+        if term in lowered:
+            score += weight
+    if lowered.count(":param") >= 2:
+        score -= 900
+    if "dashboard" in lowered or "prometheus" in lowered:
+        score -= 1200
+    return score
+
+
+def error_handling_block(code: str, text: str, query: str) -> bool:
+    lowered = f"{code}\n{text}".lower()
+    if any(term in lowered for term in ("dashboard", "prometheus", "grafana", "asr_", "speech-to-text", "transcribe")):
+        return False
+    has_error = any(term in lowered for term in ("except", "raise", "retry", "status == \"error\"", "status == 'error'", "on_error", "response.status", "status_code"))
+    has_generation = any(term in lowered for term in ("synthesize", "generate", "generation", "audio", "speech", "tts"))
+    return has_error and has_generation
+
+
+def error_block_score(code: str, text: str) -> float:
+    lowered = f"{code}\n{text}".lower()
+    score = 0.0
+    for term, weight in {
+        "except": 700,
+        "retry": 620,
+        "status == \"error\"": 900,
+        "status == 'error'": 900,
+        "on_error": 520,
+        "status_code": 360,
+        "synthesize": 460,
+        "generation": 260,
+    }.items():
+        if term in lowered:
+            score += weight
+    if "websocketapp" in lowered and "status == \"error\"" not in lowered and "status == 'error'" not in lowered:
+        score -= 700
+    if any(term in lowered for term in ("dashboard", "prometheus", "grafana", "asr_")):
+        score -= 2000
+    return score
+
+
+def retry_wrapper_from_generation_block(code: str, query: str) -> str:
+    if "python" not in " ".join(requested_languages(query) or {"python"}):
+        return ""
+    focused = focused_lines_around_terms(code, {"synthesize", "generate", "client"}, 180) or trim_to_token_budget(code, 180)
+    call = first_assignment_or_call(focused, {"synthesize", "generate", "request"})
+    imports = [line.strip() for line in code.splitlines() if re.match(r"\s*(from\s+[\w.]+\s+import\s+.+|import\s+[\w.]+)", line)]
+    init_lines = [
+        line.strip()
+        for line in focused.splitlines()
+        if re.search(r"\b\w*Client\s*\(", line) and not line.strip().startswith("#")
+    ]
+    if not call:
+        return ""
+    parts = compact_code_lines([*imports[:4], "", *init_lines[:2], "", "import time", "", "for attempt in range(3):", "    try:", f"        {call.strip()}", "        break", "    except Exception:", "        if attempt == 2:", "            raise", "        time.sleep(2 ** attempt)"])
+    return normalize_code_indentation(parts)
+
+
+def first_assignment_or_call(code: str, terms: set[str]) -> str:
+    lines = code.splitlines()
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if any(term in lowered for term in terms):
+            statement = code_statement_window(lines, index)
+            return normalize_code_indentation(statement)
+    return ""
 
 
 def first_code_block(rows: list[dict[str, Any]], predicate: Any) -> dict[str, str] | None:
