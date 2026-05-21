@@ -39,6 +39,7 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     symbols = symbol_names(target)
     chunks = chunk_rows(target)
     sources = source_rows(target)
+    coverage = chunk_coverage_rows(target)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -48,7 +49,7 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         missing_topics = missing_required_topics(target, profile.required_topics)
         if missing_topics:
             errors.append("missing required topics: " + ", ".join(missing_topics))
-        missing_symbols = missing_expected_symbols(symbols, profile.expected_symbols)
+        missing_symbols = missing_expected_symbols(symbols, profile.expected_symbols, corpus_text(target))
         if missing_symbols:
             errors.append("missing expected symbols: " + ", ".join(missing_symbols))
         junk_rejections = true_junk_rejections(rejected)
@@ -96,6 +97,25 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     duplicate_source_documents = duplicate_source_document_count(sources)
     if sources and duplicate_source_documents:
         errors.append(f"{duplicate_source_documents} duplicate canonical source documents")
+    coverage_threshold = min_chunk_coverage_ratio()
+    coverage_failures = [
+        row
+        for row in coverage
+        if int(row.get("clean_line_count") or 0) > 0 and float(row.get("coverage_ratio") or 0) < coverage_threshold
+    ]
+    code_fence_coverage_failures = [
+        row
+        for row in coverage
+        if int(row.get("code_fence_line_count") or 0) > 0 and float(row.get("code_fence_coverage_ratio") or 0) < 1.0
+    ]
+    if sources and not coverage:
+        errors.append("chunk coverage report is missing")
+    if coverage_failures:
+        sample = ", ".join(str(row.get("path") or row.get("source_url")) for row in coverage_failures[:3])
+        errors.append(f"{len(coverage_failures)} source documents have chunk coverage below {coverage_threshold:.2f}: {sample}")
+    if code_fence_coverage_failures:
+        sample = ", ".join(str(row.get("path") or row.get("source_url")) for row in code_fence_coverage_failures[:3])
+        errors.append(f"{len(code_fence_coverage_failures)} source documents have uncovered code fences: {sample}")
 
     metrics = {
         "documents": len(pages),
@@ -118,6 +138,11 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         "long_heading_paths": long_heading_paths,
         "docs_authoring_chunks": docs_authoring_chunks,
         "index_boilerplate_chunks": index_boilerplate_chunks,
+        "chunk_coverage_documents": len(coverage),
+        "chunk_coverage_threshold": coverage_threshold,
+        "chunk_coverage_min": min((float(row.get("coverage_ratio") or 0) for row in coverage), default=0),
+        "chunk_coverage_failed_documents": len(coverage_failures),
+        "code_fence_coverage_failed_documents": len(code_fence_coverage_failures),
     }
     return ValidationResult(not errors, errors, warnings, metrics)
 
@@ -157,8 +182,36 @@ def is_policy_rejection(row: dict[str, Any]) -> bool:
     return (
         content_type in {"duplicate", "duplicate_source", "archived_version", "network_page_fetch", "network_source_fetch"}
         or any(reason.startswith("duplicate content") for reason in reasons)
+        or any("url rejected by library profile" in reason for reason in reasons)
         or any("version" in reason and ("archived" in reason or "target" in reason) for reason in reasons)
+        or is_benign_virtual_fragment_rejection(row, reasons)
     )
+
+
+def is_benign_virtual_fragment_rejection(row: dict[str, Any], reasons: list[str]) -> bool:
+    """Do not treat harmless skipped fragments from compiled sources as junk.
+
+    llms-full and OpenAPI sources can split into many small virtual documents.
+    Dropping a short fragment is normal; the junk gate should fail on harmful
+    crawled pages, not on intentionally skipped fragments from a trusted source.
+    """
+
+    source_url = str(row.get("source_url") or "").lower()
+    if not (
+        re.search(r"(?:^|/)(?:llms|llms-full)\.txt#", source_url)
+        or re.search(r"(?:openapi|swagger)\.(?:json|ya?ml)#", source_url)
+    ):
+        return False
+    harmful = {
+        "marketing/login language",
+        "generic homepage/search page",
+        "navigation-heavy repeated text",
+        "language does not match target",
+    }
+    if any(any(marker in reason for marker in harmful) for reason in reasons):
+        return False
+    benign_prefixes = ("too little documentation text", "quality score below", "no headings")
+    return bool(reasons) and all(reason.startswith(benign_prefixes) for reason in reasons)
 
 
 def symbol_names(target: Path) -> set[str]:
@@ -190,11 +243,22 @@ def source_rows(target: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def chunk_coverage_rows(target: Path) -> list[dict[str, Any]]:
+    path = target / "_chunk_coverage.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
 def duplicate_source_document_count(rows: list[dict[str, Any]]) -> int:
     seen: set[str] = set()
     duplicates = 0
     for row in rows:
-        key = str(row.get("canonical_url") or row.get("source_url") or row.get("path") or "").split("#", 1)[0].rstrip("/")
+        key = source_document_duplicate_key(row)
         if not key:
             continue
         if key in seen:
@@ -204,16 +268,63 @@ def duplicate_source_document_count(rows: list[dict[str, Any]]) -> int:
     return duplicates
 
 
+def source_document_duplicate_key(row: dict[str, Any]) -> str:
+    value = str(row.get("canonical_url") or row.get("source_url") or row.get("path") or "").rstrip("/")
+    if not value:
+        return ""
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    source_type = str(row.get("source_type") or metadata.get("source_type") or "").lower()
+    if "#" in value and (
+        source_type in {"llms_txt", "openapi"}
+        or re.search(r"(?:^|/)(?:llms|llms-full)\.txt#", value.lower())
+    ):
+        return value
+    return value.split("#", 1)[0].rstrip("/")
+
+
 def missing_required_topics(target: Path, topics: list[str]) -> list[str]:
     if not topics:
         return []
-    haystack = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in markdown_pages(target)).lower()
+    haystack = corpus_text(target).lower()
     return [topic for topic in topics if topic.lower() not in haystack]
 
 
-def missing_expected_symbols(actual: set[str], expected: list[str]) -> list[str]:
+def corpus_text(target: Path) -> str:
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in markdown_pages(target))
+
+
+def missing_expected_symbols(actual: set[str], expected: list[str], haystack: str = "") -> list[str]:
     normalized_actual = {symbol.lower() for symbol in actual}
-    return [symbol for symbol in expected if symbol.lower() not in normalized_actual]
+    normalized_haystack = normalized_symbol_text(haystack)
+    missing: list[str] = []
+    for symbol in expected:
+        variants = expected_symbol_variants(symbol)
+        if any(variant in normalized_actual for variant in variants):
+            continue
+        if normalized_haystack and any(variant in normalized_haystack for variant in variants):
+            continue
+        missing.append(symbol)
+    return missing
+
+
+def expected_symbol_variants(symbol: str) -> set[str]:
+    raw = symbol.strip()
+    if not raw:
+        return set()
+    phrase = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", raw)
+    phrase = re.sub(r"[-_./\\]+", " ", phrase)
+    phrase = re.sub(r"\s+", " ", phrase).strip().lower()
+    compact = re.sub(r"[^a-z0-9]+", "", phrase)
+    variants = {raw.lower(), phrase}
+    if compact:
+        variants.add(compact)
+    return variants
+
+
+def normalized_symbol_text(text: str) -> str:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
+    spaced = re.sub(r"[-_./\\]+", " ", spaced)
+    return re.sub(r"\s+", " ", spaced).lower()
 
 
 def duplicate_chunk_ratio(chunks: list[dict[str, Any]]) -> float:
@@ -262,3 +373,10 @@ def max_chunk_tokens() -> int:
         return int(os.environ.get("OZ_MAX_CHUNK_TOKENS", "1200"))
     except ValueError:
         return 1200
+
+
+def min_chunk_coverage_ratio() -> float:
+    try:
+        return max(0.0, min(1.0, float(os.environ.get("OZ_MIN_CHUNK_COVERAGE_RATIO", "0.98"))))
+    except ValueError:
+        return 0.98

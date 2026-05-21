@@ -25,8 +25,8 @@ def type_definition_chunks(text: str, source_url: str, *, language: str, limit: 
                 "source_url": f"{source_url}#{slugify(name)}",
                 "markdown": f"# {name}\n\n```{language}\n{body}\n```\n",
                 "metadata": {
-                    "source_type": "type_definition",
-                    "source_role": "api_spec",
+                    "source_type": "github",
+                    "document_role": "type_definition",
                     "operation": {
                         "kind": operation_kind(body),
                         "operation_name": name,
@@ -39,7 +39,7 @@ def type_definition_chunks(text: str, source_url: str, *, language: str, limit: 
                         "request_schema": body[:4000],
                         "response_schema": return_type(body),
                         "auth_requirements": [],
-                        "source_type": "type_definition",
+                        "source_type": "github",
                     },
                 },
             }

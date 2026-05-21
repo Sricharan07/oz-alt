@@ -15,7 +15,7 @@ from oz_api.retrieval_context import RetrievalContext
 from oz_api.storage import normalize_query
 
 LOGGER = logging.getLogger(__name__)
-RERANK_CACHE_VERSION = "search-rank-v11"
+RERANK_CACHE_VERSION = "search-rank-v12"
 
 
 def maybe_rerank(

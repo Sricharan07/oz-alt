@@ -25,13 +25,11 @@ from oz_api.crawler_jobs import (
 )
 from oz_api.intent import classify_query, plan_query
 from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
-from oz_api.context_cards import build_context_snippets, build_source_sections, query_facets, select_context_snippets
 from oz_api.indexer import add_parent_chunks, chunk_rows, enrich_chunk_row, limit_to_token_budget
 from oz_api.llm_recipes import grounded_generation, high_risk_api_tokens
-from oz_api.operation_cards import build_agent_operation_examples, build_agent_operations, build_agent_recipes
 from oz_api.ranking import local_chunk_score, planned_chunk_score
 from oz_api.queue import queued_crawler_job_event
-from oz_api.retrieval import context_source_text
+from oz_api.retrieval import code_blocks_satisfying_context_terms, context_packet, context_required_terms, context_source_text, leaf_code_blocks
 from oz_api.rerank import (
     boost_named_suggestions,
     boost_query_matches,
@@ -131,46 +129,6 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertGreater(local_chunk_score(api_row, terms), local_chunk_score(example_row, terms))
 
-    def test_agent_operation_layer_builds_source_backed_recipe(self) -> None:
-        rows = [
-            {
-                "id": 1,
-                "path": "api-reference/openapi/post-knowledge-bases.md",
-                "start_line": 1,
-                "source_url": "https://example.test/openapi.json#post-knowledge-bases",
-                "source_anchor": "https://example.test/openapi.json#post-knowledge-bases",
-                "content_type": "api_reference",
-                "quality_score": 1.0,
-                "content": "# POST /knowledge-bases\n\nCreate a knowledge base.\n\n```python\nfrom vendor import Client\nclient = Client(api_key=\"API_KEY\")\nclient.create_knowledge_base(name=\"Docs\")\n```",
-                "symbols": ["create_knowledge_base"],
-                "heading_path": ["Knowledge bases"],
-                "metadata_json": {
-                    "product": "docs",
-                    "product_confidence": 1.0,
-                    "source_role": "api_spec",
-                    "operation": {
-                        "kind": "create",
-                        "operation_name": "create_knowledge_base",
-                        "http_method": "POST",
-                        "endpoint": "/knowledge-bases",
-                        "required_params": [{"name": "name", "required": True}],
-                        "optional_params": [{"name": "description", "required": False}],
-                    },
-                },
-            }
-        ]
-
-        operations = build_agent_operations(rows)
-        examples = build_agent_operation_examples(rows, operations)
-        recipes = build_agent_recipes(rows, operations, examples)
-
-        self.assertEqual(len(operations), 1)
-        self.assertEqual(operations[0].operation_kind, "create")
-        self.assertEqual(operations[0].product, "docs")
-        self.assertEqual(operations[0].required_params[0]["name"], "name")
-        self.assertEqual(len(examples), 1)
-        self.assertEqual(len(recipes), 1)
-        self.assertIn("client.create_knowledge_base", recipes[0].content)
 
     def test_llm_recipe_grounding_allows_prose_but_rejects_invented_api(self) -> None:
         evidence = [
@@ -406,6 +364,302 @@ class RetrievalQualityTests(unittest.TestCase):
 
         self.assertEqual(context_source_text(row), "NextResponse extends the Web Response API.")
 
+    def test_context_does_not_emit_code_blocks_that_miss_required_terms(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "retrieval_mode": "code_example",
+                "title": "Webhook",
+                "matched_path": "guides/webhooks.md",
+                "source_anchor": "https://docs.example/webhooks",
+                "_matched_text": "Webhook setup\n\n```python\nclient.background.run()\n```",
+                "snippet": "Webhook setup\n\n```python\nclient.background.run()\n```",
+            },
+            {
+                "score": 90,
+                "retrieval_mode": "agent_recipe",
+                "title": "Managing Webhooks",
+                "matched_path": "guides/webhooks.md",
+                "source_anchor": "https://docs.example/webhooks#manage",
+                "_matched_text": "Create and manage webhooks from the dashboard. Add the endpoint URL, choose events, save the webhook, and then attach it to the agent settings before testing delivery.",
+                "snippet": "Create and manage webhooks from the dashboard. Add the endpoint URL, choose events, save the webhook, and then attach it to the agent settings before testing delivery.",
+            },
+        ]
+
+        packet = context_packet(rows, query="create a webhook tool", max_tokens=800, max_results=4)
+
+        self.assertEqual(packet["codeSnippets"], [])
+        self.assertTrue(packet["infoSnippets"])
+        self.assertIn("webhook", packet["infoSnippets"][0]["content"].lower())
+
+    def test_required_terms_filter_individual_code_blocks(self) -> None:
+        blocks = [
+            {"language": "python", "code": "client.background.run()"},
+            {"language": "python", "code": "client.webhooks.create(url='https://example.com/hook')"},
+        ]
+
+        filtered = code_blocks_satisfying_context_terms(blocks, {"webhook"})
+
+        self.assertEqual(filtered, [blocks[1]])
+
+    def test_context_flattens_markdown_wrapper_code_blocks_before_filtering(self) -> None:
+        blocks = [
+            {
+                "language": "markdown",
+                "code": (
+                    "Webhook use case prose.\n\n"
+                    "```python\n"
+                    "client.background.run()\n"
+                    "```\n"
+                ),
+            }
+        ]
+
+        self.assertEqual(leaf_code_blocks(blocks), [{"language": "python", "code": "client.background.run()"}])
+        self.assertEqual(code_blocks_satisfying_context_terms(blocks, {"webhook"}), [])
+
+    def test_context_recovers_partial_fence_and_drops_prose_wrapper(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "retrieval_mode": "code_example",
+                "title": "Accessing Request Object",
+                "matched_path": "guides/app-router.md",
+                "source_anchor": "https://docs.example/app-router#request",
+                "_matched_text": (
+                    "The `app` directory exposes new read-only functions to retrieve request data:\n\n"
+                    "* [`cookies`](/docs/app/api-reference/functions/cookies): read cookies.\n\n"
+                    "```tsx filename=\"app/page.tsx\" switcher\n"
+                    "import { cookies } from 'next/headers'\n\n"
+                    "export default async function Page() {\n"
+                    "  const theme = (await cookies()).get('theme')\n"
+                    "  return '...'\n"
+                    "}"
+                ),
+                "snippet": (
+                    "The `app` directory exposes new read-only functions to retrieve request data:\n\n"
+                    "* [`cookies`](/docs/app/api-reference/functions/cookies): read cookies.\n\n"
+                    "```tsx filename=\"app/page.tsx\" switcher\n"
+                    "import { cookies } from 'next/headers'\n\n"
+                    "export default async function Page() {\n"
+                    "  const theme = (await cookies()).get('theme')\n"
+                    "  return '...'\n"
+                    "}"
+                ),
+            }
+        ]
+
+        packet = context_packet(rows, query="read cookies in a Next.js server component", max_tokens=900, max_results=3)
+
+        self.assertEqual(len(packet["codeSnippets"]), 1)
+        code = packet["codeSnippets"][0]["codeList"][0]["code"]
+        self.assertTrue(code.startswith("import { cookies }"))
+        self.assertNotIn("The `app` directory", code)
+        self.assertNotIn("```", code)
+
+    def test_context_extracts_unfenced_operation_code(self) -> None:
+        rows = [
+            {
+                "score": 110,
+                "retrieval_mode": "code_example",
+                "title": "Deploy an agent",
+                "matched_path": "guides/deploy-agent.md",
+                "source_anchor": "https://docs.example/deploy-agent",
+                "_matched_text": (
+                    "```bash\n"
+                    "$ smallestai agent-crew deploy --agent-id agent_123\n"
+                    "✓ Package created\n"
+                    "```\n"
+                ),
+                "snippet": (
+                    "```bash\n"
+                    "$ smallestai agent-crew deploy --agent-id agent_123\n"
+                    "✓ Package created\n"
+                    "```\n"
+                ),
+            },
+            {
+                "score": 100,
+                "retrieval_mode": "source_section",
+                "title": "Create agent",
+                "matched_path": "guides/create-agent.md",
+                "source_anchor": "https://docs.example/create-agent",
+                "_matched_text": (
+                    "# not SMALLEST_API_KEY.\n"
+                    "client = SmallestAI(token=os.getenv(\"SMALLEST_API_KEY\"))\n"
+                    "response = client.atoms.agents.create_a_new_agent(name=\"my-test-agent\")\n"
+                    "agent_id = response.data\n"
+                    "print(agent_id)\n\n"
+                    "Prompts for your API key and writes credentials."
+                ),
+                "snippet": (
+                    "# not SMALLEST_API_KEY.\n"
+                    "client = SmallestAI(token=os.getenv(\"SMALLEST_API_KEY\"))\n"
+                    "response = client.atoms.agents.create_a_new_agent(name=\"my-test-agent\")\n"
+                    "agent_id = response.data\n"
+                    "print(agent_id)\n\n"
+                    "Prompts for your API key and writes credentials."
+                ),
+            },
+            {
+                "score": 90,
+                "retrieval_mode": "code_example",
+                "title": "Connect to existing agent",
+                "matched_path": "guides/connect-agent.md",
+                "source_anchor": "https://docs.example/connect-agent",
+                "_matched_text": "```typescript\nconst agent = new AtomsAgent({ apiKey: 'sk_...', agentId: 'agent_123' })\nawait agent.connect()\n```",
+                "snippet": "```typescript\nconst agent = new AtomsAgent({ apiKey: 'sk_...', agentId: 'agent_123' })\nawait agent.connect()\n```",
+            },
+            {
+                "score": 88,
+                "retrieval_mode": "code_example",
+                "title": "Using Groq",
+                "matched_path": "guides/groq.md",
+                "source_anchor": "https://docs.example/groq",
+                "_matched_text": (
+                    "```python\n"
+                    "from smallestai.atoms.models import CreateAgentRequest\n"
+                    "agent = CreateAgentRequest(name=\"SupportAgent\", synthesizer={})\n"
+                    "```\n"
+                ),
+                "snippet": (
+                    "```python\n"
+                    "from smallestai.atoms.models import CreateAgentRequest\n"
+                    "agent = CreateAgentRequest(name=\"SupportAgent\", synthesizer={})\n"
+                    "```\n"
+                ),
+            },
+            {
+                "score": 80,
+                "retrieval_mode": "code_example",
+                "title": "Headers only",
+                "matched_path": "guides/headers.md",
+                "source_anchor": "https://docs.example/headers",
+                "_matched_text": "```python\nAPI_KEY = os.environ[\"SMALLEST_API_KEY\"]\nHEADERS = {\"Authorization\": f\"Bearer {API_KEY}\"}\n```",
+                "snippet": "```python\nAPI_KEY = os.environ[\"SMALLEST_API_KEY\"]\nHEADERS = {\"Authorization\": f\"Bearer {API_KEY}\"}\n```",
+            },
+        ]
+
+        packet = context_packet(rows, query="create a new Atoms agent with API key in Python", max_tokens=900, max_results=4)
+
+        self.assertTrue(packet["codeSnippets"])
+        code = packet["codeSnippets"][0]["codeList"][0]["code"]
+        self.assertIn("create_a_new_agent", code)
+        self.assertNotIn("agent-crew deploy", code)
+        self.assertNotIn("Package created", code)
+        self.assertNotIn("CreateAgentRequest", "\n".join(item["code"] for card in packet["codeSnippets"] for item in card["codeList"]))
+        self.assertNotEqual(code.strip(), "API_KEY = os.environ[\"SMALLEST_API_KEY\"]")
+
+    def test_context_honors_requested_code_language(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "retrieval_mode": "code_example",
+                "title": "TypeScript streaming",
+                "matched_path": "guides/stream-ts.md",
+                "source_anchor": "https://docs.example/stream-ts",
+                "_matched_text": (
+                    "```typescript\n"
+                    "import WebSocket from \"ws\"\n"
+                    "const ws = new WebSocket(\"wss://api.example/stream\")\n"
+                    "ws.on(\"open\", () => ws.send(JSON.stringify({ text: \"Hello\" })))\n"
+                    "```\n"
+                ),
+                "snippet": (
+                    "```typescript\n"
+                    "import WebSocket from \"ws\"\n"
+                    "const ws = new WebSocket(\"wss://api.example/stream\")\n"
+                    "ws.on(\"open\", () => ws.send(JSON.stringify({ text: \"Hello\" })))\n"
+                    "```\n"
+                ),
+            },
+            {
+                "score": 90,
+                "retrieval_mode": "code_example",
+                "title": "Python streaming",
+                "matched_path": "guides/stream-python.md",
+                "source_anchor": "https://docs.example/stream-python",
+                "_matched_text": (
+                    "```python\n"
+                    "from smallestai.waves import WavesStreamingTTS, TTSConfig\n"
+                    "config = TTSConfig(api_key=\"SMALLEST_API_KEY\")\n"
+                    "tts = WavesStreamingTTS(config)\n"
+                    "tts.stream(text=\"Hello\")\n"
+                    "```\n"
+                ),
+                "snippet": (
+                    "```python\n"
+                    "from smallestai.waves import WavesStreamingTTS, TTSConfig\n"
+                    "config = TTSConfig(api_key=\"SMALLEST_API_KEY\")\n"
+                    "tts = WavesStreamingTTS(config)\n"
+                    "tts.stream(text=\"Hello\")\n"
+                    "```\n"
+                ),
+            },
+        ]
+
+        packet = context_packet(rows, query="stream text to speech in Python", max_tokens=900, max_results=4)
+
+        self.assertTrue(packet["codeSnippets"])
+        joined = "\n".join(item["code"] for card in packet["codeSnippets"] for item in card["codeList"])
+        self.assertIn("WavesStreamingTTS", joined)
+        self.assertNotIn("WebSocket", joined)
+
+    def test_context_recipe_cards_do_not_fallback_to_unusable_raw_code(self) -> None:
+        rows = [
+            {
+                "score": 100,
+                "retrieval_mode": "agent_recipe",
+                "title": "Webhook background example",
+                "matched_path": "AGENT_RECIPES.md",
+                "source_anchor": "https://docs.example/webhook-background",
+                "_matched_text": (
+                    "Webhook use case prose.\n\n"
+                    "### Background node\n\n"
+                    "```markdown\n"
+                    "Webhook analytics example.\n\n"
+                    "```python\n"
+                    "client.background.run()\n"
+                    "```\n"
+                    "```"
+                ),
+                "snippet": (
+                    "Webhook use case prose.\n\n"
+                    "### Background node\n\n"
+                    "```markdown\n"
+                    "Webhook analytics example.\n\n"
+                    "```python\n"
+                    "client.background.run()\n"
+                    "```\n"
+                    "```"
+                ),
+            },
+            {
+                "score": 80,
+                "retrieval_mode": "source_section",
+                "title": "Managing Webhooks",
+                "matched_path": "guides/webhooks.md",
+                "source_anchor": "https://docs.example/webhooks",
+                "_matched_text": "Manage webhooks from the dashboard, add the endpoint URL, choose the relevant event subscriptions, save the webhook, and attach it to an agent before running a delivery test.",
+                "snippet": "Manage webhooks from the dashboard, add the endpoint URL, choose the relevant event subscriptions, save the webhook, and attach it to an agent before running a delivery test.",
+            },
+        ]
+
+        packet = context_packet(rows, query="create a webhook tool", max_tokens=900, max_results=6)
+
+        self.assertEqual(packet["codeSnippets"], [])
+        self.assertTrue(packet["infoSnippets"])
+
+    def test_specific_required_terms_survive_after_candidate_narrowing(self) -> None:
+        rows = [
+            {"_matched_text": "Webhook setup and dashboard details."},
+            {"_matched_text": "Webhook delivery events and subscriptions."},
+            {"_matched_text": "Webhook troubleshooting and retry notes."},
+            {"_matched_text": "Webhook headers and endpoint URL."},
+        ]
+
+        self.assertEqual(context_required_terms("create an agent webhook tool", rows), {"webhook"})
+
     def test_indexer_strips_source_index_boilerplate(self) -> None:
         row = enrich_chunk_row(
             {"vendor": "vercel", "library": "next.js", "version": "15"},
@@ -629,12 +883,16 @@ class RetrievalQualityTests(unittest.TestCase):
             page = NormalizedPage(title="Doc", markdown="# Doc\n\nUse it.", source_url="https://docs.example/doc", path="guides/doc.md")
             write_chunks(target, [page])
             row = next(json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip())
+            coverage = next(json.loads(line) for line in (target / "_chunk_coverage.jsonl").read_text().splitlines() if line.strip())
 
         self.assertIn("chunk_sha", row)
         self.assertIn("content_sha", row)
+        self.assertIn("source_section_key", row)
         self.assertEqual(row["content_sha"], content_hash(row["text"]))
         self.assertNotIn("embedding", row)
         self.assertNotIn("embedding_model", row)
+        self.assertEqual(coverage["coverage_ratio"], 1.0)
+        self.assertEqual(coverage["uncovered_ranges"], [])
 
     def test_write_chunks_assigns_symbols_only_when_present_in_chunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -723,7 +981,7 @@ class RetrievalQualityTests(unittest.TestCase):
         self.assertGreater(result.metrics["docs_authoring_chunks"], 0)
         self.assertGreater(result.metrics["index_boilerplate_chunks"], 0)
 
-    def test_write_chunks_dedupes_exact_chunk_content_across_pages(self) -> None:
+    def test_write_chunks_preserves_duplicate_content_across_source_paths_for_coverage(self) -> None:
         markdown = "# Shared\n\n" + "Use the same setup sequence. " * 25
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "vendor" / "library" / "latest"
@@ -736,13 +994,17 @@ class RetrievalQualityTests(unittest.TestCase):
                 ],
             )
             rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
+            coverage = [json.loads(line) for line in (target / "_chunk_coverage.jsonl").read_text().splitlines() if line.strip()]
 
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["path"] for row in rows}, {"guides/one.md", "guides/two.md"})
+        self.assertTrue(all(row["coverage_ratio"] == 1.0 for row in coverage))
 
     def test_validation_junk_ratio_excludes_policy_dedup_rejections(self) -> None:
         rows = [
             {"content_type": "duplicate", "reasons": ["duplicate content", "canonical source: https://docs.example/a"]},
             {"content_type": "network_page_fetch", "reasons": ["crawler URL returned HTTP 404: https://docs.example/missing"]},
+            {"content_type": "junk", "reasons": ["url rejected by library profile"]},
             {"content_type": "junk", "reasons": ["marketing/login language"]},
         ]
 
@@ -1017,237 +1279,11 @@ class RetrievalQualityTests(unittest.TestCase):
                 self.assertTrue(all(chunk.text.strip() for chunk in chunks))
                 self.assertTrue(all(token_count(chunk.text) <= 1200 for chunk in chunks))
 
-    def test_context_cards_create_agent_units_with_facets(self) -> None:
-        rows = [
-            {
-                "id": 1,
-                "source_document_id": 10,
-                "path": "api-reference/app/api-reference/functions/cookies.md",
-                "start_line": 12,
-                "end_line": 28,
-                "source_url": "https://nextjs.org/docs/app/api-reference/functions/cookies",
-                "source_anchor": "https://nextjs.org/docs/app/api-reference/functions/cookies#read-cookies-_snippet_1",
-                "ordinal": 1,
-                "chunk_key": "cookies#1",
-                "heading_path": ["cookies", "Reading cookies"],
-                "symbols": ["cookies"],
-                "content_type": "api_reference",
-                "quality_score": 1.0,
-                "token_count": 50,
-                "content": "## Reading cookies\n\nUse cookies() in a Server Component to read request cookies.",
-                "dedupe_canonical": True,
-            },
-            {
-                "id": 2,
-                "source_document_id": 10,
-                "path": "api-reference/app/api-reference/functions/cookies.md",
-                "start_line": 30,
-                "end_line": 48,
-                "source_url": "https://nextjs.org/docs/app/api-reference/functions/cookies",
-                "source_anchor": "https://nextjs.org/docs/app/api-reference/functions/cookies#set-cookies-_snippet_2",
-                "ordinal": 2,
-                "chunk_key": "cookies#2",
-                "heading_path": ["cookies", "Setting cookies"],
-                "symbols": ["cookies"],
-                "content_type": "code_example",
-                "quality_score": 1.0,
-                "token_count": 90,
-                "content": "## Setting cookies\n\nYou can set cookies in a Server Action.\n\n```tsx\n'use server'\nimport { cookies } from 'next/headers'\nexport async function action() { (await cookies()).set('name', 'lee') }\n```",
-                "dedupe_canonical": True,
-            },
-        ]
 
-        sections = build_source_sections(rows)
-        snippets = build_context_snippets(rows, {section.section_key: index + 1 for index, section in enumerate(sections)})
 
-        self.assertGreaterEqual(len(sections), 2)
-        self.assertTrue(any("Server Actions" in snippet.applies_to for snippet in snippets))
-        self.assertTrue(any(snippet.role == "code_example" and snippet.code_language == "tsx" for snippet in snippets))
-        self.assertIn("cookies", query_facets("How do I read and set cookies in Server Components and Server Actions?"))
 
-    def test_context_assembly_diversifies_required_facets(self) -> None:
-        rows = [
-            {
-                "score": 100,
-                "path": "cookies.md",
-                "matched_path": "cookies.md",
-                "line": 1,
-                "title": "Reference: cookies (Server Components)",
-                "role": "api_reference",
-                "entities": ["cookies"],
-                "applies_to": ["Server Components"],
-                "task_tags": ["cookies"],
-                "token_count": 50,
-                "_matched_text": "Read cookies in a Server Component with cookies().",
-            },
-            {
-                "score": 90,
-                "path": "cookies.md",
-                "matched_path": "cookies.md",
-                "line": 40,
-                "title": "Example: cookies (Server Actions)",
-                "role": "code_example",
-                "entities": ["cookies"],
-                "applies_to": ["Server Actions"],
-                "task_tags": ["cookies"],
-                "token_count": 80,
-                "_matched_text": "Set cookies in a Server Action with cookies().set().",
-            },
-            {
-                "score": 95,
-                "path": "proxy.md",
-                "matched_path": "proxy.md",
-                "line": 5,
-                "title": "Reference: Proxy",
-                "role": "api_reference",
-                "entities": ["Proxy"],
-                "applies_to": ["Proxy"],
-                "task_tags": ["cookies"],
-                "token_count": 75,
-                "_matched_text": "Read cookies in Proxy.",
-            },
-        ]
 
-        selected = select_context_snippets(
-            rows,
-            "How do I read and set cookies in Server Components and Server Actions?",
-            max_results=2,
-            max_tokens=500,
-        )
 
-        titles = [row["title"] for row in selected]
-        self.assertIn("Reference: cookies (Server Components)", titles)
-        self.assertIn("Example: cookies (Server Actions)", titles)
-
-    def test_context_facets_ignore_question_words_and_keep_doc_phrases(self) -> None:
-        facets = query_facets("When should I use redirect, notFound, unauthorized, and forbidden?")
-        self.assertIn("redirect", facets)
-        self.assertIn("notfound", facets)
-        self.assertIn("unauthorized", facets)
-        self.assertIn("forbidden", facets)
-        self.assertNotIn("use", facets)
-        self.assertNotIn("when", facets)
-
-        self.assertIn("dynamicroutes", query_facets("generateStaticParams for dynamic routes"))
-        self.assertIn("usecache", query_facets("how do use cache, cacheLife, and cacheTag work?"))
-        self.assertIn("reset", query_facets("recoverable route errors"))
-
-    def test_context_assembly_prefers_uncovered_facets_over_duplicate_high_scores(self) -> None:
-        rows = [
-            {
-                "score": 1200,
-                "path": "redirect.md",
-                "matched_path": "redirect.md",
-                "line": 1,
-                "title": "Reference: redirect",
-                "role": "api_reference",
-                "entities": ["redirect"],
-                "applies_to": ["App Router"],
-                "task_tags": ["routing"],
-                "token_count": 400,
-                "_matched_text": "Use redirect to redirect a user.",
-            },
-            {
-                "score": 1180,
-                "path": "redirect.md",
-                "matched_path": "redirect.md",
-                "line": 50,
-                "title": "Reference: redirect details",
-                "role": "api_reference",
-                "entities": ["redirect"],
-                "applies_to": ["App Router"],
-                "task_tags": ["routing"],
-                "token_count": 400,
-                "_matched_text": "More redirect examples.",
-            },
-            {
-                "score": 640,
-                "path": "unauthorized.md",
-                "matched_path": "unauthorized.md",
-                "line": 1,
-                "title": "Workflow: unauthorized",
-                "role": "api_reference",
-                "entities": ["unauthorized"],
-                "applies_to": ["App Router"],
-                "task_tags": ["authentication"],
-                "token_count": 180,
-                "_matched_text": "Use unauthorized for unauthenticated requests.",
-            },
-            {
-                "score": 620,
-                "path": "forbidden.md",
-                "matched_path": "forbidden.md",
-                "line": 1,
-                "title": "Workflow: forbidden",
-                "role": "api_reference",
-                "entities": ["forbidden"],
-                "applies_to": ["App Router"],
-                "task_tags": ["authentication"],
-                "token_count": 180,
-                "_matched_text": "Use forbidden for authorization failures.",
-            },
-        ]
-
-        selected = select_context_snippets(
-            rows,
-            "When should I use redirect, unauthorized, and forbidden?",
-            max_results=3,
-            max_tokens=1200,
-        )
-
-        paths = [row["matched_path"] for row in selected]
-        self.assertEqual(paths, ["redirect.md", "unauthorized.md", "forbidden.md"])
-
-    def test_context_assembly_persists_trimmed_text_for_budget(self) -> None:
-        rows = [
-            {
-                "score": 10,
-                "path": "large.md",
-                "matched_path": "large.md",
-                "line": 1,
-                "title": "Large",
-                "role": "api_reference",
-                "entities": ["Large"],
-                "applies_to": [],
-                "task_tags": [],
-                "token_count": 2000,
-                "_matched_text": " ".join(f"token{index}" for index in range(300)),
-            }
-        ]
-
-        selected = select_context_snippets(rows, "Large", max_results=1, max_tokens=40)
-
-        self.assertLessEqual(token_count(selected[0]["_matched_text"]), 40)
-        self.assertLessEqual(selected[0]["token_count"], 40)
-
-    def test_context_assembly_focuses_trimmed_text_on_new_facet(self) -> None:
-        rows = [
-            {
-                "score": 100,
-                "path": "error.md",
-                "matched_path": "error.md",
-                "line": 1,
-                "title": "Workflow: error.js",
-                "role": "workflow",
-                "entities": ["error.js"],
-                "applies_to": ["App Router"],
-                "task_tags": ["errors"],
-                "token_count": 1000,
-                "_matched_text": "\n".join(
-                    [
-                        "# error.js",
-                        *("General error boundary details." for _ in range(60)),
-                        "Call reset() from the fallback to retry rendering the route segment.",
-                        "More details after reset.",
-                    ]
-                ),
-            }
-        ]
-
-        selected = select_context_snippets(rows, "How do recoverable route errors work?", max_results=1, max_tokens=80)
-
-        self.assertIn("reset", selected[0]["_matched_text"])
-        self.assertLessEqual(token_count(selected[0]["_matched_text"]), 80)
 
 
 if __name__ == "__main__":

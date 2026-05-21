@@ -32,52 +32,179 @@ class MarkdownChunk:
 
 def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
     rows: list[dict[str, Any]] = []
+    coverage_rows: list[dict[str, Any]] = []
     seen_chunk_shas: set[str] = set()
-    seen_content_keys: set[str] = set()
+    seen_content_keys_by_path: dict[str, set[str]] = {}
     for page in pages:
         source_path = source_path_for_page(page)
+        source_sections = chunk_source_sections(page, source_path)
         chunks = chunk_markdown(page.markdown, source_url=page.source_url, page_type=page.content_type)
+        page_rows: list[dict[str, Any]] = []
+        path_content_keys = seen_content_keys_by_path.setdefault(source_path, set())
         for idx, chunk in enumerate(chunks, start=1):
             chunk_key = scoped_chunk_key(source_path, chunk.chunk_key or str(idx))
             parent_chunk_key = scoped_chunk_key(source_path, chunk.parent_key) if chunk.parent_key else None
             chunk_sha = stable_chunk_sha(target, source_path, idx, chunk.text)
             content_sha = content_hash(chunk.text)
             content_key = normalized_chunk_key(chunk.text)
-            if chunk_sha in seen_chunk_shas or content_key in seen_content_keys:
+            if chunk_sha in seen_chunk_shas or content_key in path_content_keys:
                 continue
             seen_chunk_shas.add(chunk_sha)
-            seen_content_keys.add(content_key)
-            rows.append(
-                {
-                    "id": chunk_key,
-                    "path": source_path,
-                    "source_url": page.source_url,
-                    "source_anchor": source_anchor(page.source_url, chunk.heading_path, idx),
-                    "ordinal": idx,
-                    "chunk_key": chunk_key,
-                    "parent_chunk_key": parent_chunk_key,
-                    "chunk_sha": chunk_sha,
-                    "content_sha": content_sha,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "heading_path": chunk.heading_path,
-                    "symbols": chunk_symbols(chunk.text, page.symbols),
-                    "content_type": chunk.content_type,
-                    "quality_score": page.quality_score,
-                    "source_kind": page.source_kind,
-                    "canonical_url": page.canonical_url or page.source_url,
-                    "source_document_key": source_document_key(page.canonical_url or page.source_url or page.path or page.title),
-                    "source_priority": page.source_priority,
-                    "discovered_from": page.discovered_from,
-                    "metadata_json": page.source_metadata or {},
-                    "token_count": token_count(chunk.text),
-                    "text": chunk.text,
-                }
-            )
+            path_content_keys.add(content_key)
+            section_key = source_section_key_for_span(source_sections, chunk.start_line, chunk.end_line)
+            metadata_json = dict(page.source_metadata or {})
+            if section_key:
+                metadata_json["source_section_key"] = section_key
+            row = {
+                "id": chunk_key,
+                "path": source_path,
+                "source_url": page.source_url,
+                "source_anchor": source_anchor(page.source_url, chunk.heading_path, idx),
+                "ordinal": idx,
+                "chunk_key": chunk_key,
+                "parent_chunk_key": parent_chunk_key,
+                "chunk_sha": chunk_sha,
+                "content_sha": content_sha,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+                "heading_path": chunk.heading_path,
+                "symbols": chunk_symbols(chunk.text, page.symbols),
+                "content_type": chunk.content_type,
+                "quality_score": page.quality_score,
+                "source_kind": page.source_kind,
+                "canonical_url": page.canonical_url or page.source_url,
+                "source_document_key": source_document_key(page.canonical_url or page.source_url or page.path or page.title),
+                "source_priority": page.source_priority,
+                "discovered_from": page.discovered_from,
+                "source_section_key": section_key,
+                "metadata_json": metadata_json,
+                "token_count": token_count(chunk.text),
+                "text": chunk.text,
+            }
+            rows.append(row)
+            page_rows.append(row)
+        coverage_rows.append(chunk_coverage_row(page, page_rows))
     (target / "_chunks.jsonl").write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+    (target / "_chunk_coverage.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in coverage_rows),
+        encoding="utf-8",
+    )
+
+
+def chunk_coverage_row(page: NormalizedPage, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    markdown = clean_markdown(page.markdown)
+    lines = markdown.splitlines()
+    content_lines = {idx for idx, line in enumerate(lines, start=1) if line.strip() and not heading_text(line)}
+    covered_lines: set[int] = set()
+    for row in rows:
+        start = int(row.get("start_line") or 0)
+        end = int(row.get("end_line") or 0)
+        if start <= 0 or end < start:
+            continue
+        covered_lines.update(range(start, end + 1))
+    covered_content_lines = content_lines & covered_lines
+    fence_spans = code_fence_spans(lines)
+    code_fence_lines = {line for start, end in fence_spans for line in range(start, end + 1)}
+    covered_code_fence_lines = code_fence_lines & covered_lines
+    uncovered = sorted(content_lines - covered_lines)
+    source_key = source_document_key(page.canonical_url or page.source_url or page.path or page.title)
+    return {
+        "source_document_key": source_key,
+        "path": source_path_for_page(page),
+        "source_url": page.source_url,
+        "canonical_url": page.canonical_url or page.source_url,
+        "clean_line_count": len(content_lines),
+        "covered_line_count": len(covered_content_lines),
+        "coverage_ratio": ratio(len(covered_content_lines), len(content_lines)),
+        "uncovered_ranges": line_ranges(uncovered),
+        "code_fence_count": len(fence_spans),
+        "code_fence_line_count": len(code_fence_lines),
+        "covered_code_fence_line_count": len(covered_code_fence_lines),
+        "code_fence_coverage_ratio": ratio(len(covered_code_fence_lines), len(code_fence_lines)),
+        "clean_token_count": token_count(markdown),
+        "chunk_count": len(rows),
+    }
+
+
+def chunk_source_sections(page: NormalizedPage, source_path: str) -> list[dict[str, Any]]:
+    blocks = markdown_blocks(clean_markdown(page.markdown))
+    sections: list[dict[str, Any]] = []
+    for section in section_blocks(blocks):
+        content = "\n\n".join(block[0] for block in section).strip()
+        if not content:
+            continue
+        heading_path = next((block[3] for block in reversed(section) if block[3]), [])
+        start_line = min(block[1] for block in section)
+        end_line = max(block[2] for block in section)
+        title = heading_path[-1] if heading_path else page.title or source_path.rsplit("/", 1)[-1]
+        sections.append(
+            {
+                "section_key": stable_surface_key("section", source_path, str(start_line), title, content[:160]),
+                "start_line": start_line,
+                "end_line": end_line,
+            }
+        )
+    return sections
+
+
+def source_section_key_for_span(sections: list[dict[str, Any]], start_line: int, end_line: int) -> str:
+    best_key = ""
+    best_overlap = 0
+    for section in sections:
+        start = int(section.get("start_line") or 0)
+        end = int(section.get("end_line") or 0)
+        overlap = max(0, min(end, end_line) - max(start, start_line) + 1)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_key = str(section.get("section_key") or "")
+    return best_key
+
+
+def code_fence_spans(lines: list[str]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    in_code = False
+    fence_marker = ""
+    start_line = 0
+    for line_number, line in enumerate(lines, start=1):
+        marker = fence_marker_for_line(line)
+        if not marker:
+            continue
+        if not in_code:
+            in_code = True
+            fence_marker = marker[0]
+            start_line = line_number
+        elif marker[0] == fence_marker:
+            spans.append((start_line, line_number))
+            in_code = False
+            fence_marker = ""
+            start_line = 0
+    if in_code and start_line:
+        spans.append((start_line, len(lines)))
+    return spans
+
+
+def line_ranges(lines: list[int]) -> list[dict[str, int]]:
+    if not lines:
+        return []
+    ranges: list[dict[str, int]] = []
+    start = previous = lines[0]
+    for line in lines[1:]:
+        if line == previous + 1:
+            previous = line
+            continue
+        ranges.append({"start": start, "end": previous})
+        start = previous = line
+    ranges.append({"start": start, "end": previous})
+    return ranges
+
+
+def ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 1.0
+    return round(numerator / denominator, 4)
 
 
 def chunk_markdown(
@@ -192,7 +319,8 @@ def chunk_section(
         block_tokens = token_count(block[0])
         indivisible = block_type in {"code_example", "config", "cli", "error_ref"} or has_code_fence(block[0])
         heading_boundary = bool(re.match(r"^#{2,4}\s+", block[0].strip()))
-        if current and (heading_boundary or indivisible or current_tokens + block_tokens > max_tokens):
+        should_flush = heading_boundary or current_tokens + block_tokens > max_tokens or (indivisible and not blocks_only_headings(current))
+        if current and should_flush:
             append_joined_chunk(chunks, current, source_url=source_url, page_type=page_type, parent_key=parent_key)
             overlap = last_overlap(current)
             current = [] if indivisible else overlap
@@ -350,6 +478,10 @@ def useful_chunk_text(text: str) -> bool:
     return bool(non_heading)
 
 
+def blocks_only_headings(blocks: list[tuple[str, int, int, list[str]]]) -> bool:
+    return bool(blocks) and all(heading_text(block[0]) is not None for block in blocks)
+
+
 def last_overlap(blocks: list[tuple[str, int, int, list[str]]]) -> list[tuple[str, int, int, list[str]]]:
     if not blocks:
         return []
@@ -433,13 +565,21 @@ def source_path_for_page(page: NormalizedPage) -> str:
 
 
 def source_document_key(value: str) -> str:
-    return str(value or "").split("#", 1)[0].rstrip("/")
+    text = str(value or "").rstrip("/")
+    if "#" in text and re.search(r"(?:^|/)(?:llms|llms-full)\.txt#|(?:openapi|swagger)\.(?:json|ya?ml)#", text.lower()):
+        return text
+    return text.split("#", 1)[0].rstrip("/")
 
 
 def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) -> str:
     vendor, library, version = target.parts[-3:]
     payload = "\0".join([vendor, library, version, source_path, str(ordinal), text])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def stable_surface_key(prefix: str, *parts: str) -> str:
+    digest = hashlib.sha256("\0".join(str(part) for part in parts).encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}:{digest}"
 
 
 def content_hash(text: str) -> str:

@@ -337,170 +337,6 @@ def search_from_postgres(
         return None
 
 
-def context_snippets_from_postgres(
-    ctx: RetrievalContext,
-    query: str,
-    library_scope: str | None,
-    max_results: int,
-    fingerprint: str,
-    *,
-    content_types: list[str] | None = None,
-) -> list[dict[str, Any]] | None:
-    connection = postgres_connection(ctx.database_url)
-    if connection is None:
-        return None
-    query_plan = plan_query(query)
-    terms = normalized_tsquery(query_plan.important_terms or query)
-    intent = query_plan.content_type
-    legacy_requested = legacy_query(query)
-    compact_terms = [
-        compact_key(value)
-        for value in [*query_plan.symbols, *query_plan.phrases, *query_plan.slugs, *query_plan.important_terms]
-        if compact_key(value)
-    ]
-    exact_keys = compact_terms or ["__oz_no_context_match__"]
-    exact_patterns = [f"%{key}%" for key in exact_keys]
-    scope = parse_versioned_scope(library_scope)
-    scope_vendor, scope_library = scope.vendor, scope.library
-    scope_version_id: int | None = None
-    if scope_vendor and scope_library:
-        scope_version_id = resolve_db_version_id(connection, scope_vendor, scope_library, scope.version)
-    where_scope = (
-        "and v.name = %s and l.name = %s and lv.id = %s"
-        if scope_vendor
-        else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
-    )
-    content_filter = "and cs.role = any(%s)" if content_types else ""
-    params: list[Any] = [
-        terms,
-        intent,
-        legacy_requested,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-        exact_patterns,
-        terms,
-        exact_patterns,
-        exact_patterns,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-        exact_keys,
-    ]
-    if scope_vendor:
-        params.extend([scope_vendor, scope_library, scope_version_id])
-    if content_types:
-        params.append(content_types)
-    params.append(max(max_results * 8, 40))
-    sql = f"""
-        select
-          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || cs.path as path,
-          cs.start_line,
-          (
-            greatest(coalesce(ts_rank_cd(cs.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 45.0
-            + (content_type_score(cs.role) * 90.0)
-            + (content_type_intent_score(cs.role, %s) * 160.0)
-            + case when coalesce((cs.metadata_json->>'current')::boolean, false) then 35.0 else 0.0 end
-            - case when not %s and (
-                coalesce((cs.metadata_json->>'deprecated')::boolean, false)
-                or coalesce((cs.metadata_json->>'legacy')::boolean, false)
-              ) then 360.0 else 0.0 end
-            + (
-              case when compact_key_sql(cs.title) = any(%s::text[]) then 140.0 else 0.0 end
-              + case when compact_basename(cs.path) = any(%s::text[]) then 120.0 else 0.0 end
-              + case when exists (
-                  select 1 from jsonb_array_elements_text(cs.entities) value
-                  where compact_key_sql(value) = any(%s::text[])
-                ) then 110.0 else 0.0 end
-              + case when exists (
-                  select 1 from jsonb_array_elements_text(cs.task_tags) value
-                  where compact_key_sql(value) = any(%s::text[])
-                ) then 80.0 else 0.0 end
-              + case when exists (
-                  select 1 from jsonb_array_elements_text(cs.applies_to) value
-                  where compact_key_sql(value) = any(%s::text[])
-                ) then 80.0 else 0.0 end
-              + case when compact_key_sql(cs.path) ilike any(%s::text[]) then 65.0 else 0.0 end
-            )
-            + greatest(coalesce(cs.quality_score, 1), 0) * 8.0
-            + least(coalesce(cs.token_count, 0), 1000) / 50.0
-          ) as score,
-          v.name || '/' || l.name as library,
-          v.name as vendor,
-          lv.version,
-          cs.path as relative_path,
-          cs.heading_path,
-          cs.symbols,
-          cs.role,
-          cs.quality_score,
-          cs.content,
-          cs.path as matched_path,
-          cs.source_anchor,
-          cs.token_count,
-          cs.title,
-          cs.description,
-          cs.applies_to,
-          cs.entities,
-          cs.task_tags,
-          cs.code_language,
-          cs.code,
-          cs.constraints,
-          cs.end_line,
-          cs.metadata_json
-        from context_snippets cs
-        join library_versions lv on lv.id = cs.version_id
-        join libraries l on l.id = lv.library_id
-        join vendors v on v.id = l.vendor_id
-        left join refs r on r.library_id = l.id and r.channel = 'latest'
-        where (
-            cs.search_document @@ websearch_to_tsquery('english', %s)
-            or compact_key_sql(cs.title) ilike any(%s::text[])
-            or compact_key_sql(cs.path) ilike any(%s::text[])
-            or exists (
-              select 1 from jsonb_array_elements_text(cs.entities) value
-              where compact_key_sql(value) = any(%s::text[])
-            )
-            or exists (
-              select 1 from jsonb_array_elements_text(cs.task_tags) value
-              where compact_key_sql(value) = any(%s::text[])
-            )
-            or exists (
-              select 1 from jsonb_array_elements_text(cs.symbols) value
-              where compact_key_sql(value) = any(%s::text[])
-            )
-            or exists (
-              select 1 from jsonb_array_elements_text(cs.heading_path) value
-              where compact_key_sql(value) = any(%s::text[])
-            )
-            or exists (
-              select 1 from jsonb_array_elements_text(cs.applies_to) value
-              where compact_key_sql(value) = any(%s::text[])
-            )
-          )
-          {where_scope}
-          {content_filter}
-        order by score desc, cs.path asc, cs.start_line asc
-        limit %s
-    """
-    try:
-        with observe_duration("oz_db_query_duration_seconds", {"operation": "context_snippets", "mode": "fts"}):
-            with connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(f"set local statement_timeout = {retrieval_statement_timeout_ms()}")
-                    cursor.execute(sql, tuple(params))
-                    rows = cursor.fetchall()
-                    mark_context_versions_requested(cursor, rows)
-        return score_context_snippet_rows(rows)
-    except VersionResolutionError:
-        raise
-    except Exception as exc:
-        LOGGER.warning("postgres context snippets failed: %s", exc)
-        return None
-
-
 def agent_context_from_postgres(
     ctx: RetrievalContext,
     query: str,
@@ -533,226 +369,363 @@ def agent_context_from_postgres(
         if scope_vendor
         else "and lv.id = coalesce(l.default_version_id, r.version_id) and lv.archived_at is null"
     )
-    role_filter = "and ar.task_kind = any(%s)" if content_types else ""
-    recipe_vector_join = ""
-    recipe_vector_score = "0::float8"
-    recipe_vector_where = ""
-    operation_vector_join = ""
-    operation_vector_score = "0::float8"
-    operation_vector_where = ""
+    candidates = max(max_results * 8, 40)
     params: list[Any] = []
-    params.extend([terms, terms, query_plan.content_type, compact_terms, compact_terms, exact_patterns])
-    if vector:
-        recipe_vector_join = """
-          left join lateral (
-            select max(greatest(1 - (c.embedding <=> %s::vector), 0)) as vector_score
-            from chunks c
-            where c.version_id = ar.version_id
-              and c.embedding is not null
-              and c.id in (
-                select value::bigint
-                from jsonb_array_elements_text(ar.source_chunk_ids) value
-                where value ~ '^[0-9]+$'
-              )
-          ) vec on true
-        """
-        recipe_vector_score = "greatest(coalesce(1 - (ar.embedding <=> %s::vector), 0), coalesce(vec.vector_score, 0))::float8"
-        recipe_vector_where = "or ar.embedding is not null" if scope_vendor else ""
-        operation_vector_join = """
-          left join lateral (
-            select max(greatest(1 - (c.embedding <=> %s::vector), 0)) as vector_score
-            from chunks c
-            where c.version_id = ao.version_id
-              and c.embedding is not null
-              and c.id in (
-                select value::bigint
-                from jsonb_array_elements_text(ao.source_chunk_ids) value
-                where value ~ '^[0-9]+$'
-              )
-          ) vec on true
-        """
-        operation_vector_score = "greatest(coalesce(1 - (ao.embedding <=> %s::vector), 0), coalesce(vec.vector_score, 0))::float8"
-        operation_vector_where = "or ao.embedding is not null" if scope_vendor else ""
-        params.append(vector)
-        params.append(vector)
-    params.append(legacy_query(query))
-    params.extend([terms, terms, exact_patterns, exact_patterns])
-    if scope_vendor:
-        params.extend([scope_vendor, scope_library, scope_version_id])
-    if content_types:
-        params.append(content_types)
-    params.append(max(max_results * 8, 40))
+
+    def add_scope_params() -> None:
+        if scope_vendor:
+            params.extend([scope_vendor, scope_library, scope_version_id])
+
+    def vector_expr(alias: str) -> str:
+        if not vector:
+            return "0::float8"
+        return f"case when {alias}.embedding is not null then greatest(1 - ({alias}.embedding <=> %s::vector), 0) else 0 end"
+
+    recipe_vector = vector_expr("ar")
     params.extend([terms, query_plan.content_type, compact_terms, exact_patterns])
     if vector:
         params.append(vector)
+    params.extend([terms, exact_patterns])
+    add_scope_params()
+    params.append(candidates)
+
+    example_vector = vector_expr("ce")
+    params.extend([terms, compact_terms, exact_patterns])
+    if vector:
         params.append(vector)
-    params.append(legacy_query(query))
+    params.extend([terms, exact_patterns])
+    add_scope_params()
+    params.append(candidates)
+
+    api_vector = vector_expr("ao")
+    params.extend([terms, query_plan.content_type, compact_terms, exact_patterns])
+    if vector:
+        params.append(vector)
     params.extend([terms, exact_patterns, exact_patterns])
-    if scope_vendor:
-        params.extend([scope_vendor, scope_library, scope_version_id])
-    if content_types:
-        params.append(content_types)
-    params.extend([max(max_results * 8, 40), max_results])
+    add_scope_params()
+    params.append(candidates)
+
+    sdk_vector = vector_expr("sm")
+    params.extend([terms, compact_terms, exact_patterns])
+    if vector:
+        params.append(vector)
+    params.extend([terms, exact_patterns])
+    add_scope_params()
+    params.append(candidates)
+
+    params.extend([terms, exact_patterns, terms, exact_patterns])
+    add_scope_params()
+    params.append(candidates)
+
+    chunk_vector = "0::float8"
+    params.extend([terms, query_plan.content_type])
+    if vector:
+        chunk_vector = "case when c.embedding is not null then greatest(1 - (c.embedding <=> %s::vector), 0) else 0 end"
+        params.append(vector)
+    params.extend([terms, exact_patterns])
+    add_scope_params()
+    params.extend([candidates, max_results])
+
     sql = f"""
       with recipe_candidates as (
         select
-          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(c.path, 'AGENT_RECIPES.md') as path,
-          coalesce(c.start_line, 1) as start_line,
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/AGENT_RECIPES.md' as path,
+          1 as start_line,
           (
-            greatest(coalesce(ts_rank_cd(ar.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 80.0
-            + greatest(coalesce(ts_rank_cd(coalesce(ao.search_document, to_tsvector('english', '')), websearch_to_tsquery('english', %s)), 0), 0) * 55.0
-            + case when ar.task_kind = %s then 240.0 else 0.0 end
-            + case when compact_key_sql(ar.title) = any(%s::text[]) then 180.0 else 0.0 end
-            + case when exists (
-                select 1 from jsonb_array_elements_text(coalesce(ao.required_params, '[]'::jsonb)) p
-                where compact_key_sql(p) = any(%s::text[])
-              ) then 130.0 else 0.0 end
-            + case when compact_key_sql(coalesce(ao.sdk_class, '') || coalesce(ao.sdk_method, '') || coalesce(ao.endpoint, '')) ilike any(%s::text[]) then 150.0 else 0.0 end
-            + {recipe_vector_score} * 300.0
+            greatest(coalesce(ts_rank_cd(ar.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 85.0
+            + case when ar.task_kind = %s then 220.0 else 0.0 end
+            + case when compact_key_sql(ar.title) = any(%s::text[]) then 160.0 else 0.0 end
+            + case when compact_key_sql(ar.title || ' ' || ar.summary || ' ' || ar.info) ilike any(%s::text[]) then 90.0 else 0.0 end
+            + ({recipe_vector} * 300.0)
             + greatest(coalesce(ar.confidence, 0), 0) * 80.0
-            + greatest(coalesce(ar.quality_score, 1), 0) * 12.0
-            - case when not %s and (
-                coalesce((ar.metadata_json->>'deprecated')::boolean, false)
-                or coalesce((ar.metadata_json->>'legacy')::boolean, false)
-              ) then 320.0 else 0.0 end
+            + greatest(coalesce(ar.quality_score, 1), 0) * 16.0
           ) as score,
           v.name || '/' || l.name as library,
           v.name as vendor,
           lv.version,
-          coalesce(c.path, 'AGENT_RECIPES.md') as relative_path,
+          'AGENT_RECIPES.md' as relative_path,
           '[]'::jsonb as heading_path,
-          case when ao.operation_name is not null then jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) else '[]'::jsonb end as symbols,
+          jsonb_build_array(ar.title, ar.task_kind) as symbols,
           ar.task_kind as role,
           ar.quality_score,
-          ar.content,
-          coalesce(c.path, 'AGENT_RECIPES.md') as matched_path,
-          coalesce(ar.source_urls->>0, c.source_anchor, c.source_url, '') as source_anchor,
+          concat_ws(E'\n\n', ar.summary, ar.info, ar.code) as content,
+          'AGENT_RECIPES.md' as matched_path,
+          coalesce(ar.source_urls_json->>0, '') as source_anchor,
           ar.token_count,
           ar.title,
           ar.info as description,
           case when ar.product <> '' then jsonb_build_array(ar.product) else '[]'::jsonb end as applies_to,
-          case when ao.id is not null then jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) else '[]'::jsonb end as entities,
+          jsonb_build_array(ar.title, ar.task_kind) as entities,
           jsonb_build_array(ar.task_kind) as task_tags,
           ar.language as code_language,
           ar.code,
-          '[]'::jsonb as constraints,
-          coalesce(c.end_line, c.start_line) as end_line,
-          ar.metadata_json || jsonb_build_object(
-            'agent_recipe_id', ar.id,
-            'agent_operation_id', ao.id,
-            'operation_kind', ar.task_kind,
-            'product', ar.product,
-            'source_urls', ar.source_urls
-          ) as metadata_json
+          ar.required_params_json as constraints,
+          1 as end_line,
+          ar.metadata_json || jsonb_build_object('surface', 'agent_recipe', 'recipe_id', ar.id, 'source_urls', ar.source_urls_json) as metadata_json
         from agent_recipes ar
-        left join agent_operations ao on ao.id = ar.operation_id
         join library_versions lv on lv.id = ar.version_id
         join libraries l on l.id = lv.library_id
         join vendors v on v.id = l.vendor_id
         left join refs r on r.library_id = l.id and r.channel = 'latest'
-        left join lateral (
-          select c.*
-          from chunks c
-          where c.version_id = ar.version_id
-            and c.id in (
-              select value::bigint
-              from jsonb_array_elements_text(ar.source_chunk_ids) value
-              where value ~ '^[0-9]+$'
-            )
-          order by c.quality_score desc, c.id asc
-          limit 1
-        ) c on true
-        {recipe_vector_join}
         where (
           ar.search_document @@ websearch_to_tsquery('english', %s)
-          or coalesce(ao.search_document, to_tsvector('english', '')) @@ websearch_to_tsquery('english', %s)
-          or compact_key_sql(ar.title) ilike any(%s::text[])
-          or compact_key_sql(coalesce(ao.operation_name, '') || coalesce(ao.sdk_class, '') || coalesce(ao.sdk_method, '') || coalesce(ao.endpoint, '')) ilike any(%s::text[])
-          {recipe_vector_where}
+          or compact_key_sql(ar.title || ' ' || ar.summary || ' ' || ar.info) ilike any(%s::text[])
+          {"or ar.embedding is not null" if vector else ""}
         )
         {where_scope}
-        {role_filter}
         order by score desc, ar.title asc
         limit %s
       ),
-      operation_candidates as (
+      example_candidates as (
         select
-          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(c.path, 'AGENT_OPERATIONS.md') as path,
-          coalesce(c.start_line, 1) as start_line,
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(sd.path, 'CODE_EXAMPLES.md') as path,
+          coalesce(ss.start_line, 1) as start_line,
           (
-            greatest(coalesce(ts_rank_cd(ao.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 70.0
-            + case when ao.operation_kind = %s then 180.0 else 0.0 end
-            + case when compact_key_sql(ao.operation_name) = any(%s::text[]) then 160.0 else 0.0 end
-            + case when compact_key_sql(ao.sdk_class || ao.sdk_method || ao.endpoint) ilike any(%s::text[]) then 130.0 else 0.0 end
-            + {operation_vector_score} * 220.0
-            + greatest(coalesce(ao.confidence, 0), 0) * 70.0
-            + greatest(coalesce(ao.quality_score, 1), 0) * 10.0
-            - case when not %s and (
-                coalesce((ao.metadata_json->>'deprecated')::boolean, false)
-                or coalesce((ao.metadata_json->>'legacy')::boolean, false)
-              ) then 320.0 else 0.0 end
+            greatest(coalesce(ts_rank_cd(ce.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 80.0
+            + case when compact_key_sql(ce.title) = any(%s::text[]) then 150.0 else 0.0 end
+            + case when compact_key_sql(ce.title || ' ' || ce.description || ' ' || ce.caption || ' ' || ce.code) ilike any(%s::text[]) then 95.0 else 0.0 end
+            + ({example_vector} * 270.0)
+            + case when ce.document_role in ('example', 'readme', 'guide', 'test') then 60.0 else 0.0 end
+            + greatest(coalesce(ce.confidence, 0), 0) * 70.0
+            + greatest(coalesce(ce.quality_score, 1), 0) * 14.0
           ) as score,
           v.name || '/' || l.name as library,
           v.name as vendor,
           lv.version,
-          coalesce(c.path, 'AGENT_OPERATIONS.md') as relative_path,
+          coalesce(sd.path, 'CODE_EXAMPLES.md') as relative_path,
+          coalesce(ss.heading_path, '[]'::jsonb) as heading_path,
+          ce.symbols_json as symbols,
+          'code_example' as role,
+          ce.quality_score,
+          concat_ws(E'\n\n', ce.description, ce.caption, ce.code) as content,
+          coalesce(sd.path, 'CODE_EXAMPLES.md') as matched_path,
+          coalesce(ce.source_anchor, ce.source_url, '') as source_anchor,
+          ce.token_count,
+          ce.title,
+          concat_ws(E'\n', ce.description, ce.caption) as description,
+          case when ce.product <> '' then jsonb_build_array(ce.product) else '[]'::jsonb end as applies_to,
+          ce.symbols_json as entities,
+          ce.task_tags_json as task_tags,
+          ce.language as code_language,
+          ce.code,
+          ce.required_params_json as constraints,
+          coalesce(ss.end_line, ss.start_line, 1) as end_line,
+          ce.metadata_json || jsonb_build_object('surface', 'code_example', 'code_example_id', ce.id) as metadata_json
+        from code_examples ce
+        join library_versions lv on lv.id = ce.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        left join source_documents sd on sd.id = ce.source_document_id
+        left join source_sections ss on ss.id = ce.source_section_id
+        where (
+          ce.search_document @@ websearch_to_tsquery('english', %s)
+          or compact_key_sql(ce.title || ' ' || ce.description || ' ' || ce.caption || ' ' || ce.code) ilike any(%s::text[])
+          {"or ce.embedding is not null" if vector else ""}
+        )
+        {where_scope}
+        order by score desc, ce.title asc
+        limit %s
+      ),
+      api_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(sd.path, 'API_OPERATIONS.md') as path,
+          1 as start_line,
+          (
+            greatest(coalesce(ts_rank_cd(ao.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 80.0
+            + case when ao.operation_kind = %s then 170.0 else 0.0 end
+            + case when compact_key_sql(ao.operation_name || ' ' || ao.operation_id || ' ' || ao.endpoint) = any(%s::text[]) then 150.0 else 0.0 end
+            + case when compact_key_sql(ao.operation_name || ' ' || ao.operation_id || ' ' || ao.endpoint || ' ' || ao.summary || ' ' || ao.description) ilike any(%s::text[]) then 95.0 else 0.0 end
+            + ({api_vector} * 250.0)
+            + greatest(coalesce(ao.confidence, 0), 0) * 70.0
+            + greatest(coalesce(ao.quality_score, 1), 0) * 12.0
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          coalesce(sd.path, 'API_OPERATIONS.md') as relative_path,
           '[]'::jsonb as heading_path,
-          jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) as symbols,
+          jsonb_build_array(ao.operation_id, ao.operation_name, ao.http_method, ao.endpoint) as symbols,
           ao.operation_kind as role,
           ao.quality_score,
-          ao.content,
-          coalesce(c.path, 'AGENT_OPERATIONS.md') as matched_path,
-          coalesce(ao.source_urls->>0, c.source_anchor, c.source_url, '') as source_anchor,
-          least(1000, greatest(1, length(ao.content) / 4))::integer as token_count,
+          concat_ws(E'\n\n', ao.summary, ao.description, 'Endpoint: ' || ao.http_method || ' ' || ao.endpoint, 'Required params: ' || ao.required_params_json::text, 'Optional params: ' || ao.optional_params_json::text, 'Responses: ' || ao.response_schema_json::text, 'Errors: ' || ao.errors_json::text) as content,
+          coalesce(sd.path, 'API_OPERATIONS.md') as matched_path,
+          coalesce(ao.source_anchor, ao.source_url, '') as source_anchor,
+          ao.token_count,
           ao.operation_name as title,
-          ao.content as description,
+          ao.description,
           case when ao.product <> '' then jsonb_build_array(ao.product) else '[]'::jsonb end as applies_to,
-          jsonb_build_array(ao.operation_name, ao.sdk_class, ao.sdk_method, ao.endpoint) as entities,
-          jsonb_build_array(ao.operation_kind) as task_tags,
-          ao.language as code_language,
+          jsonb_build_array(ao.operation_id, ao.operation_name, ao.http_method, ao.endpoint) as entities,
+          ao.tags_json || jsonb_build_array(ao.operation_kind) as task_tags,
+          '' as code_language,
           null::text as code,
-          '[]'::jsonb as constraints,
-          coalesce(c.end_line, c.start_line) as end_line,
-          ao.metadata_json || jsonb_build_object(
-            'agent_operation_id', ao.id,
-            'operation_kind', ao.operation_kind,
-            'required_params', ao.required_params,
-            'optional_params', ao.optional_params,
-            'product', ao.product,
-            'source_urls', ao.source_urls
-          ) as metadata_json
-        from agent_operations ao
+          ao.required_params_json as constraints,
+          1 as end_line,
+          ao.metadata_json || jsonb_build_object('surface', 'api_operation', 'api_operation_id', ao.id, 'http_method', ao.http_method, 'endpoint', ao.endpoint) as metadata_json
+        from api_operations ao
         join library_versions lv on lv.id = ao.version_id
         join libraries l on l.id = lv.library_id
         join vendors v on v.id = l.vendor_id
         left join refs r on r.library_id = l.id and r.channel = 'latest'
-        left join lateral (
-          select c.*
-          from chunks c
-          where c.version_id = ao.version_id
-            and c.id in (
-              select value::bigint
-              from jsonb_array_elements_text(ao.source_chunk_ids) value
-              where value ~ '^[0-9]+$'
-            )
-          order by c.quality_score desc, c.id asc
-          limit 1
-        ) c on true
-        {operation_vector_join}
+        left join source_documents sd on sd.id = ao.source_document_id
         where (
           ao.search_document @@ websearch_to_tsquery('english', %s)
-          or compact_key_sql(ao.operation_name || ao.sdk_class || ao.sdk_method || ao.endpoint) ilike any(%s::text[])
-          or compact_key_sql(ao.required_params::text || ao.optional_params::text) ilike any(%s::text[])
-          {operation_vector_where}
+          or compact_key_sql(ao.operation_name || ' ' || ao.operation_id || ' ' || ao.endpoint || ' ' || ao.summary || ' ' || ao.description) ilike any(%s::text[])
+          or compact_key_sql(ao.required_params_json::text || ' ' || ao.optional_params_json::text) ilike any(%s::text[])
+          {"or ao.embedding is not null" if vector else ""}
         )
         {where_scope}
-        {role_filter.replace('ar.', 'ao.').replace('task_kind', 'operation_kind')}
         order by score desc, ao.operation_name asc
+        limit %s
+      ),
+      sdk_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || coalesce(sd.path, 'SDK_METHODS.md') as path,
+          1 as start_line,
+          (
+            greatest(coalesce(ts_rank_cd(sm.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 75.0
+            + case when compact_key_sql(sm.symbol_name || ' ' || sm.sdk_class || ' ' || sm.sdk_method) = any(%s::text[]) then 170.0 else 0.0 end
+            + case when compact_key_sql(sm.symbol_name || ' ' || sm.signature || ' ' || sm.description) ilike any(%s::text[]) then 95.0 else 0.0 end
+            + ({sdk_vector} * 240.0)
+            + case when sm.public_api then 65.0 else -180.0 end
+            - case when sm.generated then 80.0 else 0.0 end
+            + greatest(coalesce(sm.confidence, 0), 0) * 70.0
+            + greatest(coalesce(sm.quality_score, 1), 0) * 12.0
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          coalesce(sd.path, 'SDK_METHODS.md') as relative_path,
+          '[]'::jsonb as heading_path,
+          jsonb_build_array(sm.symbol_name, sm.sdk_class, sm.sdk_method, sm.import_path) as symbols,
+          'sdk_method' as role,
+          sm.quality_score,
+          concat_ws(E'\n\n', sm.signature, sm.description, 'Required params: ' || sm.required_params_json::text, 'Optional params: ' || sm.optional_params_json::text, 'Returns: ' || sm.return_type) as content,
+          coalesce(sd.path, 'SDK_METHODS.md') as matched_path,
+          coalesce(sm.source_anchor, sm.source_url, '') as source_anchor,
+          greatest(1, length(concat_ws(E'\n', sm.signature, sm.description)) / 4)::integer as token_count,
+          sm.symbol_name as title,
+          sm.description,
+          case when sm.product <> '' then jsonb_build_array(sm.product) else '[]'::jsonb end as applies_to,
+          jsonb_build_array(sm.symbol_name, sm.sdk_class, sm.sdk_method, sm.import_path) as entities,
+          jsonb_build_array('sdk_method') as task_tags,
+          sm.language as code_language,
+          null::text as code,
+          sm.required_params_json as constraints,
+          1 as end_line,
+          sm.metadata_json || jsonb_build_object('surface', 'sdk_method', 'sdk_method_id', sm.id, 'public_api', sm.public_api, 'generated', sm.generated) as metadata_json
+        from sdk_methods sm
+        join library_versions lv on lv.id = sm.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        left join source_documents sd on sd.id = sm.source_document_id
+        where (
+          sm.search_document @@ websearch_to_tsquery('english', %s)
+          or compact_key_sql(sm.symbol_name || ' ' || sm.sdk_class || ' ' || sm.sdk_method || ' ' || sm.signature || ' ' || sm.description) ilike any(%s::text[])
+          {"or sm.embedding is not null" if vector else ""}
+        )
+        {where_scope}
+        order by score desc, sm.symbol_name asc
+        limit %s
+      ),
+      section_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || ss.path as path,
+          ss.start_line,
+          (
+            greatest(coalesce(ts_rank_cd(ss.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 45.0
+            + case when compact_key_sql(ss.title || ' ' || ss.path) ilike any(%s::text[]) then 60.0 else 0.0 end
+            + greatest(coalesce(ss.quality_score, 1), 0) * 8.0
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          ss.path as relative_path,
+          ss.heading_path,
+          '[]'::jsonb as symbols,
+          coalesce(ss.content_type, ss.document_role, 'prose') as role,
+          ss.quality_score,
+          ss.content,
+          ss.path as matched_path,
+          coalesce(ss.source_anchor, ss.source_url, '') as source_anchor,
+          ss.token_count,
+          ss.title,
+          '' as description,
+          case when ss.product <> '' then jsonb_build_array(ss.product) else '[]'::jsonb end as applies_to,
+          ss.heading_path as entities,
+          jsonb_build_array(ss.document_role, ss.content_type) as task_tags,
+          ss.language as code_language,
+          null::text as code,
+          '[]'::jsonb as constraints,
+          ss.end_line,
+          ss.metadata_json || jsonb_build_object('surface', 'source_section', 'source_section_id', ss.id) as metadata_json
+        from source_sections ss
+        join library_versions lv on lv.id = ss.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        where (
+          ss.search_document @@ websearch_to_tsquery('english', %s)
+          or compact_key_sql(ss.title || ' ' || ss.path || ' ' || ss.content) ilike any(%s::text[])
+        )
+        {where_scope}
+        order by score desc, ss.path asc, ss.start_line asc
+        limit %s
+      ),
+      chunk_candidates as (
+        select
+          '.codo/vendors/' || v.name || '/' || l.name || '@' || lv.version || '/' || c.path as path,
+          c.start_line,
+          (
+            greatest(coalesce(ts_rank_cd(c.search_document, websearch_to_tsquery('english', %s)), 0), 0) * 35.0
+            + content_type_intent_score(c.content_type, %s) * 90.0
+            + ({chunk_vector} * 180.0)
+            + greatest(coalesce(c.quality_score, 1), 0) * 6.0
+          ) as score,
+          v.name || '/' || l.name as library,
+          v.name as vendor,
+          lv.version,
+          c.path as relative_path,
+          c.heading_path,
+          c.symbols,
+          c.content_type as role,
+          c.quality_score,
+          c.content,
+          c.path as matched_path,
+          coalesce(c.source_anchor, c.source_url, '') as source_anchor,
+          c.token_count,
+          coalesce(c.heading_path->>-1, c.path) as title,
+          '' as description,
+          case when coalesce(c.metadata_json->>'product', '') <> '' then jsonb_build_array(c.metadata_json->>'product') else '[]'::jsonb end as applies_to,
+          c.symbols as entities,
+          jsonb_build_array(c.content_type) as task_tags,
+          coalesce(c.metadata_json->>'language', '') as code_language,
+          null::text as code,
+          '[]'::jsonb as constraints,
+          c.end_line,
+          c.metadata_json || jsonb_build_object('surface', 'chunk', 'chunk_id', c.id) as metadata_json
+        from chunks c
+        join library_versions lv on lv.id = c.version_id
+        join libraries l on l.id = lv.library_id
+        join vendors v on v.id = l.vendor_id
+        left join refs r on r.library_id = l.id and r.channel = 'latest'
+        where coalesce(c.dedupe_canonical, true)
+          and (
+            c.search_document @@ websearch_to_tsquery('english', %s)
+            or compact_key_sql(c.path || ' ' || c.heading_path::text || ' ' || c.symbols::text) ilike any(%s::text[])
+            {"or c.embedding is not null" if vector else ""}
+          )
+        {where_scope}
+        order by score desc, c.path asc, c.start_line asc
         limit %s
       )
       select * from recipe_candidates
-      union all
-      select * from operation_candidates
+      union all select * from example_candidates
+      union all select * from api_candidates
+      union all select * from sdk_candidates
+      union all select * from section_candidates
+      union all select * from chunk_candidates
       order by score desc, path asc, start_line asc
       limit %s
     """
@@ -768,9 +741,9 @@ def agent_context_from_postgres(
     except VersionResolutionError:
         raise
     except Exception as exc:
-        LOGGER.warning("postgres agent context failed: %s", exc)
+        LOGGER.warning("postgres typed agent context failed: %s", exc)
         if vector_enabled:
-            LOGGER.warning("retrying postgres agent context with FTS fallback only")
+            LOGGER.warning("retrying typed agent context with FTS fallback only")
             return agent_context_from_postgres(
                 ctx,
                 query,
@@ -961,63 +934,15 @@ def score_postgres_rows(
     return scored
 
 
-def score_context_snippet_rows(rows: list[Any]) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    for row in rows:
-        output.append(
-            {
-                "path": row[0],
-                "line": row[1],
-                "end_line": row[23],
-                "score": round(float(row[2] or 0), 4),
-                "library": row[3],
-                "vendor": row[4],
-                "version": row[5],
-                "relative_path": row[6],
-                "heading_path": row[7] or [],
-                "symbols": row[8] or [],
-                "content_type": row[9],
-                "role": row[9],
-                "quality_score": row[10],
-                "matched_path": row[12],
-                "source_anchor": row[13],
-                "token_count": int(row[14] or 0),
-                "title": row[15] or "",
-                "description": row[16] or "",
-                "applies_to": row[17] or [],
-                "entities": row[18] or [],
-                "task_tags": row[19] or [],
-                "code_language": row[20],
-                "code": row[21],
-                "constraints": row[22] or [],
-                "metadata_json": row[24] if isinstance(row[24], dict) else {},
-                "retrieval_mode": "context_snippets",
-                "degraded": False,
-                "_matched_text": row[11] or "",
-                "_parent_text": "",
-                "_rerank_text": "\n".join(
-                    [
-                        f"title: {row[15] or ''}",
-                        f"description: {row[16] or ''}",
-                        f"path: {row[6] or ''}",
-                        f"role: {row[9] or ''}",
-                        f"entities: {row[18] or []}",
-                        str(row[11] or ""),
-                    ]
-                ),
-            }
-        )
-    output.sort(key=lambda item: (-float(item["score"]), str(item["path"]), int(item.get("line") or 1)))
-    return output
-
-
 def score_agent_context_rows(rows: list[Any], *, degraded: bool) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for row in rows:
         metadata = row[24] if len(row) > 24 and isinstance(row[24], dict) else {}
-        role = row[9] or metadata.get("operation_kind") or "operation"
+        surface = str(metadata.get("surface") or "agent_context")
+        role = row[9] or metadata.get("operation_kind") or surface
         code = row[21]
         content = row[11] or ""
+        content_type = "code_example" if surface in {"code_example", "agent_recipe"} and code else ("api_reference" if surface in {"api_operation", "sdk_method"} else str(role or "prose"))
         output.append(
             {
                 "path": row[0],
@@ -1030,7 +955,7 @@ def score_agent_context_rows(rows: list[Any], *, degraded: bool) -> list[dict[st
                 "relative_path": row[6],
                 "heading_path": row[7] or [],
                 "symbols": row[8] or [],
-                "content_type": "code_example" if code else "api_reference",
+                "content_type": content_type,
                 "role": role,
                 "quality_score": row[10],
                 "matched_path": row[12],
@@ -1045,7 +970,7 @@ def score_agent_context_rows(rows: list[Any], *, degraded: bool) -> list[dict[st
                 "code": code,
                 "constraints": row[22] or [],
                 "metadata_json": metadata,
-                "retrieval_mode": "agent_recipes" if code else "agent_operations",
+                "retrieval_mode": surface,
                 "degraded": degraded,
                 "_matched_text": content,
                 "_parent_text": "",

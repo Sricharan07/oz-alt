@@ -16,13 +16,16 @@ def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
     boundaries = llms_frontmatter_boundaries(text)
     if not boundaries:
         markdown = clean_markdown(text)
+        heading_pages = split_llms_full_heading_pages(markdown, source_url=source_url)
+        if heading_pages:
+            return heading_pages
         return [
             NormalizedPage(
                 title=title_from_markdown(markdown, source_url),
                 markdown=markdown,
                 source_url=source_url,
                 canonical_url=source_url,
-                source_kind="llms_full",
+                source_kind="llms_txt",
                 source_priority=20,
             )
         ]
@@ -42,12 +45,79 @@ def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
                 markdown=body,
                 source_url=page_url,
                 canonical_url=page_url,
-                source_kind="llms_full",
+                source_kind="llms_txt",
                 source_priority=20,
                 discovered_from=source_url,
             )
         )
     return pages
+
+
+def split_llms_full_heading_pages(markdown: str, *, source_url: str) -> list[NormalizedPage]:
+    """Split concatenated llms-full content that lacks per-page frontmatter.
+
+    Several generators publish llms-full.txt as one long Markdown document with
+    repeated H1 page titles and no YAML boundaries. Treating that as one source
+    document destroys anchors and document-level metadata, so we use H1 headings
+    as a generic fallback while respecting code fences.
+    """
+
+    starts = h1_heading_line_indexes(markdown)
+    if len(starts) < 2:
+        return []
+
+    lines = markdown.splitlines(keepends=True)
+    preamble = lines[: starts[0]]
+    seen_fragments: dict[str, int] = {}
+    pages: list[NormalizedPage] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+        segment_lines = (preamble if index == 0 else []) + lines[start:end]
+        body = clean_markdown("".join(segment_lines))
+        if not body:
+            continue
+        title = title_from_markdown(body, source_url)
+        fragment = unique_fragment(title, seen_fragments)
+        page_url = f"{source_url}#{fragment}"
+        pages.append(
+            NormalizedPage(
+                title=title,
+                markdown=body,
+                source_url=page_url,
+                canonical_url=page_url,
+                source_kind="llms_txt",
+                source_priority=20,
+                discovered_from=source_url,
+            )
+        )
+    return pages if len(pages) > 1 else []
+
+
+def h1_heading_line_indexes(markdown: str) -> list[int]:
+    starts: list[int] = []
+    in_fence = False
+    fence_marker = ""
+    for line_number, line in enumerate(markdown.splitlines(keepends=True)):
+        marker = fence_marker_for_line(line)
+        if marker:
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker[0] == fence_marker:
+                in_fence = False
+                fence_marker = ""
+        if in_fence:
+            continue
+        if re.match(r"^#\s+\S", line.strip()):
+            starts.append(line_number)
+    return starts
+
+
+def unique_fragment(title: str, seen: dict[str, int]) -> str:
+    base = slugify(title)
+    count = seen.get(base, 0) + 1
+    seen[base] = count
+    return base if count == 1 else f"{base}-{count}"
 
 
 def llms_frontmatter_boundaries(text: str) -> list[tuple[int, int, dict[str, str]]]:
@@ -149,7 +219,9 @@ def document_path(source_url: str, title: str, content_type: str) -> str:
 
     prefix = path_prefix_from_url(parsed.path, content_type)
 
-    if url_path:
+    if parsed.fragment and re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower()):
+        slug = slugify(parsed.fragment)
+    elif url_path:
         slug = slug_from_url_path(url_path)
     else:
         slug = slugify(title or parsed.netloc or "page")

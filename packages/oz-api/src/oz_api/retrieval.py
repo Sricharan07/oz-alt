@@ -5,15 +5,13 @@ import re
 import textwrap
 from typing import Any
 
-from oz_api.context_cards import select_context_snippets
 from oz_api.retrieval_cache import get_cached_results, put_cached_results
 from oz_api.retrieval_common import dedupe_search_results, latest_entry, unique_libraries_to_pull
 from oz_api.retrieval_context import RetrievalContext
 from oz_api.retrieval_experiments import rerank_enabled, retrieval_variant
-from oz_api.retrieval_local import context_snippets_from_fixtures, search_from_fixtures, suggest_from_catalog
+from oz_api.retrieval_local import search_from_fixtures, suggest_from_catalog
 from oz_api.retrieval_postgres import (
     agent_context_from_postgres,
-    context_snippets_from_postgres,
     postgres_connection,
     search_from_postgres,
     suggest_from_postgres,
@@ -107,10 +105,10 @@ def context(
     content_types: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_types = normalize_content_types(content_types)
+    variant = retrieval_variant(fingerprint)
     candidate_pool = max(max_results * 4, 24)
     scopes = context_candidate_scopes(ctx, library_scope, query)
     retrieval_queries = context_retrieval_queries(query)
-    snippet_rows: list[dict[str, Any]] = []
     agent_rows: list[dict[str, Any]] = []
     search_rows: list[dict[str, Any]] = []
     for retrieval_query in retrieval_queries:
@@ -125,16 +123,6 @@ def context(
             )
             if scoped_agent_rows:
                 agent_rows.extend(mark_retrieval_query(scoped_agent_rows, retrieval_query))
-            scoped_snippets = context_snippets_from_postgres(
-                ctx,
-                retrieval_query,
-                scope,
-                candidate_pool,
-                fingerprint,
-                content_types=normalized_types,
-            )
-            if scoped_snippets:
-                snippet_rows.extend(mark_retrieval_query(scoped_snippets, retrieval_query))
             scoped_search = search(
                 ctx,
                 retrieval_query,
@@ -146,36 +134,30 @@ def context(
             )
             if scoped_search:
                 search_rows.extend(mark_retrieval_query(scoped_search, retrieval_query))
-    search_rows_are_fixture_fallback = bool(search_rows) and all(
-        str(row.get("retrieval_mode") or "") == "fixture_fallback" for row in search_rows
-    )
-    candidate_rows: list[dict[str, Any]]
-    if agent_rows or snippet_rows or (search_rows and not search_rows_are_fixture_fallback):
-        candidate_rows = merge_context_candidates([*agent_rows, *(snippet_rows or [])], search_rows or [])
-        candidate_rows = score_context_candidates_for_packet(candidate_rows, query)
-        rows = select_context_snippets(
+    search_rows = [row for row in search_rows if str(row.get("retrieval_mode") or "") != "fixture_fallback"]
+    candidate_rows = merge_context_candidates(agent_rows, search_rows)
+    candidate_rows = score_context_candidates_for_packet(candidate_rows, query)
+    candidate_rows.sort(key=lambda row: (-float(row.get("score") or 0), str(row.get("path") or ""), int(row.get("line") or 1)))
+    reranked = (
+        maybe_rerank(
+            ctx,
+            f"context:{library_scope or '*'}:{','.join(normalized_types or [])}",
+            query,
+            fingerprint,
             candidate_rows,
-            query,
-            max_results=max(max_results * 3, 12),
-            max_tokens=max(max_tokens * 2, max_tokens),
+            strip_private=False,
         )
-    else:
-        candidate_rows = []
-        rows = context_snippets_from_fixtures(
-            ctx.storage,
-            query,
-            library_scope=library_scope,
-            max_results=max(max_results * 3, 12),
-            max_tokens=max(max_tokens * 2, max_tokens),
-            content_types=normalized_types,
-        )
+        if candidate_rows and rerank_enabled(variant)
+        else candidate_rows
+    )
+    rows = reranked[: max(max_results * 3, 12)]
     snippets: list[dict[str, Any]] = []
     remaining = max(max_tokens, 1)
-    retrieval_mode = context_retrieval_mode(candidate_rows or rows)
+    retrieval_mode = context_retrieval_mode(rows)
     candidate_modes = sorted(
         {
             str(row.get("retrieval_mode") or "").strip()
-            for row in (candidate_rows or rows)
+            for row in rows
             if str(row.get("retrieval_mode") or "").strip()
         }
     )
@@ -215,7 +197,7 @@ def context(
         snippet_budget = remaining
         if snippet_budget <= 0:
             break
-        snippet = trim_to_token_budget(text, snippet_budget)
+        snippet = trim_context_text_for_query(text, query, snippet_budget)
         tokens = approximate_tokens(snippet)
         if not snippet.strip() or tokens <= 0:
             continue
@@ -227,7 +209,7 @@ def context(
                 "snippet": snippet,
             }
         )
-    packet_rows = candidate_rows if candidate_rows else snippets
+    packet_rows = rows
     packet = context_packet(packet_rows, query=query, max_tokens=max_tokens, max_results=max_results)
     return {
         **packet,
@@ -256,47 +238,36 @@ def mark_retrieval_query(rows: list[dict[str, Any]], retrieval_query: str) -> li
 
 
 def context_retrieval_queries(query: str) -> list[str]:
-    """Generate source-backed retrieval probes for task-shaped context requests.
-
-    The original user query stays first and remains the only query used to score
-    the final packet. Supplemental probes just widen recall for common docs
-    facets such as setup, request schemas, streaming, and file output.
-    """
+    """Generate generic retrieval probes for task-shaped context requests."""
 
     lowered = query.lower()
     candidates = [query]
     if any(term in lowered for term in ("install", "setup", "quickstart", "initialize", "initialise", "authenticate", "api key", "credential", "environment variable")):
-        candidates.append("installation quickstart setup api key environment variables initialize client")
-    if any(term in lowered for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
-        candidates.append("install dependency requirements.txt version pin major version package version specifier")
-    if any(term in lowered for term in ("default configuration", "initialize", "initialise", "client")):
-        candidates.append("initialize client default configuration import client constructor")
-    if any(term in lowered for term in ("custom host", "api host", "host endpoint", "base url", "base_url", "endpoint")):
-        candidates.append("configuration host base_url endpoint client custom api host")
-    if any(term in lowered for term in ("verify", "validate", "valid")) and any(term in lowered for term in ("api key", "credential", "token")):
-        candidates.append("verify api key lightweight request current user get_current_user whoami account user details")
-    if text_to_speech_query(lowered):
-        candidates.append("text to speech tts synthesize synthesis generate speech audio python example")
-    if any(term in lowered for term in ("stream", "streaming", "chunk", "chunks", "long input", "long text")):
-        candidates.append("streaming text to speech synthesize_streaming chunks continue_stream auto_flush websocket")
-    if audio_file_query(lowered):
-        candidates.append("save generated audio wav mp3 save_as output_format write file synthesize")
-    if any(term in lowered for term in ("voiceid", "voice id", "voice_id", "voice")):
-        candidates.append("voice_id voiceId voices list voices get_voices synthesize request cloned voices")
-    if "model" in lowered and any(term in lowered for term in ("choose", "quality", "latency", "tradeoff", "trade-off", "available", "list")):
-        candidates.append("models available get_models model quality latency fast large synthesize model parameter")
+        candidates.append("installation quickstart setup api key environment variables initialize client import")
+    if any(term in lowered for term in ("create", "new", "build", "add")):
+        candidates.append("create new build add example required parameters response")
+    if any(term in lowered for term in ("list", "available", "all", "search")):
+        candidates.append("list available all search retrieve collection example")
+    if any(term in lowered for term in ("get", "fetch", "retrieve", "details", "read")):
+        candidates.append("get fetch retrieve details read identifier response")
+    if any(term in lowered for term in ("update", "edit", "patch", "modify")):
+        candidates.append("update edit patch modify required parameters example")
+    if any(term in lowered for term in ("delete", "remove", "destroy")):
+        candidates.append("delete remove destroy identifier example")
+    if any(term in lowered for term in ("upload", "file", "pdf", "document", "image", "audio")):
+        candidates.append("upload file document input multipart example required parameters")
+    if any(term in lowered for term in ("stream", "streaming", "realtime", "websocket", "sse", "chunk", "chunks")):
+        candidates.append("stream streaming realtime websocket sse chunks example")
+    if any(term in lowered for term in ("config", "configuration", "env", "base url", "base_url", "host", "timeout")):
+        candidates.append("configuration environment variables base_url host timeout client options")
+    if any(term in lowered for term in ("test", "mock", "pytest", "jest", "spec")):
+        candidates.append("testing mock unit test integration test example")
     if any(term in lowered for term in ("request body", "required fields", "required parameters", "schema")):
-        candidates.append("request body required fields schema parameters text voiceId model")
-    if any(term in lowered for term in ("speed", "consistency", "similarity", "enhancement", "optional synthesis", "controls")):
-        candidates.append("speed consistency similarity enhancement synthesis controls optional parameters synthesize")
+        candidates.append("request body required fields schema parameters response schema")
     if any(term in lowered for term in ("failed", "failure", "recover", "retry", "exception", "error")):
-        candidates.append("error handling exceptions retry failed request status response synthesize generation")
-    if any(term in lowered for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs")):
+        candidates.append("error handling exceptions retry failed request status response")
+    if any(term in lowered for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs", "logging")):
         candidates.append("request id response metadata headers logs debugging")
-    if any(term in lowered for term in ("list", "available", "fetch", "details", "retrieve", "get ")) and "agent" in lowered:
-        candidates.append("list agents get agent retrieve agent details agent_id")
-    if any(term in lowered for term in ("create", "new", "build")) and "agent" in lowered:
-        candidates.append("create agent new_agent create_agent agent request python")
     output: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -439,7 +410,158 @@ def context_candidate_key(row: dict[str, Any]) -> str:
 
 
 def score_context_candidates_for_packet(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    return [{**row, "score": float(row.get("score") or 0) + context_packet_candidate_boost(row, query, rows)} for row in rows]
+    required_terms = context_required_terms(query, rows)
+    return [
+        {
+            **row,
+            "score": float(row.get("score") or 0)
+            + context_packet_candidate_boost(row, query, rows)
+            + context_required_term_boost(row, required_terms),
+        }
+        for row in rows
+    ]
+
+
+CONTEXT_REQUIRED_TERM_STOP_TERMS = GENERIC_LIBRARY_TERMS | {
+    "about",
+    "after",
+    "agent",
+    "agents",
+    "answer",
+    "available",
+    "before",
+    "build",
+    "call",
+    "code",
+    "configuration",
+    "default",
+    "create",
+    "details",
+    "does",
+    "docs",
+    "example",
+    "examples",
+    "from",
+    "generated",
+    "give",
+    "guide",
+    "handle",
+    "help",
+    "implement",
+    "implementation",
+    "into",
+    "locally",
+    "make",
+    "need",
+    "output",
+    "please",
+    "python",
+    "request",
+    "requests",
+    "response",
+    "safe",
+    "show",
+    "snippet",
+    "snippets",
+    "tool",
+    "tools",
+    "using",
+    "want",
+    "what",
+    "when",
+    "with",
+}
+
+
+def context_required_terms(query: str, rows: list[dict[str, Any]]) -> set[str]:
+    """Rare query terms that exist in candidates must dominate context ranking.
+
+    The context pipeline intentionally broadens a query with generic probes so it
+    can recover setup/example/operation evidence. Without this guard, generic
+    probe hits can outrank the row that contains the actual user term, e.g.
+    "webhook". Terms are selected from the query only when at least one
+    candidate contains them and they are not so common that they stop being
+    discriminative.
+    """
+
+    raw_terms = {
+        term
+        for term in re.findall(r"[a-z][a-z0-9_]+", query.lower().replace("-", " "))
+        if len(term) >= 5 and term not in CONTEXT_REQUIRED_TERM_STOP_TERMS
+    }
+    if not raw_terms or not rows:
+        return set()
+    row_texts = [context_row_search_text(row) for row in rows]
+    terms: set[str] = set()
+    max_common = max(3, int(len(row_texts) * 0.65))
+    for term in raw_terms:
+        hits = sum(1 for text in row_texts if term in text)
+        specific_term = len(term) >= 7 or "_" in term or term.endswith(("hook", "hooks"))
+        if 0 < hits <= max_common or (hits > 0 and specific_term):
+            terms.add(term)
+    return terms
+
+
+def context_row_search_text(row: dict[str, Any]) -> str:
+    content = str(row.get("_matched_text") or row.get("snippet") or row.get("content") or "")
+    if len(content) > 2600:
+        content = content[:2600]
+    values = [
+        str(row.get("title") or ""),
+        str(row.get("description") or ""),
+        str(row.get("matched_path") or row.get("relative_path") or row.get("path") or ""),
+        " ".join(str(item) for item in row.get("heading_path") or []),
+        " ".join(str(item) for item in row.get("symbols") or []),
+        " ".join(str(item) for item in row.get("entities") or []),
+        " ".join(str(item) for item in row.get("task_tags") or []),
+        str(row.get("code") or ""),
+        content,
+    ]
+    return " ".join(values).lower()
+
+
+def context_required_term_boost(row: dict[str, Any], required_terms: set[str]) -> float:
+    if not required_terms:
+        return 0.0
+    text = context_row_search_text(row)
+    hits = {term for term in required_terms if term in text}
+    if not hits:
+        return -1800.0
+    score = len(hits) * 1800.0
+    if hits == required_terms:
+        score += 650.0
+    return score
+
+
+def row_satisfies_context_terms(row: dict[str, Any], required_terms: set[str]) -> bool:
+    if not required_terms:
+        return True
+    text = context_row_search_text(row)
+    return any(term in text for term in required_terms)
+
+
+def code_blocks_satisfying_context_terms(blocks: list[dict[str, str]], required_terms: set[str]) -> list[dict[str, str]]:
+    blocks = leaf_code_blocks(blocks)
+    if not required_terms:
+        return blocks
+    output: list[dict[str, str]] = []
+    for block in blocks:
+        code = (block.get("code") or "").lower()
+        if any(term in code for term in required_terms):
+            output.append(block)
+    return output
+
+
+def leaf_code_blocks(blocks: list[dict[str, str]]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for block in blocks:
+        code = block.get("code") or ""
+        inner = extract_code_blocks(code) if "```" in code or "~~~" in code else []
+        if inner:
+            output.extend(leaf_code_blocks(inner))
+        else:
+            output.append(block)
+    return output
 
 
 def context_packet_candidate_boost(row: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> float:
@@ -606,7 +728,6 @@ QUERY_STOP_TERMS = {
     "requests",
     "response",
     "safe",
-    "smallest",
     "using",
     "what",
     "when",
@@ -634,7 +755,7 @@ def row_task_query_boost(row: dict[str, Any], query: str) -> float:
             score += 520.0 if "_" in term else (320.0 if len(term) >= 8 else 180.0)
     for term in negative:
         if term and term in text:
-            score -= 1250.0 if term in {"asyncapi", "openapi", "websocket", "realtime", "agent/connect"} else (620.0 if len(term) >= 8 else 380.0)
+            score -= 620.0 if len(term) >= 8 else 380.0
     query_terms = meaningful_query_terms(lowered)
     direct_hits = sum(1 for term in query_terms if term in text)
     score += min(420.0, direct_hits * 70.0)
@@ -645,42 +766,37 @@ def task_profile_terms(lowered_query: str) -> tuple[set[str], set[str]]:
     positive: set[str] = set()
     negative: set[str] = set()
     if any(term in lowered_query for term in ("install", "setup", "quickstart", "initialize", "initialise", "authenticate", "api key", "credential", "environment variable")):
-        positive.update({"install", "installation", "pip install", "npm install", "api key", "api_key", "environment variable", "client", "configuration"})
-        if "create" not in lowered_query and "new" not in lowered_query:
-            negative.update({"create_agent", "new_agent", "websocket", "streaming", "synthesize", "transcribe"})
+        positive.update({"install", "installation", "pip install", "npm install", "api key", "api_key", "environment variable", "client", "configuration", "quickstart"})
     if any(term in lowered_query for term in ("requirements.txt", "requirements", "pin", "version range", "safe version", "dependency")):
         positive.update({"requirements.txt", "requirements", "pin", "pinned", "version", "major version", "pip install", "install"})
-        negative.update({"websocket", "streaming", "synthesize", "transcribe", "create_agent", "new_agent"})
-    if text_to_speech_query(lowered_query):
-        positive.update({"text-to-speech", "text to speech", "tts", "synthesize", "synthesis", "speech", "audio", "voice"})
-        negative.update({"speech-to-text", "speech to text", "stt", "transcribe", "transcription", "diarization"})
-    if any(term in lowered_query for term in ("stream", "streaming", "chunk", "chunks", "long input", "long text")):
-        positive.update({"stream", "streaming", "chunk", "chunks", "synthesize_streaming", "continue_stream", "auto_flush", "websocket", "buffer"})
-    if audio_file_query(lowered_query):
-        positive.update({"save", "saved", "save_as", "file", "wav", "mp3", "output_format", "writeframes", "write", "bytes", "synthesize"})
-        if "stream" not in lowered_query:
-            negative.update({"websocket", "streaming", "websocketapp", "connect(", "speech-to-text", "transcribe", "stt"})
-    if any(term in lowered_query for term in ("voiceid", "voice id", "voice_id", "voice")):
-        positive.update({"voiceid", "voice_id", "voice id", "voices", "get_voices", "list voices", "cloned voices", "synthesize"})
-    if "model" in lowered_query and any(term in lowered_query for term in ("choose", "quality", "latency", "tradeoff", "trade-off", "available", "list")):
-        positive.update({"model", "models", "get_models", "available models", "quality", "latency", "fast", "large", "lightning", "synthesize"})
-        negative.update({"websocket", "streaming", "protocol", "http vs", "asr", "transcribe", "dashboard", "prometheus"})
+    if any(term in lowered_query for term in ("create", "new", "build", "add")):
+        positive.update({"create", "new", "build", "add", "required", "response", "example"})
+    if any(term in lowered_query for term in ("list", "available", "all", "search")):
+        positive.update({"list", "available", "all", "search", "collection", "response"})
+    if any(term in lowered_query for term in ("get", "fetch", "retrieve", "details", "read")):
+        positive.update({"get", "fetch", "retrieve", "details", "read", "identifier", "response"})
+    if any(term in lowered_query for term in ("update", "edit", "patch", "modify")):
+        positive.update({"update", "edit", "patch", "modify", "required", "response"})
+    if any(term in lowered_query for term in ("delete", "remove", "destroy")):
+        positive.update({"delete", "remove", "destroy", "identifier", "response"})
+    if any(term in lowered_query for term in ("upload", "file", "pdf", "document", "image", "audio")):
+        positive.update({"upload", "file", "document", "multipart", "input", "example"})
+    if "knowledge base" in lowered_query or "knowledgebase" in lowered_query:
+        positive.update({"knowledge base", "kb", "document", "add document", "adding documents"})
+    if "webhook" in lowered_query:
+        positive.update({"webhook", "webhooks", "endpoint", "subscriptions", "agent"})
+    if any(term in lowered_query for term in ("stream", "streaming", "chunk", "chunks", "realtime", "websocket", "sse")):
+        positive.update({"stream", "streaming", "chunk", "chunks", "realtime", "websocket", "sse", "buffer"})
+    if any(term in lowered_query for term in ("model", "choose", "quality", "latency", "tradeoff", "trade-off", "available")):
+        positive.update({"model", "models", "available", "quality", "latency", "tradeoff"})
     if any(term in lowered_query for term in ("request body", "required fields", "required parameters", "schema")):
-        positive.update({"request body", "required", "schema", "parameters", "field", "fields", "model", "voiceid", "voice_id"})
-    if any(term in lowered_query for term in ("speed", "consistency", "similarity", "enhancement", "optional synthesis", "controls")):
-        positive.update({"speed", "sample_rate", "consistency", "similarity", "enhancement", "controls", "optional", "synthesize"})
-        negative.update({"dashboard", "prometheus", "asr", "transcribe"})
+        positive.update({"request body", "required", "schema", "parameters", "field", "fields"})
+    if any(term in lowered_query for term in ("speed", "consistency", "similarity", "enhancement", "optional", "controls")):
+        positive.update({"speed", "consistency", "similarity", "enhancement", "controls", "optional"})
     if any(term in lowered_query for term in ("failed", "failure", "recover", "retry", "exception", "error")):
-        positive.update({"error", "exception", "retry", "failed", "failure", "status", "recover", "synthesize", "generation"})
-        negative.update({"dashboard", "prometheus", "asr", "transcribe", "grafana", "metric", "metrics", "speech-to-text"})
+        positive.update({"error", "exception", "retry", "failed", "failure", "status", "recover"})
     if any(term in lowered_query for term in ("request id", "request ids", "metadata", "debug", "debugging", "logs")):
         positive.update({"request id", "request_id", "metadata", "headers", "debug", "logs", "logging"})
-    if any(term in lowered_query for term in ("list", "available", "fetch", "details", "retrieve", "get ")) and "agent" in lowered_query:
-        positive.update({"list_agents", "get_agents", "get_agent", "get_agent_by_id", "retrieve", "details", "agent_id", "agents"})
-        if "create" not in lowered_query and "new" not in lowered_query:
-            negative.update({"create_agent", "new_agent", "creating your first", "asyncapi", "openapi", "websocket", "realtime", "agent/connect"})
-    if any(term in lowered_query for term in ("create", "new", "build")) and "agent" in lowered_query:
-        positive.update({"create_agent", "new_agent", "create", "agent"})
     if any(term in lowered_query for term in ("custom host", "api host", "host endpoint", "base url", "base_url", "endpoint")):
         positive.update({"configuration", "host", "base_url", "base url", "endpoint"})
     return positive, negative
@@ -700,6 +816,7 @@ def meaningful_query_terms(lowered_query: str) -> set[str]:
 
 
 FENCE_RE = re.compile(r"(?ms)^\s*(`{3,}|~{3,})[ \t]*([^\n`]*)\n(?P<code>.*?)(?:^\s*\1\s*$)")
+FENCE_START_RE = re.compile(r"(?m)^\s*(`{3,}|~{3,})[ \t]*([^\n`]*)\n")
 
 
 def context_packet(
@@ -716,11 +833,11 @@ def context_packet(
     seen_info: set[str] = set()
     seen_sources: set[str] = set()
     max_code = max(1, min(max_results, 3 if max_results >= 5 else max_results))
-    max_info = max(0, max_results - max_code)
+    max_info = min(max_results, 5 if max_results >= 5 else max_results)
     ordered = sorted(rows, key=lambda row: packet_row_score(row, query), reverse=True)
     has_setup_composite = False
     for card in composite_code_cards(ordered, query, remaining):
-        key = card_key(card)
+        key = card_code_key(card) or card_key(card)
         if not key or key in seen_code:
             continue
         seen_code.add(key)
@@ -771,6 +888,7 @@ def context_packet(
             "infoSnippets": [],
         }
     has_composite = any(str(card.get("codeId") or "").startswith("oz:composite:") for card in code_snippets)
+    required_terms = context_required_terms(query, ordered)
     for row in ordered:
         if remaining <= 0:
             break
@@ -780,6 +898,8 @@ def context_packet(
         row_source = source_id(row)
         if row_source and row_source in seen_sources:
             continue
+        if low_value_context_row(row, query):
+            continue
         title_lower = str(row.get("title") or "").lower()
         if has_setup_composite and any(term in title_lower for term in ("installation", "dependencies")):
             continue
@@ -787,10 +907,10 @@ def context_packet(
             term in query.lower() for term in ("schema", "request body", "source", "implementation", "class")
         ):
             continue
-        code_blocks = extract_code_blocks(text)
-        if code_blocks:
+        code_blocks = code_blocks_satisfying_context_terms(extract_code_blocks(text), required_terms)
+        if code_blocks and row_satisfies_context_terms(row, required_terms):
             card = code_snippet_card(row, text, code_blocks, remaining, query=query)
-            key = card_key(card)
+            key = card_code_key(card) or card_key(card)
             if key and key not in seen_code and card.get("codeList") and len(code_snippets) < max_code:
                 seen_code.add(key)
                 seen_sources.update(card_sources(card))
@@ -798,7 +918,7 @@ def context_packet(
                 code_snippets.append(card)
                 if len(code_snippets) >= max_code:
                     continue
-        info = info_snippet_card(row, text, remaining)
+        info = info_snippet_card(row, text, remaining, query=query)
         key = card_key(info)
         if (
             key
@@ -819,10 +939,55 @@ def context_packet(
     }
 
 
+def card_code_key(card: dict[str, Any]) -> str:
+    code = "\n".join(str(item.get("code") or "") for item in card.get("codeList") or [])
+    normalized = re.sub(r"\s+", " ", code.strip().lower())
+    return normalized[:500]
+
+
+def low_value_context_row(row: dict[str, Any], query: str) -> bool:
+    query_lower = query.lower()
+    path = str(row.get("matched_path") or row.get("path") or "").lower()
+    title = str(row.get("title") or "").lower()
+    source = str(row.get("source_anchor") or row.get("source_url") or "").lower()
+    text = f"{path} {title} {source}"
+    config_query = any(
+        term in query_lower
+        for term in (
+            "install",
+            "dependency",
+            "package",
+            "configuration",
+            "config",
+            "pubspec",
+            "package.json",
+            "requirements",
+            "environment",
+        )
+    )
+    if not config_query and any(
+        term in text
+        for term in (
+            "pubspec.yaml",
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock",
+            "yarn.lock",
+            "requirements.txt",
+            "pyproject.toml",
+            "setup.py",
+        )
+    ):
+        return True
+    if "smoke" not in query_lower and ("smoke.html" in text or "smoke-test" in text or "smoke test" in title):
+        return True
+    return False
+
+
 def composite_code_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
-    operation_cards = operation_recipe_cards(rows, query, budget)
-    if operation_cards:
-        return operation_cards
+    recipe_cards = operation_recipe_cards(rows, query, budget)
+    if recipe_cards:
+        return recipe_cards
     if not legacy_context_composites_enabled():
         return []
     query_lower = query.lower()
@@ -877,21 +1042,30 @@ def legacy_context_composites_enabled() -> bool:
 def operation_recipe_cards(rows: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
+    required_terms = context_required_terms(query, rows)
     for row in sorted(rows, key=lambda item: packet_row_score(item, query), reverse=True):
-        if str(row.get("retrieval_mode") or "") not in {"agent_recipes", "agent_operations"}:
+        if str(row.get("retrieval_mode") or "") not in {"agent_recipe", "code_example"}:
+            continue
+        if not row_satisfies_context_terms(row, required_terms):
             continue
         text = context_source_text(row)
         code = str(row.get("code") or "")
-        code_blocks = extract_code_blocks(text)
+        code_blocks = code_blocks_satisfying_context_terms(extract_code_blocks(text), required_terms)
         if code and not code_blocks:
-            code_blocks = [{"language": str(row.get("code_language") or ""), "code": code}]
+            code_blocks = code_blocks_satisfying_context_terms(
+                [{"language": str(row.get("code_language") or ""), "code": code}],
+                required_terms,
+            )
         if not code_blocks:
             continue
-        code_list = bounded_code_list(focused_code_blocks_for_query(code_blocks, query) or code_blocks, budget)
+        focused_blocks = focused_code_blocks_for_query(code_blocks, query)
+        if not focused_blocks:
+            continue
+        code_list = bounded_code_list(focused_blocks, budget)
         if not code_list:
             continue
         source = source_id(row)
-        key = f"{source}:{row.get('title')}"
+        key = re.sub(r"\s+", " ", "\n".join(item["code"] for item in code_list).strip().lower())[:500] or f"{source}:{row.get('title')}"
         if key in seen:
             continue
         seen.add(key)
@@ -1984,6 +2158,18 @@ def packet_row_score(row: dict[str, Any], query: str) -> float:
     title = str(row.get("title") or "").lower()
     role = str(row.get("role") or row.get("content_type") or "")
     query_lower = query.lower()
+    query_terms = meaningful_query_terms(query_lower)
+    for term in query_terms:
+        if term in title:
+            score += 520
+        elif term in path:
+            score += 420
+        elif term in text:
+            score += 90
+    if "knowledge base" in query_lower and ("knowledge base" in title or "knowledge-base" in path):
+        score += 640
+    if "webhook" in query_lower and ("webhook" in title or "webhook" in path):
+        score += 640
     setup_query = any(term in query_lower for term in ("install", "initialize", "authenticate", "api key", "environment", "credential", "setup", "quickstart"))
     credential_query = any(term in query_lower for term in ("api key", "authenticate", "auth", "credential", "environment", "secret"))
     host_query = any(term in query_lower for term in ("custom host", "api host", "host endpoint", "endpoint", "base url", "base_url", "host"))
@@ -2050,7 +2236,133 @@ def extract_code_blocks(text: str) -> list[dict[str, str]]:
                 "code": code,
             }
         )
+    if not blocks and "```" in text:
+        blocks.extend(extract_partial_code_blocks(text))
+    loose_source = FENCE_RE.sub("", text)
+    blocks.extend(extract_loose_code_blocks(loose_source))
+    return dedupe_code_blocks(blocks)
+
+
+def dedupe_code_blocks(blocks: list[dict[str, str]]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for block in blocks:
+        code = (block.get("code") or "").strip()
+        if not code:
+            continue
+        key = re.sub(r"\s+", " ", code.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append({"language": block.get("language") or "", "code": code})
+    return output
+
+
+def extract_partial_code_blocks(text: str) -> list[dict[str, str]]:
+    """Recover fenced code when a context row was truncated before the close."""
+
+    blocks: list[dict[str, str]] = []
+    for match in FENCE_START_RE.finditer(text):
+        fence = match.group(1)
+        language = (match.group(2) or "").strip().split()
+        start = match.end()
+        close = re.search(rf"(?m)^\s*{re.escape(fence)}\s*$", text[start:])
+        end = start + close.start() if close else len(text)
+        code = text[start:end].strip()
+        if code:
+            blocks.append({"language": language[0] if language else "", "code": code})
     return blocks
+
+
+def extract_loose_code_blocks(text: str) -> list[dict[str, str]]:
+    """Extract short unfenced code runs from imperfect markdown.
+
+    Some source docs lose fences during upstream llms-full generation. We only
+    recover dense runs of code-like lines and stop before prose so these blocks
+    can be used as source-backed implementation snippets without admitting
+    normal paragraphs as code.
+    """
+
+    blocks: list[dict[str, str]] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if loose_code_line(stripped):
+            current.append(line)
+            continue
+        if not stripped and current:
+            current.append("")
+            continue
+        if current:
+            block = "\n".join(current).strip()
+            if loose_code_block(block):
+                blocks.append({"language": infer_code_language(block), "code": block})
+            current = []
+    if current:
+        block = "\n".join(current).strip()
+        if loose_code_block(block):
+            blocks.append({"language": infer_code_language(block), "code": block})
+    return blocks[:4]
+
+
+def loose_code_line(line: str) -> bool:
+    if not line:
+        return False
+    if line.startswith(("#", ">", "|", "-", "*")):
+        return False
+    patterns = (
+        r"^(from|import)\s+[\w.]+",
+        r"^[A-Za-z_]\w*\s*=",
+        r"^[A-Za-z_][\w.]*\s*=",
+        r"^[A-Za-z_][\w.]*\s*\(",
+        r"^(await|return|async\s+with|with|if|for|while)\b",
+        r"^(const|let|var)\s+\w+\s*=",
+        r"^(export\s+)?(async\s+)?function\s+\w+",
+        r"^(pip|npm|pnpm|yarn|uv|curl)\s+",
+        r"^(class|def|async\s+def)\s+\w+",
+        r"^\w+\.\w+",
+    )
+    return any(re.search(pattern, line) for pattern in patterns)
+
+
+def loose_code_block(code: str) -> bool:
+    lines = [line for line in code.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    return sum(1 for line in lines if loose_code_line(line.strip())) >= 2 and code_like_block(code)
+
+
+def infer_code_language(code: str) -> str:
+    lowered = code.lower()
+    if re.search(r"(?m)^\s*import\s+\w+\s+from\s+['\"]", code):
+        return "typescript"
+    if re.search(r"(?m)^\s*(const|let|var|export)\s+", code):
+        return "typescript"
+    if re.search(r"(?m)^\s*(from|import)\s+[\w.]+", code) or "os.getenv" in lowered or "print(" in lowered:
+        return "python"
+    if re.search(r"(?m)^\s*import\s+[{*]", code):
+        return "typescript"
+    if re.search(r"(?m)^\s*(pip|uv)\s+", code):
+        return "bash"
+    if re.search(r"(?m)^\s*(npm|pnpm|yarn)\s+", code):
+        return "bash"
+    return ""
+
+
+def code_block_matches_requested_language(block: dict[str, str], code: str, languages: set[str]) -> bool:
+    language = canonical_language(str(block.get("language") or ""))
+    if not language:
+        language = canonical_language(infer_code_language(code))
+    if not language:
+        return True
+    if language in languages:
+        return True
+    if language == "typescript" and "javascript" in languages:
+        return True
+    if language == "javascript" and "typescript" in languages:
+        return True
+    return False
 
 
 def code_snippet_card(
@@ -2077,11 +2389,11 @@ def code_snippet_card(
     }
 
 
-def info_snippet_card(row: dict[str, Any], text: str, budget: int) -> dict[str, Any]:
+def info_snippet_card(row: dict[str, Any], text: str, budget: int, *, query: str = "") -> dict[str, Any]:
     prose = strip_code_blocks(text)
     if not prose.strip():
         prose = str(row.get("description") or "").strip()
-    prose = trim_to_token_budget(prose, min(max(budget, 1), 600))
+    prose = trim_context_text_for_query(prose, query, min(max(budget, 1), 600))
     return {
         "title": context_card_title(row, default="Documentation"),
         "pageId": source_id(row),
@@ -2108,11 +2420,17 @@ def bounded_code_list(blocks: list[dict[str, str]], budget: int) -> list[dict[st
 
 def focused_code_blocks_for_query(blocks: list[dict[str, str]], query: str) -> list[dict[str, str]]:
     focused: list[dict[str, str]] = []
-    for block in blocks:
+    action_terms = query_code_action_terms(query.lower())
+    languages = requested_languages(query)
+    for block in leaf_code_blocks(blocks):
         code = block.get("code") or ""
+        if languages and not code_block_matches_requested_language(block, code, languages):
+            continue
         if not usable_code_block(block, query):
             continue
         next_code = focused_code_for_query(code, query, token_budget=620)
+        if action_terms and not code_has_action_term(next_code or code, action_terms):
+            continue
         focused.append({"language": block.get("language") or "", "code": next_code or code})
     return focused
 
@@ -2123,7 +2441,14 @@ def usable_code_block(block: dict[str, str], query: str) -> bool:
         return False
     lowered = code.lower()
     query_lower = query.lower()
-    if str(block.get("language") or "").lower() in {"log", "logs", "promql"}:
+    raw_language = str(block.get("language") or "").lower()
+    if raw_language in {"log", "logs", "promql"}:
+        return False
+    if raw_language in {"markdown", "md", "mdx"}:
+        return False
+    if "```" in code or "~~~" in code:
+        return False
+    if re.search(r"(?m)^\s{0,3}#{1,6}\s+\S", code) and "```" in code:
         return False
     if "websocketapp" in lowered and "stream" not in query_lower and "websocket" not in query_lower:
         return False
@@ -2132,13 +2457,56 @@ def usable_code_block(block: dict[str, str], query: str) -> bool:
     if lowered.count(":param") >= 2 and not any(term in query_lower for term in ("constructor", "class", "parameters", "schema", "request body")):
         return False
     language = canonical_language(str(block.get("language") or ""))
-    if language in {"yaml", "json"} and not any(term in query_lower for term in ("schema", "openapi", "asyncapi", "config", "configuration", "request body", "yaml", "json")):
+    if language in {"yaml", "json"} and not any(term in query_lower for term in ("schema", "openapi", "config", "configuration", "request body", "yaml", "json")):
+        return False
+    if not language and not code_like_block(code):
         return False
     return True
 
 
+def code_like_block(code: str) -> bool:
+    stripped = code.strip()
+    if not stripped:
+        return False
+    markdown_noise = (
+        "[`" in stripped
+        or "](" in stripped
+        or re.search(r"(?m)^\s*[-*]\s+\S", stripped) is not None
+        or re.search(r"(?m)^\s{0,3}#{1,6}\s+\S", stripped) is not None
+    )
+    signals = [
+        r"(?m)^\s*(from|import)\s+[\w.]+",
+        r"(?m)^\s*(export\s+)?(async\s+)?function\s+\w+",
+        r"(?m)^\s*(const|let|var)\s+\w+\s*=",
+        r"(?m)^\s*class\s+\w+",
+        r"(?m)^\s*(async\s+)?def\s+\w+\s*\(",
+        r"(?m)^\s*(return|await)\s+",
+        r"(?m)^\s*(pip|npm|pnpm|yarn|uv|curl)\s+",
+        r"[A-Za-z_][\w.]*\s*\(",
+        r"=>\s*[{(]",
+        r"[{};]",
+    ]
+    signal_count = sum(1 for pattern in signals if re.search(pattern, stripped))
+    if signal_count >= 2:
+        return True
+    if signal_count == 1 and not markdown_noise and len(stripped.splitlines()) <= 16:
+        return True
+    lowered_first = stripped.splitlines()[0].strip().lower()
+    if lowered_first.startswith(("the ", "this ", "because ", "when ", "you ", "to ", "for ")):
+        return False
+    return signal_count > 0 and not markdown_noise
+
+
 def focused_code_for_query(code: str, query: str, *, token_budget: int) -> str:
     lowered_query = query.lower()
+    action_terms = query_code_action_terms(lowered_query)
+    if action_terms:
+        operation_terms = meaningful_query_terms(lowered_query) | task_profile_terms(lowered_query)[0] | action_terms
+        focused = focused_lines_around_terms(code, operation_terms, token_budget)
+        if focused and code_has_action_term(focused, action_terms):
+            return focused
+        if approximate_tokens(code) <= token_budget and code_has_action_term(code, action_terms):
+            return code.strip()
     setup_like = any(
         term in lowered_query
         for term in (
@@ -2163,6 +2531,75 @@ def focused_code_for_query(code: str, query: str, *, token_budget: int) -> str:
         return code.strip()
     focused = focused_lines_around_terms(code, meaningful_query_terms(lowered_query) | task_profile_terms(lowered_query)[0], token_budget)
     return focused or trim_to_token_budget(code, token_budget)
+
+
+def query_code_action_terms(lowered_query: str) -> set[str]:
+    terms: set[str] = set()
+    if "create" in lowered_query:
+        terms.add("create")
+    if re.search(r"(?<![a-z0-9])new(?![a-z0-9])", lowered_query) and "create" not in lowered_query:
+        terms.add("new")
+    if "build" in lowered_query and "create" not in lowered_query:
+        terms.add("build")
+    if re.search(r"(?<![a-z0-9])add(?![a-z0-9])", lowered_query) and "create" not in lowered_query:
+        terms.add("add")
+    if any(term in lowered_query for term in ("update", "edit", "patch", "modify")):
+        terms.update({"update", "edit", "patch", "modify"})
+    if any(term in lowered_query for term in ("delete", "remove", "destroy")):
+        terms.update({"delete", "remove", "destroy"})
+    if any(term in lowered_query for term in ("upload", "pdf", "document", "file")):
+        terms.update({"upload", "pdf", "document", "file"})
+    if any(term in lowered_query for term in ("stream", "streaming", "websocket", "sse")):
+        terms.update({"stream", "streaming", "websocket", "sse"})
+    if any(term in lowered_query for term in ("synthesize", "tts", "speech", "save to file")):
+        terms.update({"synthesize", "tts", "speech", "save_as", "save"})
+    if any(term in lowered_query for term in ("cookie", "cookies")):
+        terms.update({"cookie", "cookies"})
+    if "webhook" in lowered_query:
+        terms.update({"webhook", "webhooks"})
+    return terms
+
+
+def code_has_action_term(code: str, action_terms: set[str]) -> bool:
+    original = code
+    lowered = code.lower()
+    normalized = lowered.replace("_", " ").replace("-", " ")
+    for term in action_terms:
+        if code_action_term_match(original, lowered, normalized, term):
+            return True
+    return False
+
+
+def code_action_term_match(original: str, lowered: str, normalized: str, term: str) -> bool:
+    if term == "create":
+        return (
+            re.search(r"(?:^|[.\s])create[a-z0-9_]*\s*\(", original) is not None
+            or re.search(r"\.[Cc]reate[a-zA-Z0-9_]*\s*\(", original) is not None
+            or re.search(r"\b(def|function|async\s+function)\s+create[a-zA-Z0-9_]*\s*\(", original) is not None
+            or re.search(r"(?m)^\s*(post|curl\s+-x\s+post)\b", lowered) is not None
+            or re.search(r"(?m)\bpost\s+/", lowered) is not None
+        )
+    if term == "new":
+        return re.search(r"\bnew\s+[A-Z_][A-Za-z0-9_]*\s*\(", lowered, re.IGNORECASE) is not None
+    if term in {"build", "add", "update", "edit", "patch", "delete", "remove", "destroy"}:
+        return (
+            re.search(rf"(?:^|[.\s]){re.escape(term)}[a-z0-9_]*\s*\(", lowered) is not None
+            or re.search(rf"(?m)^\s*(post|put|patch|delete|curl)\b.*\b{re.escape(term)}\b", lowered) is not None
+        )
+    if term in {"upload", "stream", "streaming", "websocket", "sse", "synthesize", "tts", "webhook", "webhooks"}:
+        return term in lowered or term in normalized
+    if term in {"pdf", "document", "file"}:
+        return (
+            re.search(rf"\b{re.escape(term)}\b", normalized) is not None
+            or "multipart" in lowered
+            or "files=" in lowered
+            or ".pdf" in lowered
+        )
+    if term in {"cookie", "cookies"}:
+        return "cookie" in lowered or "cookies" in lowered
+    if term in {"save", "save_as"}:
+        return "save_as" in lowered or re.search(r"(?:^|[.\s])save[a-z0-9_]*\s*\(", lowered) is not None
+    return re.search(rf"\b{re.escape(term)}\b", normalized) is not None
 
 
 def focused_setup_code(code: str, lowered_query: str, token_budget: int) -> str:
@@ -2444,20 +2881,16 @@ def first_retrieval_mode(rows: list[dict[str, Any]]) -> str:
 def context_retrieval_mode(rows: list[dict[str, Any]]) -> str:
     modes = {str(row.get("retrieval_mode") or "").strip() for row in rows}
     modes.discard("")
-    if any(mode.startswith("vector") for mode in modes) and "context_snippets" in modes:
-        return "hybrid_context_vector"
+    if {"agent_recipe", "code_example", "api_operation", "sdk_method"} & modes:
+        return "agent_context"
     if any(mode.startswith("vector") for mode in modes):
         return "hybrid_vector"
-    if "context_snippets" in modes:
-        return "context_snippets"
     return first_retrieval_mode(rows)
 
 
 def context_source_text(row: dict[str, Any]) -> str:
     matched = clean_context_text(str(row.get("_matched_text") or ""))
     parent = clean_context_text(str(row.get("_parent_text") or ""))
-    if row.get("retrieval_mode") == "context_snippets":
-        return format_context_card_text(row, matched)
     content_type = str(row.get("content_type") or "")
     if matched and useful_context_text(matched, row):
         return matched
@@ -2574,6 +3007,53 @@ def trim_to_token_budget(text: str, budget: int) -> str:
     if in_fence:
         selected.append("```")
     return "\n".join(selected).strip()
+
+
+def trim_context_text_for_query(text: str, query: str, budget: int) -> str:
+    if approximate_tokens(text) <= budget:
+        return text.strip()
+    terms = context_focus_terms(query, text)
+    if not terms:
+        return trim_to_token_budget(text, budget)
+    lowered = text.lower()
+    positions = [lowered.find(term) for term in terms if lowered.find(term) >= 0]
+    if not positions:
+        return trim_to_token_budget(text, budget)
+    position = min(positions)
+    lines = text.splitlines()
+    cursor = 0
+    center = 0
+    for index, line in enumerate(lines):
+        if cursor <= position:
+            center = index
+        else:
+            break
+        cursor += len(line) + 1
+    selected: list[str] = []
+    tokens = 0
+    for line in lines[max(0, center - 8) : min(len(lines), center + 24)]:
+        line_tokens = approximate_tokens(line)
+        if selected and tokens + line_tokens > budget:
+            break
+        selected.append(line)
+        tokens += line_tokens
+    snippet = "\n".join(selected).strip()
+    if center > 8 and snippet:
+        snippet = "...\n" + snippet
+    return trim_to_token_budget(snippet, budget)
+
+
+def context_focus_terms(query: str, text: str) -> list[str]:
+    lowered = text.lower()
+    output: list[str] = []
+    seen: set[str] = set()
+    for term in re.findall(r"[a-z][a-z0-9_]+", query.lower().replace("-", " ")):
+        if len(term) < 5 or term in CONTEXT_REQUIRED_TERM_STOP_TERMS:
+            continue
+        if term in lowered and term not in seen:
+            output.append(term)
+            seen.add(term)
+    return output
 
 
 def trim_long_line(line: str, budget: int) -> str:

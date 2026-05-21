@@ -12,7 +12,7 @@ from oz_api.retrieval import vector_literal
 from oz_crawler.embeddings import embeddings_for_texts
 from oz_crawler.token_counting import token_count
 
-AGENT_CARD_TABLES = {"agent_operations", "agent_recipes"}
+AGENT_CARD_TABLES = {"code_examples", "api_operations", "sdk_methods", "agent_recipes"}
 
 
 def ensure_agent_card_embeddings(connection: Any, version_id: int) -> dict[str, int | str]:
@@ -56,21 +56,74 @@ def agent_embedding_rows(connection: Any, version_id: int) -> list[dict[str, Any
     result = rows(
         connection,
         """
-        select 'agent_operations' as table_name,
+        select 'code_examples' as table_name,
+               id,
+               example_key as row_key,
+               concat_ws(E'\n',
+                 title,
+                 description,
+                 caption,
+                 product,
+                 language,
+                 task_tags_json::text,
+                 imports_json::text,
+                 symbols_json::text,
+                 code
+               ) as content
+        from code_examples
+        where version_id = %s
+          and (
+            embedding is null
+            or embedding_model is distinct from %s
+            or embedding_dimensions is distinct from %s
+          )
+        union all
+        select 'api_operations' as table_name,
                id,
                operation_key as row_key,
                concat_ws(E'\n',
+                 operation_id,
                  operation_name,
                  operation_kind,
                  product,
+                 http_method,
+                 endpoint,
+                 tags_json::text,
+                 summary,
+                 description,
+                 required_params_json::text,
+                 optional_params_json::text,
+                 request_schema_json::text,
+                 response_schema_json::text,
+                 errors_json::text
+               ) as content
+        from api_operations
+        where version_id = %s
+          and (
+            embedding is null
+            or embedding_model is distinct from %s
+            or embedding_dimensions is distinct from %s
+          )
+        union all
+        select 'sdk_methods' as table_name,
+               id,
+               method_key as row_key,
+               concat_ws(E'\n',
+                 symbol_name,
+                 signature,
                  sdk_class,
                  sdk_method,
-                 endpoint,
-                 required_params::text,
-                 optional_params::text,
-                 content
+                 import_path,
+                 module_path,
+                 product,
+                 language,
+                 description,
+                 required_params_json::text,
+                 optional_params_json::text,
+                 return_type,
+                 errors_json::text
                ) as content
-        from agent_operations
+        from sdk_methods
         where version_id = %s
           and (
             embedding is null
@@ -86,9 +139,11 @@ def agent_embedding_rows(connection: Any, version_id: int) -> list[dict[str, Any
                  task_kind,
                  product,
                  language,
-                 content,
+                 summary,
                  coalesce(code, ''),
-                 info
+                 info,
+                 required_env_json::text,
+                 required_params_json::text
                ) as content
         from agent_recipes
         where version_id = %s
@@ -99,7 +154,20 @@ def agent_embedding_rows(connection: Any, version_id: int) -> list[dict[str, Any
           )
         order by table_name asc, id asc
         """,
-        (version_id, embedding_model(), embedding_dimensions(), version_id, embedding_model(), embedding_dimensions()),
+        (
+            version_id,
+            embedding_model(),
+            embedding_dimensions(),
+            version_id,
+            embedding_model(),
+            embedding_dimensions(),
+            version_id,
+            embedding_model(),
+            embedding_dimensions(),
+            version_id,
+            embedding_model(),
+            embedding_dimensions(),
+        ),
     )
     output = []
     for row in result:

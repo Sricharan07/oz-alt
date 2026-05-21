@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import ParseResult, urljoin, urlparse
 
 from oz_crawler.normalize import NormalizedPage, clean_markdown
-from oz_crawler.parsers import asyncapi_chunks, openapi_chunks, type_definition_chunks
+from oz_crawler.parsers import openapi_chunks, type_definition_chunks
 from oz_crawler.parsers.source_code import source_code_chunks, source_language_for_path, source_path_allowed
 from oz_crawler.profiles import LibraryProfile, url_allowed_by_profile
 from oz_crawler.crawl_runtime import CrawlRunState, max_page_bytes, retry_attempts
@@ -46,14 +46,20 @@ def collect_source_artifacts(
         preferred_urls=profile.preferred_urls if profile else [],
         discovered_urls=[url for page in pages for url in extract_urls(page.markdown, base_url=page.source_url)],
     )
+    explicit_urls = prioritized_urls(
+        seed_url,
+        preferred_urls=profile.preferred_urls if profile else [],
+        discovered_urls=[],
+    )
     urls = [url for url in urls if url_allowed_by_profile(url, profile)]
+    explicit_urls = [url for url in explicit_urls if url_allowed_by_profile(url, profile)]
     artifacts: list[SourceArtifact] = []
-    artifacts.extend(llms_artifacts(seed_url, profile=profile, state=state, limit=source_budget("llms", max_documents)))
-    artifacts.extend(markdown_url_artifacts(urls, profile=profile, state=state, limit=source_budget("markdown", max_documents)))
+    if not is_llms_full_url(seed_url):
+        artifacts.extend(llms_artifacts(seed_url, profile=profile, state=state, limit=source_budget("llms_txt", max_documents)))
+    artifacts.extend(markdown_url_artifacts(urls, profile=profile, state=state, limit=source_budget("website_url", max_documents)))
     artifacts.extend(openapi_artifacts(urls, profile=profile, state=state, limit=source_budget("openapi", max_documents)))
-    artifacts.extend(asyncapi_artifacts(urls, profile=profile, state=state, limit=source_budget("asyncapi", max_documents)))
-    artifacts.extend(type_definition_artifacts(urls, profile=profile, state=state, limit=source_budget("type_defs", max_documents)))
-    artifacts.extend(github_docs_artifacts(urls, profile=profile, state=state, limit=source_budget("github", max_documents)))
+    artifacts.extend(type_definition_artifacts(urls, profile=profile, state=state, limit=source_budget("github", max_documents)))
+    artifacts.extend(github_docs_artifacts(explicit_urls, profile=profile, state=state, limit=source_budget("github", max_documents)))
     return select_artifacts_by_priority(dedupe_artifacts(artifacts), max_documents)
 
 
@@ -88,8 +94,6 @@ def url_priority(url: str, preferred_urls: set[str]) -> int:
         return 2
     if re.search(r"(openapi|swagger).*\.(json|ya?ml)$", path):
         return 3
-    if re.search(r"asyncapi.*\.(json|ya?ml)$", path):
-        return 3
     if path.endswith((".d.ts", ".pyi")):
         return 4
     if parsed.netloc.lower() in {"github.com", "raw.githubusercontent.com"}:
@@ -101,12 +105,10 @@ def url_priority(url: str, preferred_urls: set[str]) -> int:
 
 def source_budget(kind: str, max_documents: int) -> int:
     defaults = {
-        "llms": max_documents,
-        "markdown": max_documents,
-        "openapi": min(max_documents, 200),
-        "asyncapi": min(max_documents, 200),
-        "type_defs": min(max_documents, 500),
-        "github": max_documents,
+        "llms_txt": 2000,
+        "website_url": 1200,
+        "openapi": 2000,
+        "github": 1200,
     }
     env_name = f"OZ_SOURCE_{kind.upper()}_LIMIT"
     try:
@@ -124,9 +126,9 @@ def select_artifacts_by_priority(artifacts: list[SourceArtifact], max_documents:
 
 def max_source_artifacts(max_documents: int) -> int:
     try:
-        configured = int(os.environ.get("OZ_SOURCE_MAX_ARTIFACTS", str(max_documents)))
+        configured = int(os.environ.get("OZ_SOURCE_MAX_ARTIFACTS", "2000"))
     except ValueError:
-        configured = max_documents
+        configured = 2000
     return max(1, configured)
 
 
@@ -134,8 +136,6 @@ def artifact_priority(artifact: SourceArtifact) -> int:
     if artifact.source_priority >= 0:
         return artifact.source_priority
     path = artifact.path.lower()
-    if path.startswith("api-reference/asyncapi/"):
-        return 0
     if path.startswith("api-reference/openapi/"):
         return 0
     if path.startswith("api-reference/types/") or path.startswith("api-reference/source/"):
@@ -159,9 +159,11 @@ def common_source_urls(seed_url: str) -> list[str]:
         f"{base}/openapi.yaml",
         f"{base}/swagger.json",
         f"{base}/swagger.yaml",
-        f"{base}/asyncapi.json",
-        f"{base}/asyncapi.yaml",
     ]
+
+
+def is_llms_full_url(url: str) -> bool:
+    return urlparse(url).path.lower().rstrip("/").endswith("/llms-full.txt")
 
 
 def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
@@ -192,11 +194,11 @@ def llms_artifacts(seed_url: str, *, profile: LibraryProfile | None, state: Craw
                     title=page.title,
                     source_url=page.source_url,
                     markdown=artifact_markdown(page.title, page.markdown),
-                    source_kind="llms_full",
+                    source_kind="llms_txt",
                     canonical_url=page.canonical_url or page.source_url,
-                    source_priority=source_priority_for(profile, "llms_full", 20),
+                    source_priority=source_priority_for(profile, "llms_txt", 20),
                     discovered_from=url,
-                    metadata=source_metadata(profile, "llms_full", document_path(page.source_url, page.title, "guide"), page.source_url),
+                    metadata=source_metadata(profile, "llms_txt", document_path(page.source_url, page.title, "guide"), page.source_url),
                 )
             )
             if len(output) >= limit:
@@ -228,10 +230,10 @@ def markdown_url_artifacts(
                 title=title,
                 source_url=url,
                 markdown=artifact_markdown(title, text),
-                source_kind="markdown",
+                source_kind="website_url",
                 canonical_url=url,
-                source_priority=source_priority_for(profile, "markdown", 30),
-                metadata=source_metadata(profile, "markdown", document_path(url, title, "guide"), url),
+                source_priority=source_priority_for(profile, "website_url", 30),
+                metadata=source_metadata(profile, "website_url", document_path(url, title, "guide"), url),
             )
         )
         if len(output) >= limit:
@@ -280,34 +282,6 @@ def openapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, state:
     return output
 
 
-def asyncapi_artifacts(urls: list[str], *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
-    output: list[SourceArtifact] = []
-    for url in urls:
-        if not url_allowed_by_profile(url, profile):
-            continue
-        path = urlparse(url).path.lower()
-        if not re.search(r"asyncapi.*\.(json|ya?ml)$", path):
-            continue
-        text = fetch_text(url, state=state)
-        if not text or looks_like_html(text):
-            continue
-        structured = asyncapi_chunks(text, url, limit=limit - len(output))
-        output.extend(
-            SourceArtifact(
-                **artifact_payload(item),
-                source_kind="asyncapi",
-                canonical_url=str(item.get("source_url") or url),
-                source_priority=source_priority_for(profile, "asyncapi", 11),
-                discovered_from=url,
-                metadata=source_metadata(profile, "asyncapi", str(item.get("path") or ""), url, extra=item.get("metadata")),
-            )
-            for item in structured
-        )
-        if len(output) >= limit:
-            break
-    return output
-
-
 def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None, state: CrawlRunState | None, limit: int) -> list[SourceArtifact]:
     output: list[SourceArtifact] = []
     for url in urls:
@@ -324,11 +298,11 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
         output.extend(
             SourceArtifact(
                 **artifact_payload(item),
-                source_kind="type_defs",
+                source_kind=origin_source_type(url),
                 canonical_url=str(item.get("source_url") or url),
-                source_priority=source_priority_for(profile, "type_defs", 12),
+                source_priority=source_priority_for(profile, "github", 12),
                 discovered_from=url,
-                metadata=source_metadata(profile, "type_defs", str(item.get("path") or ""), url, extra=item.get("metadata")),
+                metadata=source_metadata(profile, origin_source_type(url), str(item.get("path") or ""), url, extra={**(item.get("metadata") or {}), "document_role": "type_definition"}),
             )
             for item in structured
         )
@@ -339,10 +313,10 @@ def type_definition_artifacts(urls: list[str], *, profile: LibraryProfile | None
                     title="Type Definitions",
                     source_url=url,
                     markdown=code_artifact_markdown("Type Definitions", language, text),
-                    source_kind="type_defs",
+                    source_kind=origin_source_type(url),
                     canonical_url=url,
-                    source_priority=source_priority_for(profile, "type_defs", 12),
-                    metadata=source_metadata(profile, "type_defs", f"api-reference/types-{slugify(url)}.md", url, extra={"language": language}),
+                    source_priority=source_priority_for(profile, "github", 12),
+                    metadata=source_metadata(profile, origin_source_type(url), f"api-reference/types-{slugify(url)}.md", url, extra={"language": language, "document_role": "type_definition"}),
                 )
             )
         if len(output) >= limit:
@@ -470,20 +444,6 @@ def github_file_artifacts(
     if not text:
         return []
     lower_name = name.lower()
-    if re.search(r"asyncapi.*\.(json|ya?ml)$", lower_name):
-        structured = asyncapi_chunks(text, str(download_url), limit=limit)
-        if structured:
-            return [
-                SourceArtifact(
-                    **artifact_payload(item),
-                    source_kind="asyncapi",
-                    canonical_url=str(item.get("source_url") or download_url),
-                    source_priority=source_priority_for(profile, "asyncapi", 11),
-                    discovered_from=f"https://github.com/{owner}/{repo}",
-                    metadata=source_metadata(profile, "asyncapi", str(item.get("path") or name), str(download_url), extra=item.get("metadata")),
-                )
-                for item in structured
-            ]
     if re.search(r"(openapi|swagger).*\.(json|ya?ml)$", lower_name):
         structured = openapi_chunks(text, str(download_url), limit=limit)
         if structured:
@@ -505,11 +465,11 @@ def github_file_artifacts(
             return [
                 SourceArtifact(
                     **artifact_payload(item),
-                    source_kind="source_code",
+                    source_kind="github",
                     canonical_url=str(item.get("source_url") or download_url),
-                    source_priority=source_priority_for(profile, "source_code", 15),
+                    source_priority=source_priority_for(profile, "github", 15),
                     discovered_from=f"https://github.com/{owner}/{repo}",
-                    metadata=source_metadata(profile, "source_code", str(item.get("path") or name), str(download_url), extra=item.get("metadata")),
+                    metadata=source_metadata(profile, "github", str(item.get("path") or name), str(download_url), extra={**(item.get("metadata") or {}), "document_role": "sdk_source"}),
                 )
                 for item in structured[:limit]
             ]
@@ -601,6 +561,8 @@ def source_priority_for(profile: LibraryProfile | None, kind: str, default: int)
         return default
     if kind in profile.source_priorities:
         return profile.source_priorities[kind]
+    if kind == "llms_txt" and "llms_full" in profile.source_priorities:
+        return profile.source_priorities["llms_full"]
     return default
 
 
@@ -624,23 +586,50 @@ def source_metadata(
     metadata: dict[str, Any] = {}
     if isinstance(extra, dict):
         metadata.update(extra)
-    metadata.setdefault("source_type", source_kind)
-    metadata["source_kind"] = source_kind
+    source_type = normalize_source_type(source_kind, source_url)
+    metadata["source_type"] = source_type
+    metadata["source_kind"] = source_type
     product, confidence, signals = infer_product_with_confidence(profile, path, source_url)
     if product:
         metadata["product"] = product
     metadata["product_confidence"] = confidence
     if signals:
         metadata["product_signals"] = signals
-    metadata["source_role"] = infer_source_role(source_kind, path, source_url)
+    metadata["document_role"] = infer_document_role(source_type, path, source_url, metadata)
+    metadata.pop("source_role", None)
     metadata["deprecated"] = path_matches_any(path, source_url, generic_deprecated_patterns(profile))
     metadata["legacy"] = path_matches_any(path, source_url, generic_legacy_patterns(profile))
     metadata["current"] = not metadata["deprecated"] and not metadata["legacy"]
     if profile and profile.current_patterns:
         metadata["current"] = path_matches_any(path, source_url, profile.current_patterns)
     if "protocol" not in metadata:
-        metadata["protocol"] = infer_protocol(source_kind, path, source_url)
+        metadata["protocol"] = infer_protocol(source_type, path, source_url)
     return {key: value for key, value in metadata.items() if value not in ("", None, [], {})}
+
+
+def normalize_source_type(source_kind: str, source_url: str) -> str:
+    raw = str(source_kind or "").strip().lower().replace("-", "_")
+    if raw in {"llms", "llms_full", "llms_txt"}:
+        return "llms_txt"
+    if raw == "openapi":
+        return "openapi"
+    if raw in {"github", "source_code", "type_defs", "type_definition"}:
+        return origin_source_type(source_url)
+    if raw in {"website", "markdown", "official_docs", "docs", "website_url"}:
+        return "website_url"
+    return origin_source_type(source_url)
+
+
+def origin_source_type(source_url: str) -> str:
+    parsed = urlparse(source_url)
+    lower_url = source_url.lower()
+    if lower_url.endswith(("/llms.txt", "/llms-full.txt")):
+        return "llms_txt"
+    if re.search(r"(openapi|swagger).*\.(json|ya?ml)$", parsed.path.lower()):
+        return "openapi"
+    if parsed.netloc.lower() in {"github.com", "raw.githubusercontent.com", "api.github.com"}:
+        return "github"
+    return "website_url"
 
 
 def infer_product(profile: LibraryProfile | None, path: str, source_url: str) -> str:
@@ -667,30 +656,48 @@ def infer_product_with_confidence(profile: LibraryProfile | None, path: str, sou
     return "", 0.0, []
 
 
-def infer_source_role(source_kind: str, path: str, source_url: str) -> str:
+def infer_document_role(source_kind: str, path: str, source_url: str, metadata: dict[str, Any] | None = None) -> str:
+    metadata = metadata or {}
+    explicit = str(metadata.get("document_role") or "").strip().lower().replace("-", "_")
+    if explicit == "cookbook":
+        explicit = "example"
+    if explicit == "api_spec":
+        explicit = "api_reference"
+    if explicit in {"readme", "guide", "api_reference", "example", "test", "sdk_source", "type_definition", "changelog", "troubleshooting", "config", "unknown"}:
+        return explicit
     haystack = f"{source_kind} {path} {source_url}".lower()
-    if "openapi" in haystack or "swagger" in haystack or "asyncapi" in haystack:
-        return "api_spec"
-    if source_kind == "source_code":
+    if source_kind == "openapi" or "openapi" in haystack or "swagger" in haystack:
+        return "api_reference"
+    if path.endswith((".d.ts", ".pyi")) or "type_definition" in haystack:
+        return "type_definition"
+    if re.search(r"(^|/)(src|lib|packages|pkg)(/|$)", haystack) and path.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs")):
         if re.search(r"(^|/)(test|tests|spec|specs)/|[_-](test|spec)\.", haystack):
             return "test"
         if re.search(r"(^|/)(example|examples|cookbook|samples?)/", haystack):
             return "example"
         return "sdk_source"
     if re.search(r"(^|/)(example|examples|cookbook|recipes?|samples?)/", haystack):
-        return "cookbook"
+        return "example"
     if re.search(r"(^|/)(test|tests|spec|specs)/", haystack):
         return "test"
     if re.search(r"(^|/)(readme|index)\.(md|mdx|txt)$", haystack):
-        return "README"
+        return "readme"
+    if re.search(r"(^|/)(api-reference|reference|api)(/|$)", haystack):
+        return "api_reference"
     if "changelog" in haystack or "release" in haystack:
         return "changelog"
-    return "docs"
+    if any(term in haystack for term in ("troubleshooting", "error", "errors", "exception")):
+        return "troubleshooting"
+    if any(term in haystack for term in (".env", "config", "configuration", "package.json", "tsconfig", "docker-compose")):
+        return "config"
+    if re.search(r"(^|/)(docs?|guides?|learn)(/|$)", haystack):
+        return "guide"
+    return "guide"
 
 
 def infer_protocol(source_kind: str, path: str, source_url: str) -> str:
     haystack = f"{source_kind} {path} {source_url}".lower()
-    if "asyncapi" in haystack or "websocket" in haystack or "ws/" in haystack:
+    if "websocket" in haystack or "ws/" in haystack:
         return "websocket"
     if "sse" in haystack or "server-sent" in haystack or "event-stream" in haystack:
         return "sse"
@@ -868,7 +875,20 @@ def dedupe_artifacts(artifacts: list[SourceArtifact]) -> list[SourceArtifact]:
 
 def canonical_source_key(artifact: SourceArtifact) -> str:
     key = artifact.canonical_url or artifact.source_url or artifact.path
-    return str(key).split("#", 1)[0].rstrip("/")
+    text = str(key).rstrip("/")
+    if preserves_virtual_source_fragment(text, artifact):
+        return text
+    return text.split("#", 1)[0].rstrip("/")
+
+
+def preserves_virtual_source_fragment(url: str, artifact: SourceArtifact) -> bool:
+    parsed = urlparse(url)
+    if not parsed.fragment:
+        return False
+    source_type = str((artifact.metadata or {}).get("source_type") or artifact.source_kind or "").lower()
+    if source_type in {"llms_txt", "openapi"}:
+        return True
+    return bool(re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower()))
 
 
 def slugify(value: str) -> str:
@@ -879,6 +899,6 @@ def slugify(value: str) -> str:
 def github_artifact_path_allowed(name: str, profile: LibraryProfile | None) -> bool:
     if re.search(r"\.(md|mdx|d\.ts|pyi)$", name, re.I):
         return True
-    if re.search(r"(openapi|swagger|asyncapi).*\.(json|ya?ml)$", name, re.I):
+    if re.search(r"(openapi|swagger).*\.(json|ya?ml)$", name, re.I):
         return True
     return bool(profile and profile.include_source_files and source_path_allowed(name, profile.source_file_patterns))

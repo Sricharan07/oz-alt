@@ -33,7 +33,7 @@ pub(crate) fn init_project(project_root: &Path) -> Result<()> {
     write_lock(project_root, &lock)?;
     update_gitignore(project_root)?;
 
-    println!(
+    eprintln!(
         "initialized Oz project metadata at {}",
         project_root.join(LOCK_FILE).display()
     );

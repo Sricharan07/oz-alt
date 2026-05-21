@@ -10,7 +10,7 @@ from oz_api.retrieval_metrics import metric_prefix
 from oz_api.redis_store import redis_client
 
 LOGGER = logging.getLogger(__name__)
-CACHE_VERSION = "retrieval-v5"
+CACHE_VERSION = "retrieval-v17"
 
 
 def get_cached_results(route: str, query: str, scope: str | None, max_results: int, variant: str) -> list[dict[str, Any]] | None:

@@ -165,9 +165,10 @@ class FastApiServerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("retrieval_mode", payload)
-        self.assertGreaterEqual(len(payload["results"]), 1)
-        self.assertIn("snippet", payload["results"][0])
-        self.assertNotIn("title:", payload["results"][0]["snippet"])
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(payload["codeSnippets"], [])
+        self.assertEqual(payload["infoSnippets"], [])
+        self.assertNotIn("fixture", payload.get("retrieval_mode", ""))
 
 
 if __name__ == "__main__":

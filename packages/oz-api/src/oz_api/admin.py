@@ -195,9 +195,11 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             """
             select v.name as vendor, l.name as library, lv.version,
                    count(distinct ao.id)::bigint as operation_count,
-                   count(distinct ae.id)::bigint as example_count,
+                   count(distinct ce.id)::bigint as example_count,
                    count(distinct ar.id)::bigint as recipe_count,
                    count(distinct ao.id) filter (where ao.embedding is not null)::bigint as embedded_operations,
+                   count(distinct ce.id) filter (where ce.embedding is not null)::bigint as embedded_examples,
+                   count(distinct sm.id) filter (where sm.embedding is not null)::bigint as embedded_sdk_methods,
                    count(distinct ar.id) filter (where ar.embedding is not null)::bigint as embedded_recipes,
                    round(avg(ar.confidence)::numeric, 3) as avg_recipe_confidence,
                    round(avg(ar.quality_score)::numeric, 3) as avg_recipe_quality
@@ -205,8 +207,9 @@ def load_admin_snapshot(storage: RegistryStorage) -> dict[str, list[dict[str, An
             join vendors v on v.id = l.vendor_id
             left join refs r on r.library_id = l.id and r.channel = 'latest'
             left join library_versions lv on lv.id = coalesce(l.default_version_id, r.version_id)
-            left join agent_operations ao on ao.version_id = lv.id
-            left join agent_operation_examples ae on ae.version_id = lv.id
+            left join api_operations ao on ao.version_id = lv.id
+            left join code_examples ce on ce.version_id = lv.id
+            left join sdk_methods sm on sm.version_id = lv.id
             left join agent_recipes ar on ar.version_id = lv.id
             group by v.name, l.name, lv.version
             order by v.name asc, l.name asc

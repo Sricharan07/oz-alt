@@ -15,16 +15,18 @@ from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 from oz_crawler.chunks import write_chunks
+from oz_crawler.corpus_surfaces import normalized_metadata, write_corpus_surfaces
 from oz_crawler.crawl_runtime import CrawlRunState, ProgressCallback, max_page_bytes, retry_attempts
 from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
 from oz_crawler.profiles import LibraryProfile, load_profile, url_allowed_by_profile
 from oz_crawler.quality import QualityResult, score_page
 from oz_crawler.security import CrawlerFetchError, assert_public_http_url, fetch_public_url, pinned_fetch_required
-from oz_crawler.splitting import assign_page_paths
+from oz_crawler.splitting import assign_page_paths, split_llms_full
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
 from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
+from oz_crawler.token_counting import token_count
 from oz_crawler.validation import validate_fixture, write_validation
 from oz_crawler.versioning import filter_current_version
 
@@ -140,6 +142,7 @@ def crawl_single_page(
     write_rejections(target, rejected)
     state.write_artifacts(target)
     write_source_documents(target, all_pages)
+    write_corpus_surfaces(target, all_pages)
     write_user_manifest(target, vendor=vendor, library=library, version=version, pages=all_pages, source_url=url)
     write_chunks(target, all_pages)
     write_symbols(target, all_pages, profile=profile)
@@ -181,17 +184,27 @@ def write_source_documents(target: Path, pages: list[NormalizedPage]) -> None:
         if key in seen:
             continue
         seen.add(key)
+        metadata = normalized_metadata(page)
+        clean = clean_markdown(page.markdown)
         rows.append(
             {
                 "source_document_key": key,
-                "source_kind": page.source_kind,
+                "source_kind": metadata.get("source_type") or page.source_kind,
+                "source_type": metadata.get("source_type") or page.source_kind,
+                "document_role": metadata.get("document_role") or "unknown",
                 "canonical_url": page.canonical_url or page.source_url,
                 "source_url": page.source_url,
                 "path": page.path,
                 "title": page.title,
+                "product": metadata.get("product") or "",
+                "product_confidence": metadata.get("product_confidence") or 0,
+                "language": metadata.get("language") or "",
+                "content_sha": page_content_key(clean),
+                "raw_token_count": token_count(page.markdown),
+                "clean_token_count": token_count(clean),
                 "source_priority": page.source_priority,
                 "discovered_from": page.discovered_from,
-                "metadata_json": page.source_metadata or {},
+                "metadata_json": metadata,
             }
         )
     (target / "_sources.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
@@ -231,7 +244,20 @@ def write_user_manifest(
 
 def canonical_source_key(page: NormalizedPage) -> str:
     value = page.canonical_url or page.source_url or page.path or page.title
-    return str(value).split("#", 1)[0].rstrip("/")
+    text = str(value).rstrip("/")
+    if preserves_virtual_source_fragment(text, page.source_kind, page.source_metadata):
+        return text
+    return text.split("#", 1)[0].rstrip("/")
+
+
+def preserves_virtual_source_fragment(url: str, source_kind: str | None, metadata: dict[str, Any] | None) -> bool:
+    parsed = urlparse(url)
+    if not parsed.fragment:
+        return False
+    source_type = str((metadata or {}).get("source_type") or source_kind or "").lower()
+    if source_type in {"llms_txt", "openapi"}:
+        return True
+    return bool(re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower()))
 
 
 def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[NormalizedPage]:
@@ -254,7 +280,8 @@ def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[Normalize
 
 
 def artifact_content_type(artifact: SourceArtifact) -> str:
-    if artifact.source_kind in {"openapi", "asyncapi", "type_defs", "source_code"}:
+    role = str((artifact.metadata or {}).get("document_role") or "").lower()
+    if artifact.source_kind == "openapi" or role in {"api_reference", "sdk_source", "type_definition"}:
         return "api_reference"
     if artifact.source_kind in {"github"} and "/examples/" in f"/{artifact.path.lower()}":
         return "code_example"
@@ -271,12 +298,34 @@ def crawl_pages(
 ) -> list[NormalizedPage]:
     if options.max_pages <= 0:
         return []
+    if is_llms_full_url(url):
+        return crawl_llms_full_pages(url, title=title, state=state)
     if profile is not None and profile.needs_js and options.fetcher == "auto":
         options = replace(options, fetcher="dynamic")
     crawled = crawl_pages_with_scrapling(url, options=options, profile=profile, state=state)
     if crawled is None:
         crawled = crawl_pages_with_stdlib(url, options=options, profile=profile, state=state)
     return [normalize_html(page.html, source_url=page.source_url, title=title or page.title) for page in crawled]
+
+
+def is_llms_full_url(url: str) -> bool:
+    return urlparse(url).path.lower().rstrip("/").endswith("/llms-full.txt")
+
+
+def crawl_llms_full_pages(
+    url: str,
+    *,
+    title: str | None,
+    state: CrawlRunState | None = None,
+) -> list[NormalizedPage]:
+    text = fetch_html_stdlib(url, state=state)
+    pages = split_llms_full(text, source_url=url)
+    if title and len(pages) == 1:
+        pages = [replace(pages[0], title=title)]
+    if state is not None:
+        for page in pages:
+            state.record_page(page.source_url, page.markdown, page.title)
+    return pages
 
 
 def crawl_pages_with_scrapling(
@@ -640,6 +689,8 @@ def prepare_pages(
                 quality_score=quality.score,
                 content_type=quality.content_type,
                 symbols=tuple(extract_page_symbol_names(page, profile=profile)),
+                source_kind=normalized_metadata(page)["source_type"],
+                source_metadata=normalized_metadata(page),
             )
         )
     return accepted, rejected
@@ -654,11 +705,12 @@ def should_apply_language_filter(page: NormalizedPage) -> bool:
     material coding agents need most.
     """
     source_kind = (page.source_kind or "").lower()
-    if source_kind in {"source_code", "type_defs", "openapi", "asyncapi"}:
+    if source_kind in {"github", "openapi"} and str((page.source_metadata or {}).get("document_role") or "").lower() in {"sdk_source", "type_definition", "api_reference"}:
         return False
     metadata = page.source_metadata or {}
     source_type = str(metadata.get("source_type") or metadata.get("source_kind") or "").lower()
-    if source_type in {"source_code", "type_defs", "openapi", "asyncapi"}:
+    document_role = str(metadata.get("document_role") or "").lower()
+    if source_type == "openapi" or document_role in {"sdk_source", "type_definition", "api_reference"}:
         return False
     content_type = (page.content_type or "").lower()
     if content_type in {"code_example", "api_reference", "config", "cli"} and "```" in page.markdown:
@@ -892,16 +944,15 @@ def discover_declared_doc_links(url: str, *, fetcher: str = "auto") -> list[str]
     base = f"{parsed.scheme}://{parsed.netloc}"
     links: list[str] = []
 
-    for name in ("/llms-full.txt", "/llms.txt"):
-        text = fetch_text_optional(base + name, fetcher=fetcher)
-        if text:
-            links.extend(extract_urls(text, base_url=base))
+    text = fetch_text_optional(base + "/llms.txt", fetcher=fetcher)
+    if text:
+        links.extend(extract_urls(text, base_url=base))
 
     sitemap = fetch_text_optional(base + "/sitemap.xml", fetcher=fetcher)
     if sitemap:
         links.extend(extract_sitemap_urls(sitemap))
 
-    return [link for link in links if same_netloc(link, parsed.netloc)]
+    return dedupe([link for link in links if same_netloc(link, parsed.netloc)])
 
 
 def same_netloc(url: str, netloc: str) -> bool:

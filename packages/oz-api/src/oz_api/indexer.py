@@ -8,14 +8,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urldefrag
+from urllib.parse import urlparse, urldefrag
 
 from oz_api.agent_embeddings import ensure_agent_card_embeddings
-from oz_api.context_cards import build_context_snippets, build_source_sections
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
 from oz_api.observability import observe_duration
-from oz_api.operation_cards import build_agent_operation_examples, build_agent_operations, build_agent_recipes
+from oz_api.recipe_compiler import build_agent_recipes_from_surfaces
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
@@ -147,13 +146,13 @@ def write_catalog_and_chunks(
             )
         writer.delete_stale_chunks(version_id, current_chunk_shas)
         writer.resolve_parent_chunks(version_id)
-        writer.rebuild_context_index(version_id)
+        writer.rebuild_context_index(version_id, fixture=fixture)
         result = writer.ensure_embeddings(version_id, crawler_job_id=optional_int(entry.get("crawler_job_id")))
         embedding_results.append(result)
         if result.complete:
             writer.resolve_parent_chunks(version_id)
             writer.rebuild_dedupe_clusters(version_id)
-            writer.rebuild_context_index(version_id, embed_agent_cards=True)
+            writer.rebuild_context_index(version_id, fixture=fixture, embed_agent_cards=True)
             writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
     return embedding_results
 
@@ -211,6 +210,7 @@ def source_document_rows(fixture: Path, rows: list[dict[str, Any]]) -> list[dict
     source_path = fixture / "_sources.jsonl"
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
+    coverage_by_key = source_coverage_rows(fixture)
     if source_path.exists():
         for line in source_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -220,32 +220,207 @@ def source_document_rows(fixture: Path, rows: list[dict[str, Any]]) -> list[dict
             if not key or key in seen:
                 continue
             source["source_document_key"] = key
+            metadata = source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}
+            source.setdefault("source_type", source.get("source_kind") or metadata.get("source_type") or "website_url")
+            source.setdefault("document_role", metadata.get("document_role") or "unknown")
+            source.setdefault("product", metadata.get("product") or "")
+            source.setdefault("product_confidence", metadata.get("product_confidence") or 0)
+            source.setdefault("language", metadata.get("language") or "")
+            source.setdefault("content_sha", "")
+            source.setdefault("raw_token_count", 0)
+            source.setdefault("clean_token_count", 0)
+            if key in coverage_by_key:
+                source["clean_token_count"] = int(coverage_by_key[key].get("clean_token_count") or source.get("clean_token_count") or 0)
+                source["chunk_coverage_ratio"] = float(coverage_by_key[key].get("coverage_ratio") or 0)
+                source["coverage_json"] = coverage_by_key[key]
+                metadata = source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}
+                source["metadata_json"] = {**metadata, "chunk_coverage": coverage_by_key[key]}
             output.append(source)
             seen.add(key)
     for row in rows:
         key = source_document_key_for_row(row)
         if not key or key in seen:
             continue
+        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        if key in coverage_by_key:
+            metadata = {**metadata, "chunk_coverage": coverage_by_key[key]}
         output.append(
             {
                 "source_document_key": key,
-                "source_kind": str(row.get("source_kind") or "website"),
+                "source_kind": str(row.get("source_kind") or row.get("source_type") or "website_url"),
+                "source_type": str(row.get("source_type") or row.get("source_kind") or "website_url"),
+                "document_role": row_metadata_value(row, "document_role", "unknown"),
                 "canonical_url": str(row.get("canonical_url") or row.get("source_url") or ""),
                 "source_url": str(row.get("source_url") or ""),
                 "path": str(row.get("path") or ""),
                 "title": first_heading(str(row.get("text") or "")) or Path(str(row.get("path") or "")).stem,
+                "product": row_metadata_value(row, "product", ""),
+                "product_confidence": float(row_metadata_value(row, "product_confidence", 0) or 0),
+                "language": row_metadata_value(row, "language", ""),
+                "content_sha": str(row.get("content_sha") or content_sha_for_row(row)),
+                "raw_token_count": int(row.get("raw_token_count") or 0),
+                "clean_token_count": int(
+                    coverage_by_key.get(key, {}).get("clean_token_count")
+                    or row.get("token_count")
+                    or token_count(str(row.get("text") or ""))
+                ),
+                "chunk_coverage_ratio": float(coverage_by_key.get(key, {}).get("coverage_ratio") or 0),
+                "coverage_json": coverage_by_key.get(key, {}),
                 "source_priority": int(row.get("source_priority") or 50),
                 "discovered_from": nullable_string(row.get("discovered_from")),
-                "metadata_json": row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {},
+                "metadata_json": metadata,
             }
         )
         seen.add(key)
     return output
 
 
+def source_coverage_rows(fixture: Path) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+    for row in jsonl_rows(fixture / "_chunk_coverage.jsonl"):
+        key = str(row.get("source_document_key") or "")
+        if key:
+            output[key] = row
+    return output
+
+
+def row_metadata_value(row: dict[str, Any], key: str, default: Any) -> Any:
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    value = metadata.get(key, row.get(key, default))
+    return default if value in (None, "") else value
+
+
+def jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    output: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if isinstance(value, dict):
+            output.append(value)
+    return output
+
+
+def source_section_rows(fixture: Path, chunk_rows_for_fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = jsonl_rows(fixture / "_source_sections.jsonl")
+    if rows:
+        return [normalize_surface_row(row) for row in rows]
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in chunk_rows_for_fallback:
+        key = str(row.get("chunk_key") or row.get("chunk_sha") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        content = str(row.get("content") or row.get("text") or "")
+        heading_path = list_of_strings(row.get("heading_path"))
+        output.append(
+            {
+                "source_document_key": row.get("source_document_key") or source_document_key_for_row(row),
+                "section_key": f"fallback-section:{key}",
+                "path": str(row.get("path") or ""),
+                "title": heading_path[-1] if heading_path else first_heading(content) or Path(str(row.get("path") or "")).stem,
+                "heading_path": heading_path,
+                "source_anchor": row.get("source_anchor"),
+                "document_role": metadata.get("document_role") or "unknown",
+                "content_type": row.get("content_type") or "prose",
+                "product": metadata.get("product") or "",
+                "product_confidence": metadata.get("product_confidence") or 0,
+                "language": metadata.get("language") or "",
+                "start_line": row.get("start_line") or 1,
+                "end_line": row.get("end_line"),
+                "content": content,
+                "token_count": row.get("token_count") or token_count(content),
+                "quality_score": row.get("quality_score") or 1,
+                "metadata_json": metadata,
+            }
+        )
+    return output
+
+
+def code_example_rows(fixture: Path) -> list[dict[str, Any]]:
+    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_code_examples.jsonl")]
+
+
+def api_operation_rows(fixture: Path) -> list[dict[str, Any]]:
+    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_api_operations.jsonl")]
+
+
+def sdk_method_rows(fixture: Path) -> list[dict[str, Any]]:
+    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_sdk_methods.jsonl")]
+
+
+def normalize_surface_row(row: dict[str, Any]) -> dict[str, Any]:
+    output = dict(row)
+    metadata = output.get("metadata_json") if isinstance(output.get("metadata_json"), dict) else {}
+    output["metadata_json"] = metadata
+    output.setdefault("source_type", metadata.get("source_type") or "website_url")
+    output.setdefault("document_role", metadata.get("document_role") or "unknown")
+    output.setdefault("product", metadata.get("product") or "")
+    output.setdefault("product_confidence", metadata.get("product_confidence") or 0)
+    output.setdefault("language", metadata.get("language") or "")
+    return output
+
+
+def field(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def source_document_key_from_surface(row: dict[str, Any]) -> str:
+    return source_document_key_for_row(row)
+
+
+def list_json(value: Any) -> str:
+    if isinstance(value, list):
+        return json.dumps(value, sort_keys=True)
+    if value in (None, ""):
+        return "[]"
+    return json.dumps([value], sort_keys=True)
+
+
+def dict_json(value: Any) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    if value in (None, ""):
+        return "{}"
+    return json.dumps(value, sort_keys=True)
+
+
+def text_for_search(*values: Any) -> str:
+    parts: list[str] = []
+    for value in values:
+        if isinstance(value, (dict, list)):
+            parts.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        elif value is not None:
+            parts.append(str(value))
+    return "\n".join(part for part in parts if part.strip())
+
+
 def source_document_key_for_row(row: dict[str, Any]) -> str:
     value = row.get("source_document_key") or row.get("canonical_url") or row.get("source_url") or row.get("path") or ""
-    return str(value).split("#", 1)[0].rstrip("/")
+    text = str(value).rstrip("/")
+    if preserves_virtual_source_fragment(text, row):
+        return text
+    return text.split("#", 1)[0].rstrip("/")
+
+
+def preserves_virtual_source_fragment(url: str, row: dict[str, Any]) -> bool:
+    parsed = urlparse(url)
+    if not parsed.fragment:
+        return False
+    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+    source_type = str(row.get("source_type") or row.get("source_kind") or metadata.get("source_type") or "").lower()
+    if source_type in {"llms_txt", "openapi"}:
+        return True
+    return bool(
+        re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower())
+        or re.search(r"(?:openapi|swagger)\.(?:json|ya?ml)$", parsed.path.lower())
+    )
 
 
 def first_heading(text: str) -> str:
@@ -799,16 +974,29 @@ class PostgresWriter(IndexWriter):
         return self.scalar(
             """
             insert into source_documents(
-              version_id, source_document_key, source_kind, canonical_url, source_url,
-              path, title, source_priority, discovered_from, metadata_json, fetched_at
+              version_id, source_document_key, source_kind, source_type, document_role,
+              canonical_url, source_url, path, title, product, product_confidence,
+              language, content_sha, raw_token_count, clean_token_count,
+              chunk_coverage_ratio, coverage_json,
+              source_priority, discovered_from, metadata_json, fetched_at
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, now())
             on conflict (version_id, source_document_key) do update
               set source_kind = excluded.source_kind,
+                  source_type = excluded.source_type,
+                  document_role = excluded.document_role,
                   canonical_url = excluded.canonical_url,
                   source_url = excluded.source_url,
                   path = excluded.path,
                   title = excluded.title,
+                  product = excluded.product,
+                  product_confidence = excluded.product_confidence,
+                  language = excluded.language,
+                  content_sha = excluded.content_sha,
+                  raw_token_count = excluded.raw_token_count,
+                  clean_token_count = excluded.clean_token_count,
+                  chunk_coverage_ratio = excluded.chunk_coverage_ratio,
+                  coverage_json = excluded.coverage_json,
                   source_priority = excluded.source_priority,
                   discovered_from = excluded.discovered_from,
                   metadata_json = excluded.metadata_json,
@@ -818,11 +1006,21 @@ class PostgresWriter(IndexWriter):
             (
                 version_id,
                 str(source["source_document_key"]),
-                str(source.get("source_kind") or "website"),
+                str(source.get("source_kind") or source.get("source_type") or "website_url"),
+                str(source.get("source_type") or source.get("source_kind") or "website_url"),
+                str(source.get("document_role") or "unknown"),
                 nullable_string(source.get("canonical_url")),
                 nullable_string(source.get("source_url")),
                 nullable_string(source.get("path")),
                 nullable_string(source.get("title")),
+                str(source.get("product") or ""),
+                float(source.get("product_confidence") or 0),
+                str(source.get("language") or ""),
+                nullable_string(source.get("content_sha")),
+                int(source.get("raw_token_count") or 0),
+                int(source.get("clean_token_count") or 0),
+                float(source.get("chunk_coverage_ratio") or 0),
+                json.dumps(source.get("coverage_json") if isinstance(source.get("coverage_json"), dict) else {}, sort_keys=True),
                 int(source.get("source_priority") or 50),
                 nullable_string(source.get("discovered_from")),
                 json.dumps(source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}, sort_keys=True),
@@ -1025,19 +1223,39 @@ class PostgresWriter(IndexWriter):
             (version_id, version_id, version_id),
         )
 
-    def rebuild_context_index(self, version_id: int, *, embed_agent_cards: bool = False) -> None:
+    def rebuild_context_index(self, version_id: int, *, fixture: Path, embed_agent_cards: bool = False) -> None:
+        source_ids = self.source_document_id_map(version_id)
         rows = self.context_chunk_rows(version_id)
-        sections = build_source_sections(rows)
-        snippets = build_context_snippets(rows, self.replace_source_sections(version_id, sections))
-        self.replace_context_snippets(version_id, snippets)
-        operations = build_agent_operations(rows)
-        operation_ids = self.replace_agent_operations(version_id, operations)
-        examples = build_agent_operation_examples(rows, operations)
-        self.replace_agent_operation_examples(version_id, examples, operation_ids)
-        recipes = build_agent_recipes(rows, operations, examples)
-        self.replace_agent_recipes(version_id, recipes, operation_ids)
+        sections = source_section_rows(fixture, rows)
+        section_ids = self.replace_source_sections(version_id, sections, source_ids)
+        examples = code_example_rows(fixture)
+        operations = api_operation_rows(fixture)
+        methods = sdk_method_rows(fixture)
+        example_ids = self.replace_code_examples(version_id, examples, source_ids, section_ids)
+        operation_ids = self.replace_api_operations(version_id, operations, source_ids)
+        method_ids = self.replace_sdk_methods(version_id, methods, source_ids)
+        recipes = build_agent_recipes_from_surfaces(
+            code_examples=examples,
+            api_operations=operations,
+            sdk_methods=methods,
+            source_sections=sections,
+            code_example_ids=example_ids,
+            api_operation_ids=operation_ids,
+            sdk_method_ids=method_ids,
+            source_section_ids=section_ids,
+        )
+        self.replace_agent_recipes(version_id, recipes)
         if embed_agent_cards:
             ensure_agent_card_embeddings(self.connection, version_id)
+
+    def source_document_id_map(self, version_id: int) -> dict[str, int]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select source_document_key, id from source_documents where version_id = %s",
+                (version_id,),
+            )
+            rows = cursor.fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
 
     def context_chunk_rows(self, version_id: int) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
@@ -1049,6 +1267,11 @@ class PostgresWriter(IndexWriter):
                        c.source_anchor, c.content, c.dedupe_canonical,
                        coalesce(sd.title, '') as source_title,
                        coalesce(sd.source_kind, '') as source_kind,
+                       coalesce(sd.source_type, '') as source_type,
+                       coalesce(sd.document_role, '') as document_role,
+                       coalesce(sd.product, '') as product,
+                       coalesce(sd.product_confidence, 0) as product_confidence,
+                       coalesce(sd.language, '') as source_language,
                        coalesce(sd.source_priority, 50) as source_priority,
                        coalesce(c.metadata_json, '{}'::jsonb) as chunk_metadata_json,
                        coalesce(sd.metadata_json, '{}'::jsonb) as source_metadata_json
@@ -1085,25 +1308,47 @@ class PostgresWriter(IndexWriter):
                     "dedupe_canonical": row[18],
                     "source_title": row[19],
                     "source_kind": row[20],
-                    "source_priority": row[21],
-                    "metadata_json": merge_metadata(row[22], row[23]),
+                    "source_type": row[21],
+                    "document_role": row[22],
+                    "product": row[23],
+                    "product_confidence": row[24],
+                    "language": row[25],
+                    "source_priority": row[26],
+                    "metadata_json": merge_metadata(
+                        {
+                            **(row[27] if isinstance(row[27], dict) else {}),
+                            "source_type": row[21],
+                            "document_role": row[22],
+                            "product": row[23],
+                            "product_confidence": row[24],
+                            "language": row[25],
+                        },
+                        row[28],
+                    ),
                 }
             )
         return output
 
-    def replace_source_sections(self, version_id: int, sections: list[Any]) -> dict[str, int]:
-        self.execute("delete from context_snippets where version_id = %s", (version_id,))
+    def replace_source_sections(self, version_id: int, sections: list[Any], source_ids: dict[str, int]) -> dict[str, int]:
         self.execute("delete from source_sections where version_id = %s", (version_id,))
         section_ids: dict[str, int] = {}
         for section in sections:
+            section_key = str(field(section, "section_key") or "")
+            if not section_key:
+                continue
+            metadata = field(section, "metadata_json", {}) if isinstance(field(section, "metadata_json", {}), dict) else {}
             section_id = self.scalar(
                 """
                 insert into source_sections(
                   version_id, source_document_id, section_key, path, source_url, source_anchor,
-                  title, heading_path, content_type, start_line, end_line, content, token_count,
-                  quality_score, metadata_json
+                  title, heading_path, document_role, content_type, product, product_confidence,
+                  language, start_line, end_line, content, token_count, quality_score, metadata_json
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                values (
+                  %s, %s, %s, %s, %s, %s,
+                  %s, %s::jsonb, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
                 on conflict (version_id, section_key) do update
                   set source_document_id = excluded.source_document_id,
                       path = excluded.path,
@@ -1111,7 +1356,11 @@ class PostgresWriter(IndexWriter):
                       source_anchor = excluded.source_anchor,
                       title = excluded.title,
                       heading_path = excluded.heading_path,
+                      document_role = excluded.document_role,
                       content_type = excluded.content_type,
+                      product = excluded.product,
+                      product_confidence = excluded.product_confidence,
+                      language = excluded.language,
                       start_line = excluded.start_line,
                       end_line = excluded.end_line,
                       content = excluded.content,
@@ -1122,241 +1371,325 @@ class PostgresWriter(IndexWriter):
                 """,
                 (
                     version_id,
-                    section.source_document_id,
-                    section.section_key,
-                    section.path,
-                    section.source_url,
-                    section.source_anchor,
-                    section.title,
-                    json.dumps(section.heading_path),
-                    section.content_type,
-                    section.start_line,
-                    section.end_line,
-                    section.content,
-                    section.token_count,
-                    section.quality_score,
-                    json.dumps(section.metadata_json, sort_keys=True),
+                    source_ids.get(source_document_key_from_surface(section)) or field(section, "source_document_id"),
+                    section_key,
+                    str(field(section, "path", "")),
+                    nullable_string(field(section, "source_url")),
+                    nullable_string(field(section, "source_anchor")),
+                    str(field(section, "title", "")) or "Documentation section",
+                    json.dumps(list_of_strings(field(section, "heading_path"))),
+                    str(field(section, "document_role", metadata.get("document_role") or "unknown")),
+                    str(field(section, "content_type", "prose")),
+                    str(field(section, "product", metadata.get("product") or "")),
+                    float(field(section, "product_confidence", metadata.get("product_confidence") or 0) or 0),
+                    str(field(section, "language", metadata.get("language") or "")),
+                    int(field(section, "start_line", 1) or 1),
+                    optional_int(field(section, "end_line")),
+                    str(field(section, "content", "")),
+                    int(field(section, "token_count", token_count(str(field(section, "content", "")))) or 0),
+                    float(field(section, "quality_score", 1) or 1),
+                    json.dumps(metadata, sort_keys=True),
                 ),
             )
-            section_ids[section.section_key] = section_id
+            section_ids[section_key] = section_id
         return section_ids
 
-    def replace_context_snippets(self, version_id: int, snippets: list[Any]) -> None:
-        self.execute("delete from context_snippets where version_id = %s", (version_id,))
-        for snippet in snippets:
-            self.execute(
+    def replace_code_examples(
+        self,
+        version_id: int,
+        examples: list[dict[str, Any]],
+        source_ids: dict[str, int],
+        section_ids: dict[str, int],
+    ) -> dict[str, int]:
+        self.execute("delete from code_examples where version_id = %s", (version_id,))
+        example_ids: dict[str, int] = {}
+        for example in examples:
+            key = str(example.get("example_key") or "")
+            if not key:
+                continue
+            metadata = example.get("metadata_json") if isinstance(example.get("metadata_json"), dict) else {}
+            example_id = self.scalar(
                 """
-                insert into context_snippets(
-                  version_id, source_section_id, primary_chunk_id, snippet_key, path, source_url,
-                  source_anchor, title, description, role, applies_to, entities, task_tags,
-                  heading_path, symbols, code_language, code, constraints, related_chunk_ids,
-                  start_line, end_line, content, token_count, quality_score, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s::jsonb, %s, %s, %s::jsonb, %s::jsonb,
-                  %s, %s, %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, snippet_key) do update
-                  set source_section_id = excluded.source_section_id,
-                      primary_chunk_id = excluded.primary_chunk_id,
-                      path = excluded.path,
-                      source_url = excluded.source_url,
-                      source_anchor = excluded.source_anchor,
-                      title = excluded.title,
-                      description = excluded.description,
-                      role = excluded.role,
-                      applies_to = excluded.applies_to,
-                      entities = excluded.entities,
-                      task_tags = excluded.task_tags,
-                      heading_path = excluded.heading_path,
-                      symbols = excluded.symbols,
-                      code_language = excluded.code_language,
-                      code = excluded.code,
-                      constraints = excluded.constraints,
-                      related_chunk_ids = excluded.related_chunk_ids,
-                      start_line = excluded.start_line,
-                      end_line = excluded.end_line,
-                      content = excluded.content,
-                      token_count = excluded.token_count,
-                      quality_score = excluded.quality_score,
-                      metadata_json = excluded.metadata_json
-                """,
-                (
-                    version_id,
-                    snippet.source_section_id,
-                    snippet.primary_chunk_id,
-                    snippet.snippet_key,
-                    snippet.path,
-                    snippet.source_url,
-                    snippet.source_anchor,
-                    snippet.title,
-                    snippet.description,
-                    snippet.role,
-                    json.dumps(snippet.applies_to),
-                    json.dumps(snippet.entities),
-                    json.dumps(snippet.task_tags),
-                    json.dumps(snippet.heading_path),
-                    json.dumps(snippet.symbols),
-                    snippet.code_language,
-                    snippet.code,
-                    json.dumps(snippet.constraints),
-                    json.dumps(snippet.related_chunk_ids),
-                    snippet.start_line,
-                    snippet.end_line,
-                    snippet.content,
-                    snippet.token_count,
-                    snippet.quality_score,
-                    json.dumps(snippet.metadata_json, sort_keys=True),
-                ),
-            )
-
-    def replace_agent_operations(self, version_id: int, operations: list[Any]) -> dict[str, int]:
-        self.execute("delete from agent_recipes where version_id = %s", (version_id,))
-        self.execute("delete from agent_operation_examples where version_id = %s", (version_id,))
-        self.execute("delete from agent_operations where version_id = %s", (version_id,))
-        operation_ids: dict[str, int] = {}
-        for operation in operations:
-            operation_id = self.scalar(
-                """
-                insert into agent_operations(
-                  version_id, operation_key, product, operation_name, operation_kind,
-                  sdk_class, sdk_method, import_path, language, endpoint, http_method, route,
-                  required_params, optional_params, request_schema, response_schema, errors,
-                  auth_requirements, source_urls, source_chunk_ids, confidence, quality_score,
-                  content, metadata_json
+                insert into code_examples(
+                  version_id, source_document_id, source_section_id, example_key, source_type,
+                  document_role, product, product_confidence, language, title, description,
+                  caption, code, imports_json, symbols_json, task_tags_json, required_env_json,
+                  required_params_json, source_url, source_anchor, source_chunk_ids_json,
+                  token_count, quality_score, confidence, metadata_json
                 )
                 values (
                   %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s, %s,
-                  %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s::jsonb, %s::jsonb, %s, %s,
-                  %s, %s::jsonb
+                  %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s, %s, %s::jsonb,
+                  %s, %s, %s, %s::jsonb
                 )
-                on conflict (version_id, operation_key) do update
-                  set product = excluded.product,
-                      operation_name = excluded.operation_name,
-                      operation_kind = excluded.operation_kind,
-                      sdk_class = excluded.sdk_class,
-                      sdk_method = excluded.sdk_method,
-                      import_path = excluded.import_path,
-                      language = excluded.language,
-                      endpoint = excluded.endpoint,
-                      http_method = excluded.http_method,
-                      route = excluded.route,
-                      required_params = excluded.required_params,
-                      optional_params = excluded.optional_params,
-                      request_schema = excluded.request_schema,
-                      response_schema = excluded.response_schema,
-                      errors = excluded.errors,
-                      auth_requirements = excluded.auth_requirements,
-                      source_urls = excluded.source_urls,
-                      source_chunk_ids = excluded.source_chunk_ids,
-                      confidence = excluded.confidence,
-                      quality_score = excluded.quality_score,
-                      content = excluded.content,
-                      metadata_json = excluded.metadata_json
-                returning id
-                """,
-                (
-                    version_id,
-                    operation.operation_key,
-                    operation.product,
-                    operation.operation_name,
-                    operation.operation_kind,
-                    operation.sdk_class,
-                    operation.sdk_method,
-                    operation.import_path,
-                    operation.language,
-                    operation.endpoint,
-                    operation.http_method,
-                    operation.route,
-                    json.dumps(operation.required_params, sort_keys=True),
-                    json.dumps(operation.optional_params, sort_keys=True),
-                    json.dumps(operation.request_schema, sort_keys=True),
-                    json.dumps(operation.response_schema, sort_keys=True),
-                    json.dumps(operation.errors, sort_keys=True),
-                    json.dumps(operation.auth_requirements, sort_keys=True),
-                    json.dumps(operation.source_urls),
-                    json.dumps(operation.source_chunk_ids),
-                    operation.confidence,
-                    operation.quality_score,
-                    operation.content,
-                    json.dumps(operation.metadata_json, sort_keys=True),
-                ),
-            )
-            operation_ids[operation.operation_key] = operation_id
-        return operation_ids
-
-    def replace_agent_operation_examples(self, version_id: int, examples: list[Any], operation_ids: dict[str, int]) -> dict[str, int]:
-        self.execute("delete from agent_operation_examples where version_id = %s", (version_id,))
-        example_ids: dict[str, int] = {}
-        for example in examples:
-            example_id = self.scalar(
-                """
-                insert into agent_operation_examples(
-                  version_id, operation_id, example_key, product, title, language,
-                  content, source_url, source_chunk_ids, token_count, quality_score, metadata_json
-                )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb)
                 on conflict (version_id, example_key) do update
-                  set operation_id = excluded.operation_id,
+                  set source_document_id = excluded.source_document_id,
+                      source_section_id = excluded.source_section_id,
+                      source_type = excluded.source_type,
+                      document_role = excluded.document_role,
                       product = excluded.product,
-                      title = excluded.title,
+                      product_confidence = excluded.product_confidence,
                       language = excluded.language,
-                      content = excluded.content,
+                      title = excluded.title,
+                      description = excluded.description,
+                      caption = excluded.caption,
+                      code = excluded.code,
+                      imports_json = excluded.imports_json,
+                      symbols_json = excluded.symbols_json,
+                      task_tags_json = excluded.task_tags_json,
+                      required_env_json = excluded.required_env_json,
+                      required_params_json = excluded.required_params_json,
                       source_url = excluded.source_url,
-                      source_chunk_ids = excluded.source_chunk_ids,
+                      source_anchor = excluded.source_anchor,
+                      source_chunk_ids_json = excluded.source_chunk_ids_json,
                       token_count = excluded.token_count,
                       quality_score = excluded.quality_score,
+                      confidence = excluded.confidence,
                       metadata_json = excluded.metadata_json
                 returning id
                 """,
                 (
                     version_id,
-                    operation_ids.get(example.operation_key or ""),
-                    example.example_key,
-                    example.product,
-                    example.title,
-                    example.language,
-                    example.content,
-                    example.source_url,
-                    json.dumps(example.source_chunk_ids),
-                    example.token_count,
-                    example.quality_score,
-                    json.dumps(example.metadata_json, sort_keys=True),
+                    source_ids.get(source_document_key_from_surface(example)),
+                    section_ids.get(str(example.get("source_section_key") or "")),
+                    key,
+                    str(example.get("source_type") or metadata.get("source_type") or "website_url"),
+                    str(example.get("document_role") or metadata.get("document_role") or "unknown"),
+                    str(example.get("product") or metadata.get("product") or ""),
+                    float(example.get("product_confidence") or metadata.get("product_confidence") or 0),
+                    str(example.get("language") or ""),
+                    str(example.get("title") or "Code example"),
+                    str(example.get("description") or ""),
+                    str(example.get("caption") or ""),
+                    str(example.get("code") or ""),
+                    list_json(example.get("imports_json")),
+                    list_json(example.get("symbols_json")),
+                    list_json(example.get("task_tags_json")),
+                    list_json(example.get("required_env_json")),
+                    list_json(example.get("required_params_json")),
+                    nullable_string(example.get("source_url")),
+                    nullable_string(example.get("source_anchor")),
+                    list_json(example.get("source_chunk_ids_json")),
+                    int(example.get("token_count") or token_count(str(example.get("code") or ""))),
+                    float(example.get("quality_score") or 1),
+                    float(example.get("confidence") or 0),
+                    json.dumps(metadata, sort_keys=True),
                 ),
             )
-            example_ids[example.example_key] = example_id
+            example_ids[key] = example_id
         return example_ids
 
-    def replace_agent_recipes(self, version_id: int, recipes: list[Any], operation_ids: dict[str, int]) -> None:
+    def replace_api_operations(self, version_id: int, operations: list[dict[str, Any]], source_ids: dict[str, int]) -> dict[str, int]:
+        self.execute("delete from api_operations where version_id = %s", (version_id,))
+        operation_ids: dict[str, int] = {}
+        for operation in operations:
+            key = str(operation.get("operation_key") or "")
+            if not key:
+                continue
+            metadata = operation.get("metadata_json") if isinstance(operation.get("metadata_json"), dict) else {}
+            operation_id = self.scalar(
+                """
+                insert into api_operations(
+                  version_id, source_document_id, operation_key, product, product_confidence,
+                  operation_id, operation_name, operation_kind, http_method, endpoint, route,
+                  tags_json, summary, description, required_params_json, optional_params_json,
+                  request_schema_json, response_schema_json, errors_json, auth_requirements_json,
+                  source_url, source_anchor, token_count, quality_score, confidence, metadata_json
+                )
+                values (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s, %s,
+                  %s::jsonb, %s, %s, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
+                  %s, %s, %s, %s, %s, %s::jsonb
+                )
+                on conflict (version_id, operation_key) do update
+                  set source_document_id = excluded.source_document_id,
+                      product = excluded.product,
+                      product_confidence = excluded.product_confidence,
+                      operation_id = excluded.operation_id,
+                      operation_name = excluded.operation_name,
+                      operation_kind = excluded.operation_kind,
+                      http_method = excluded.http_method,
+                      endpoint = excluded.endpoint,
+                      route = excluded.route,
+                      tags_json = excluded.tags_json,
+                      summary = excluded.summary,
+                      description = excluded.description,
+                      required_params_json = excluded.required_params_json,
+                      optional_params_json = excluded.optional_params_json,
+                      request_schema_json = excluded.request_schema_json,
+                      response_schema_json = excluded.response_schema_json,
+                      errors_json = excluded.errors_json,
+                      auth_requirements_json = excluded.auth_requirements_json,
+                      source_url = excluded.source_url,
+                      source_anchor = excluded.source_anchor,
+                      token_count = excluded.token_count,
+                      quality_score = excluded.quality_score,
+                      confidence = excluded.confidence,
+                      metadata_json = excluded.metadata_json
+                returning id
+                """,
+                (
+                    version_id,
+                    source_ids.get(source_document_key_from_surface(operation)),
+                    key,
+                    str(operation.get("product") or metadata.get("product") or ""),
+                    float(operation.get("product_confidence") or metadata.get("product_confidence") or 0),
+                    str(operation.get("operation_id") or ""),
+                    str(operation.get("operation_name") or operation.get("operation_id") or operation.get("endpoint") or "API operation"),
+                    str(operation.get("operation_kind") or "operation"),
+                    str(operation.get("http_method") or ""),
+                    str(operation.get("endpoint") or ""),
+                    str(operation.get("route") or operation.get("endpoint") or ""),
+                    list_json(operation.get("tags_json")),
+                    str(operation.get("summary") or ""),
+                    str(operation.get("description") or ""),
+                    list_json(operation.get("required_params_json")),
+                    list_json(operation.get("optional_params_json")),
+                    dict_json(operation.get("request_schema_json")),
+                    dict_json(operation.get("response_schema_json")),
+                    list_json(operation.get("errors_json")),
+                    list_json(operation.get("auth_requirements_json")),
+                    nullable_string(operation.get("source_url")),
+                    nullable_string(operation.get("source_anchor")),
+                    int(operation.get("token_count") or token_count(text_for_search(operation.get("summary"), operation.get("description")))),
+                    float(operation.get("quality_score") or 1),
+                    float(operation.get("confidence") or 0),
+                    json.dumps(metadata, sort_keys=True),
+                ),
+            )
+            operation_ids[key] = operation_id
+        return operation_ids
+
+    def replace_sdk_methods(self, version_id: int, methods: list[dict[str, Any]], source_ids: dict[str, int]) -> dict[str, int]:
+        self.execute("delete from sdk_methods where version_id = %s", (version_id,))
+        method_ids: dict[str, int] = {}
+        for method in methods:
+            key = str(method.get("method_key") or "")
+            if not key:
+                continue
+            metadata = method.get("metadata_json") if isinstance(method.get("metadata_json"), dict) else {}
+            method_id = self.scalar(
+                """
+                insert into sdk_methods(
+                  version_id, source_document_id, method_key, product, product_confidence,
+                  language, import_path, module_path, sdk_class, sdk_method, symbol_name,
+                  signature, description, required_params_json, optional_params_json,
+                  return_type, errors_json, source_url, source_anchor, source_chunk_ids_json,
+                  public_api, generated, quality_score, confidence, metadata_json
+                )
+                values (
+                  %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s::jsonb, %s::jsonb,
+                  %s, %s::jsonb, %s, %s, %s::jsonb,
+                  %s, %s, %s, %s, %s::jsonb
+                )
+                on conflict (version_id, method_key) do update
+                  set source_document_id = excluded.source_document_id,
+                      product = excluded.product,
+                      product_confidence = excluded.product_confidence,
+                      language = excluded.language,
+                      import_path = excluded.import_path,
+                      module_path = excluded.module_path,
+                      sdk_class = excluded.sdk_class,
+                      sdk_method = excluded.sdk_method,
+                      symbol_name = excluded.symbol_name,
+                      signature = excluded.signature,
+                      description = excluded.description,
+                      required_params_json = excluded.required_params_json,
+                      optional_params_json = excluded.optional_params_json,
+                      return_type = excluded.return_type,
+                      errors_json = excluded.errors_json,
+                      source_url = excluded.source_url,
+                      source_anchor = excluded.source_anchor,
+                      source_chunk_ids_json = excluded.source_chunk_ids_json,
+                      public_api = excluded.public_api,
+                      generated = excluded.generated,
+                      quality_score = excluded.quality_score,
+                      confidence = excluded.confidence,
+                      metadata_json = excluded.metadata_json
+                returning id
+                """,
+                (
+                    version_id,
+                    source_ids.get(source_document_key_from_surface(method)),
+                    key,
+                    str(method.get("product") or metadata.get("product") or ""),
+                    float(method.get("product_confidence") or metadata.get("product_confidence") or 0),
+                    str(method.get("language") or ""),
+                    str(method.get("import_path") or ""),
+                    str(method.get("module_path") or ""),
+                    str(method.get("sdk_class") or ""),
+                    str(method.get("sdk_method") or ""),
+                    str(method.get("symbol_name") or method.get("sdk_method") or method.get("sdk_class") or "SDK method"),
+                    str(method.get("signature") or ""),
+                    str(method.get("description") or ""),
+                    list_json(method.get("required_params_json")),
+                    list_json(method.get("optional_params_json")),
+                    str(method.get("return_type") or ""),
+                    list_json(method.get("errors_json")),
+                    nullable_string(method.get("source_url")),
+                    nullable_string(method.get("source_anchor")),
+                    list_json(method.get("source_chunk_ids_json")),
+                    bool(method.get("public_api", True)),
+                    bool(method.get("generated", False)),
+                    float(method.get("quality_score") or 1),
+                    float(method.get("confidence") or 0),
+                    json.dumps(metadata, sort_keys=True),
+                ),
+            )
+            method_ids[key] = method_id
+        return method_ids
+
+    def replace_agent_recipes(self, version_id: int, recipes: list[dict[str, Any]]) -> None:
         self.execute("delete from agent_recipes where version_id = %s", (version_id,))
         for recipe in recipes:
+            key = str(recipe.get("recipe_key") or "")
+            if not key:
+                continue
+            metadata = recipe.get("metadata_json") if isinstance(recipe.get("metadata_json"), dict) else {}
             self.execute(
                 """
                 insert into agent_recipes(
-                  version_id, operation_id, recipe_key, product, title, task_kind,
-                  language, content, code, info, source_urls, source_chunk_ids,
+                  version_id, recipe_key, product, product_confidence, title, task_kind,
+                  language, summary, code, info, required_env_json, required_params_json,
+                  source_api_operation_ids_json, source_sdk_method_ids_json,
+                  source_code_example_ids_json, source_section_ids_json, source_chunk_ids_json,
+                  source_urls_json, evidence_hash, llm_model, llm_enriched,
                   confidence, quality_score, token_count, metadata_json
                 )
                 values (
                   %s, %s, %s, %s, %s, %s,
                   %s, %s, %s, %s, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s::jsonb, %s::jsonb,
+                  %s::jsonb, %s, %s, %s,
                   %s, %s, %s, %s::jsonb
                 )
                 on conflict (version_id, recipe_key) do update
-                  set operation_id = excluded.operation_id,
-                      product = excluded.product,
+                  set product = excluded.product,
+                      product_confidence = excluded.product_confidence,
                       title = excluded.title,
                       task_kind = excluded.task_kind,
                       language = excluded.language,
-                      content = excluded.content,
+                      summary = excluded.summary,
                       code = excluded.code,
                       info = excluded.info,
-                      source_urls = excluded.source_urls,
-                      source_chunk_ids = excluded.source_chunk_ids,
+                      required_env_json = excluded.required_env_json,
+                      required_params_json = excluded.required_params_json,
+                      source_api_operation_ids_json = excluded.source_api_operation_ids_json,
+                      source_sdk_method_ids_json = excluded.source_sdk_method_ids_json,
+                      source_code_example_ids_json = excluded.source_code_example_ids_json,
+                      source_section_ids_json = excluded.source_section_ids_json,
+                      source_chunk_ids_json = excluded.source_chunk_ids_json,
+                      source_urls_json = excluded.source_urls_json,
+                      evidence_hash = excluded.evidence_hash,
+                      llm_model = excluded.llm_model,
+                      llm_enriched = excluded.llm_enriched,
                       confidence = excluded.confidence,
                       quality_score = excluded.quality_score,
                       token_count = excluded.token_count,
@@ -1364,21 +1697,30 @@ class PostgresWriter(IndexWriter):
                 """,
                 (
                     version_id,
-                    operation_ids.get(recipe.operation_key or ""),
-                    recipe.recipe_key,
-                    recipe.product,
-                    recipe.title,
-                    recipe.task_kind,
-                    recipe.language,
-                    recipe.content,
-                    recipe.code,
-                    recipe.info,
-                    json.dumps(recipe.source_urls),
-                    json.dumps(recipe.source_chunk_ids),
-                    recipe.confidence,
-                    recipe.quality_score,
-                    recipe.token_count,
-                    json.dumps(recipe.metadata_json, sort_keys=True),
+                    key,
+                    str(recipe.get("product") or ""),
+                    float(recipe.get("product_confidence") or 0),
+                    str(recipe.get("title") or "Recipe"),
+                    str(recipe.get("task_kind") or "operation"),
+                    str(recipe.get("language") or ""),
+                    str(recipe.get("summary") or ""),
+                    nullable_string(recipe.get("code")),
+                    str(recipe.get("info") or ""),
+                    list_json(recipe.get("required_env_json")),
+                    list_json(recipe.get("required_params_json")),
+                    list_json(recipe.get("source_api_operation_ids_json")),
+                    list_json(recipe.get("source_sdk_method_ids_json")),
+                    list_json(recipe.get("source_code_example_ids_json")),
+                    list_json(recipe.get("source_section_ids_json")),
+                    list_json(recipe.get("source_chunk_ids_json")),
+                    list_json(recipe.get("source_urls_json")),
+                    str(recipe.get("evidence_hash") or ""),
+                    str(recipe.get("llm_model") or ""),
+                    bool(recipe.get("llm_enriched", False)),
+                    float(recipe.get("confidence") or 0),
+                    float(recipe.get("quality_score") or 1),
+                    int(recipe.get("token_count") or token_count(text_for_search(recipe.get("summary"), recipe.get("code"), recipe.get("info")))),
+                    json.dumps(metadata, sort_keys=True),
                 ),
             )
 

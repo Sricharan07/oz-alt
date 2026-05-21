@@ -666,7 +666,7 @@ def profile_params(
         "library": library,
         "description": clean(payload.get("description")) or f"Documentation crawled from {source_url}.",
         "source_url": source_url,
-        "source_type": clean(payload.get("source_type")) or "official_docs",
+        "source_type": clean(payload.get("source_type")) or "website_url",
         "priority": int_value(payload.get("priority"), default=100, minimum=1),
         "allowed_hosts": json.dumps(allowed_hosts, sort_keys=True),
         "allowed_paths": json.dumps(allowed_paths, sort_keys=True),

@@ -44,13 +44,17 @@ def profile_payload(row: dict[str, Any]) -> dict[str, Any]:
         "vendor": vendor,
         "library_name": library,
         "source_url": source_url,
-        "source_type": "official_docs",
+        "source_type": infer_source_type(source_url),
         "allowed_hosts": row.get("allowed_hosts") or [urlparse(source_url).netloc],
         "allowed_paths": row.get("allowed_paths") or [urlparse(source_url).path or "/"],
         "denied_paths": row.get("denied_paths") or [],
         "preferred_urls": row.get("preferred_urls") or [source_url],
         "required_topics": row.get("required_topics") or [],
         "expected_symbols": row.get("expected_symbols") or [],
+        "source_file_patterns": row.get("source_file_patterns") or [],
+        "needs_js": row.get("needs_js", False),
+        "include_source_files": row.get("include_source_files", False),
+        "target_language": row.get("target_language", "en"),
         "min_quality_score": row.get("min_quality_score", 0.35),
         "min_documents": row.get("min_documents", 2),
         "max_junk_ratio": row.get("max_junk_ratio", 0.25),
@@ -78,6 +82,19 @@ def first_source_url(row: dict[str, Any]) -> str:
     if not host:
         raise ValueError(f"profile has no preferred_urls or allowed_hosts: {row.get('library')}")
     return f"https://{host}{path}"
+
+
+def infer_source_type(source_url: str) -> str:
+    parsed = urlparse(source_url)
+    path = parsed.path.lower()
+    host = parsed.netloc.lower()
+    if path.endswith(("/llms.txt", "/llms-full.txt")):
+        return "llms_txt"
+    if path.endswith(("/openapi.json", "/openapi.yaml", "/openapi.yml", "/swagger.json", "/swagger.yaml", "/swagger.yml")):
+        return "openapi"
+    if host in {"github.com", "raw.githubusercontent.com"}:
+        return "github"
+    return "website_url"
 
 
 if __name__ == "__main__":

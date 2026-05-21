@@ -20,8 +20,8 @@ def public_library_rows(storage: RegistryStorage) -> list[dict[str, Any]]:
 	               count(c.id)::bigint as chunk_count,
 	               coalesce(sum(c.token_count), 0)::bigint as token_count,
 	               count(distinct c.path)::bigint as file_count,
-	               (select count(*) from agent_operations ao where ao.version_id = lv.id)::bigint as operation_count,
-	               (select count(*) from agent_operation_examples ae where ae.version_id = lv.id)::bigint as example_count,
+	               (select count(*) from api_operations ao where ao.version_id = lv.id)::bigint as operation_count,
+	               (select count(*) from code_examples ce where ce.version_id = lv.id)::bigint as example_count,
 	               (select count(*) from agent_recipes ar where ar.version_id = lv.id)::bigint as recipe_count,
 	               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
         from libraries l
@@ -70,8 +70,8 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
 	               count(c.id)::bigint as chunk_count,
 	               coalesce(sum(c.token_count), 0)::bigint as token_count,
 	               count(distinct c.path)::bigint as file_count,
-	               (select count(*) from agent_operations ao where ao.version_id = lv.id)::bigint as operation_count,
-	               (select count(*) from agent_operation_examples ae where ae.version_id = lv.id)::bigint as example_count,
+	               (select count(*) from api_operations ao where ao.version_id = lv.id)::bigint as operation_count,
+	               (select count(*) from code_examples ce where ce.version_id = lv.id)::bigint as example_count,
 	               (select count(*) from agent_recipes ar where ar.version_id = lv.id)::bigint as recipe_count,
 	               coalesce(max(pb.byte_size), 0)::bigint as pack_bytes
         from libraries l
@@ -143,11 +143,15 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
     row["agent_context"] = db_rows(
         """
         select 'operations' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
-        from agent_operations
+        from api_operations
         where version_id = :version_id
         union all
-        select 'examples' as kind, count(*)::bigint as count, 0::bigint as embedded_count
-        from agent_operation_examples
+        select 'examples' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
+        from code_examples
+        where version_id = :version_id
+        union all
+        select 'sdk_methods' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
+        from sdk_methods
         where version_id = :version_id
         union all
         select 'recipes' as kind, count(*)::bigint as count, count(*) filter (where embedding is not null)::bigint as embedded_count
@@ -158,8 +162,8 @@ def db_library_detail(vendor: str, library: str, version: str | None) -> dict[st
     )
     row["top_operations"] = db_rows(
         """
-        select operation_name, operation_kind, sdk_class, sdk_method, endpoint, confidence, quality_score
-        from agent_operations
+        select operation_name, operation_kind, '' as sdk_class, '' as sdk_method, endpoint, confidence, quality_score
+        from api_operations
         where version_id = :version_id
         order by quality_score desc, confidence desc, operation_name asc
         limit 25

@@ -29,8 +29,8 @@ def source_code_chunks(
                 "source_url": f"{source_url}#{slugify(name)}",
                 "markdown": f"# {name}\n\n```{language}\n{body.strip()}\n```\n",
                 "metadata": {
-                    "source_type": "source_code",
-                    "source_role": "sdk_source",
+                    "source_type": "github",
+                    "document_role": "sdk_source",
                     "operation": {
                         "kind": infer_operation_kind(name, item.get("signature", ""), body),
                         "operation_name": name,
@@ -43,7 +43,7 @@ def source_code_chunks(
                         "request_schema": item.get("signature", ""),
                         "response_schema": item.get("return_type", ""),
                         "auth_requirements": [],
-                        "source_type": "source_code",
+                        "source_type": "github",
                     },
                 },
             }
