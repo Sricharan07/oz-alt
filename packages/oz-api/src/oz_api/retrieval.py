@@ -179,7 +179,7 @@ def context(
             if str(row.get("retrieval_mode") or "").strip()
         }
     )
-    degraded = any(bool(row.get("degraded")) for row in rows)
+    degraded = bool(rows) and all(bool(row.get("degraded")) for row in rows)
     for row in rows:
         if remaining <= 0:
             break
