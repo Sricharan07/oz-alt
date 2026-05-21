@@ -4,17 +4,42 @@ alter table source_documents
   add column if not exists product text not null default '',
   add column if not exists product_confidence double precision not null default 0,
   add column if not exists language text not null default '',
+  add column if not exists content_markdown text not null default '',
+  add column if not exists parallel_structured_json jsonb not null default '{}'::jsonb,
   add column if not exists content_sha text,
   add column if not exists raw_token_count integer not null default 0,
   add column if not exists clean_token_count integer not null default 0,
   add column if not exists chunk_coverage_ratio double precision not null default 0,
-  add column if not exists coverage_json jsonb not null default '{}'::jsonb;
+  add column if not exists coverage_json jsonb not null default '{}'::jsonb,
+  add column if not exists raw_object_store text,
+  add column if not exists raw_object_sha256 text;
 
 alter table source_sections
   add column if not exists document_role text not null default 'unknown',
   add column if not exists product text not null default '',
   add column if not exists product_confidence double precision not null default 0,
-  add column if not exists language text not null default '';
+  add column if not exists language text not null default '',
+  add column if not exists depth integer not null default 0,
+  add column if not exists content_sha text,
+  add column if not exists has_code boolean not null default false,
+  add column if not exists has_endpoint_shape boolean not null default false,
+  add column if not exists has_signature_shape boolean not null default false;
+
+alter table chunks
+  add column if not exists source_section_id bigint references source_sections(id) on delete set null,
+  add column if not exists contextual_prefix text not null default '',
+  add column if not exists embedding_input_sha text;
+
+create table if not exists index_tombstones (
+  id bigserial primary key,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  surface_table text not null,
+  row_id bigint,
+  row_key text not null,
+  content_sha text,
+  payload_json jsonb not null default '{}'::jsonb,
+  tombstoned_at timestamptz not null default now()
+);
 
 drop table if exists context_snippets cascade;
 drop table if exists agent_operation_examples cascade;
@@ -51,6 +76,8 @@ create table if not exists code_examples (
   embedding vector(1024),
   embedding_model text,
   embedding_dimensions integer,
+  dedupe_cluster_id bigint,
+  dedupe_canonical boolean not null default true,
   created_at timestamptz not null default now(),
   unique(version_id, example_key),
   search_document tsvector generated always as (
@@ -69,6 +96,7 @@ create table if not exists api_operations (
   id bigserial primary key,
   version_id bigint not null references library_versions(id) on delete cascade,
   source_document_id bigint references source_documents(id) on delete set null,
+  source_section_id bigint references source_sections(id) on delete set null,
   operation_key text not null,
   product text not null default '',
   product_confidence double precision not null default 0,
@@ -89,6 +117,7 @@ create table if not exists api_operations (
   auth_requirements_json jsonb not null default '[]'::jsonb,
   source_url text,
   source_anchor text,
+  source_chunk_ids_json jsonb not null default '[]'::jsonb,
   token_count integer not null default 0,
   quality_score double precision not null default 1,
   confidence double precision not null default 0,
@@ -96,6 +125,8 @@ create table if not exists api_operations (
   embedding vector(1024),
   embedding_model text,
   embedding_dimensions integer,
+  dedupe_cluster_id bigint,
+  dedupe_canonical boolean not null default true,
   created_at timestamptz not null default now(),
   unique(version_id, operation_key),
   search_document tsvector generated always as (
@@ -115,6 +146,7 @@ create table if not exists sdk_methods (
   id bigserial primary key,
   version_id bigint not null references library_versions(id) on delete cascade,
   source_document_id bigint references source_documents(id) on delete set null,
+  source_section_id bigint references source_sections(id) on delete set null,
   method_key text not null,
   product text not null default '',
   product_confidence double precision not null default 0,
@@ -141,6 +173,8 @@ create table if not exists sdk_methods (
   embedding vector(1024),
   embedding_model text,
   embedding_dimensions integer,
+  dedupe_cluster_id bigint,
+  dedupe_canonical boolean not null default true,
   created_at timestamptz not null default now(),
   unique(version_id, method_key),
   search_document tsvector generated always as (
@@ -186,6 +220,8 @@ create table if not exists agent_recipes (
   embedding vector(1024),
   embedding_model text,
   embedding_dimensions integer,
+  dedupe_cluster_id bigint,
+  dedupe_canonical boolean not null default true,
   created_at timestamptz not null default now(),
   unique(version_id, recipe_key),
   search_document tsvector generated always as (
@@ -203,17 +239,26 @@ create table if not exists agent_recipes (
 
 create index if not exists source_documents_version_type_role_idx on source_documents(version_id, source_type, document_role, source_priority);
 create index if not exists source_documents_coverage_idx on source_documents(version_id, chunk_coverage_ratio);
+create index if not exists index_tombstones_version_surface_idx on index_tombstones(version_id, surface_table, tombstoned_at desc);
 create index if not exists source_sections_version_role_idx on source_sections(version_id, document_role, content_type, path);
+create index if not exists source_sections_shape_idx on source_sections(version_id, has_code, has_endpoint_shape, has_signature_shape);
+create index if not exists chunks_source_section_idx on chunks(source_section_id);
 create index if not exists code_examples_version_role_idx on code_examples(version_id, document_role, language, product);
+create index if not exists code_examples_dedupe_canonical_idx on code_examples(version_id, dedupe_canonical);
 create index if not exists code_examples_search_idx on code_examples using gin(search_document);
 create index if not exists code_examples_embedding_idx on code_examples using hnsw (embedding vector_cosine_ops);
 create index if not exists api_operations_version_kind_idx on api_operations(version_id, operation_kind, product);
+create index if not exists api_operations_dedupe_canonical_idx on api_operations(version_id, dedupe_canonical);
+create index if not exists api_operations_source_section_idx on api_operations(source_section_id);
 create index if not exists api_operations_endpoint_idx on api_operations(version_id, http_method, endpoint);
 create index if not exists api_operations_search_idx on api_operations using gin(search_document);
 create index if not exists api_operations_embedding_idx on api_operations using hnsw (embedding vector_cosine_ops);
 create index if not exists sdk_methods_version_symbol_idx on sdk_methods(version_id, symbol_name, sdk_class, sdk_method);
+create index if not exists sdk_methods_dedupe_canonical_idx on sdk_methods(version_id, dedupe_canonical);
+create index if not exists sdk_methods_source_section_idx on sdk_methods(source_section_id);
 create index if not exists sdk_methods_search_idx on sdk_methods using gin(search_document);
 create index if not exists sdk_methods_embedding_idx on sdk_methods using hnsw (embedding vector_cosine_ops);
 create index if not exists agent_recipes_version_kind_idx on agent_recipes(version_id, task_kind, product);
+create index if not exists agent_recipes_dedupe_canonical_idx on agent_recipes(version_id, dedupe_canonical);
 create index if not exists agent_recipes_search_idx on agent_recipes using gin(search_document);
 create index if not exists agent_recipes_embedding_idx on agent_recipes using hnsw (embedding vector_cosine_ops);

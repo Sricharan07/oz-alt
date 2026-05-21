@@ -280,11 +280,10 @@
       ],
       "source_roots": ["docs/atoms", "examples", "example", "cookbook", "samples", "sample"],
       "source_priorities": {
-        "llms_full": 5,
+        "llms_txt": 5,
         "openapi": 8,
-        "asyncapi": 8,
-        "github": 22,
-        "source_code": 18
+        "github": 18,
+        "website_url": 20
       },
       "aliases": [
         "atoms",
@@ -318,11 +317,10 @@
       ],
       "source_roots": ["docs/waves", "examples", "example", "cookbook", "samples", "sample"],
       "source_priorities": {
-        "llms_full": 5,
+        "llms_txt": 5,
         "openapi": 8,
-        "asyncapi": 8,
-        "github": 22,
-        "source_code": 18
+        "github": 18,
+        "website_url": 20
       },
       "aliases": [
         "waves",
@@ -357,9 +355,8 @@
       "include_source_files": true,
       "source_priorities": {
         "github": 8,
-        "source_code": 7,
-        "type_defs": 10,
-        "llms_full": 18
+        "llms_txt": 18,
+        "website_url": 20
       },
       "aliases": [
         "python sdk",

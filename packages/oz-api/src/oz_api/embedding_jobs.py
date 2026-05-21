@@ -181,7 +181,15 @@ def version_chunks(connection: Any, version_id: int) -> list[dict[str, Any]]:
     return rows(
         connection,
         """
-        select id, chunk_sha, coalesce(content_sha, chunk_sha) as content_sha, content, token_count, embedding is not null as embedded
+        select id,
+               chunk_sha,
+               coalesce(embedding_input_sha, content_sha, chunk_sha) as content_sha,
+               case
+                 when coalesce(contextual_prefix, '') <> '' then contextual_prefix || E'\n\n' || content
+                 else content
+               end as content,
+               token_count,
+               embedding is not null as embedded
         from chunks
         where version_id = %s
         order by id
@@ -194,7 +202,14 @@ def missing_embedding_chunks(connection: Any, version_id: int) -> list[dict[str,
     return rows(
         connection,
         """
-        select id, chunk_sha, coalesce(content_sha, chunk_sha) as content_sha, content, token_count
+        select id,
+               chunk_sha,
+               coalesce(embedding_input_sha, content_sha, chunk_sha) as content_sha,
+               case
+                 when coalesce(contextual_prefix, '') <> '' then contextual_prefix || E'\n\n' || content
+                 else content
+               end as content,
+               token_count
         from chunks
         where version_id = %s
           and (
@@ -278,7 +293,7 @@ def apply_cache_hits(connection: Any, version_id: int, chunks: list[dict[str, An
               or c.embedding_model is distinct from %s
               or c.embedding_dimensions is distinct from %s
             )
-            and ec.content_sha = coalesce(c.content_sha, c.chunk_sha)
+            and ec.content_sha = coalesce(c.embedding_input_sha, c.content_sha, c.chunk_sha)
             and ec.provider = %s
             and ec.model = %s
             and ec.dimensions = %s
@@ -783,14 +798,14 @@ def result(
     return EmbeddingEnsureResult(status, mode, job_id, version_id, len(chunks), pending, cached, embedded, failed)
 
 
-def embedding_cache_key(content_sha: str) -> str:
+def embedding_cache_key(content_sha: str, input_type: str = DOCUMENT_INPUT_TYPE) -> str:
     payload = "\0".join(
         [
             cache_schema_version(),
             embedding_provider(),
             embedding_model(),
             str(embedding_dimensions()),
-            DOCUMENT_INPUT_TYPE,
+            input_type,
             content_sha,
         ]
     )

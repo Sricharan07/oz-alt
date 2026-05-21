@@ -9,50 +9,6 @@ from typing import Any
 SUPPORTED_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs")
 
 
-def source_code_chunks(
-    text: str,
-    source_url: str,
-    *,
-    language: str,
-    limit: int,
-) -> list[dict[str, Any]]:
-    if limit <= 0:
-        return []
-    chunks: list[dict[str, str]] = []
-    for item in extracted_documented_blocks(text, language):
-        name = item["name"]
-        body = item["body"]
-        chunks.append(
-            {
-                "path": f"api-reference/source/{slugify(name)}.md",
-                "title": name,
-                "source_url": f"{source_url}#{slugify(name)}",
-                "markdown": f"# {name}\n\n```{language}\n{body.strip()}\n```\n",
-                "metadata": {
-                    "source_type": "github",
-                    "document_role": "sdk_source",
-                    "operation": {
-                        "kind": infer_operation_kind(name, item.get("signature", ""), body),
-                        "operation_name": name,
-                        "sdk_class": item.get("class_name", ""),
-                        "sdk_method": item.get("method_name") or name,
-                        "import_path": item.get("import_path", ""),
-                        "language": language,
-                        "required_params": item.get("required_params", []),
-                        "optional_params": item.get("optional_params", []),
-                        "request_schema": item.get("signature", ""),
-                        "response_schema": item.get("return_type", ""),
-                        "auth_requirements": [],
-                        "source_type": "github",
-                    },
-                },
-            }
-        )
-        if len(chunks) >= limit:
-            return chunks
-    return chunks
-
-
 def extracted_documented_blocks(text: str, language: str) -> list[dict[str, Any]]:
     if language in {"typescript", "javascript"}:
         return ts_js_blocks(text, language=language)

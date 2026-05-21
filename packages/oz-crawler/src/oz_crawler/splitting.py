@@ -25,8 +25,9 @@ def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
                 markdown=markdown,
                 source_url=source_url,
                 canonical_url=source_url,
-                source_kind="llms_txt",
+                source_type="website_url",
                 source_priority=20,
+                source_metadata=llms_full_metadata(source_url),
             )
         ]
 
@@ -45,9 +46,10 @@ def split_llms_full(text: str, *, source_url: str) -> list[NormalizedPage]:
                 markdown=body,
                 source_url=page_url,
                 canonical_url=page_url,
-                source_kind="llms_txt",
+                source_type="website_url",
                 source_priority=20,
                 discovered_from=source_url,
+                source_metadata=llms_full_metadata(source_url),
             )
         )
     return pages
@@ -85,9 +87,10 @@ def split_llms_full_heading_pages(markdown: str, *, source_url: str) -> list[Nor
                 markdown=body,
                 source_url=page_url,
                 canonical_url=page_url,
-                source_kind="llms_txt",
+                source_type="website_url",
                 source_priority=20,
                 discovered_from=source_url,
+                source_metadata=llms_full_metadata(source_url),
             )
         )
     return pages if len(pages) > 1 else []
@@ -118,6 +121,15 @@ def unique_fragment(title: str, seen: dict[str, int]) -> str:
     count = seen.get(base, 0) + 1
     seen[base] = count
     return base if count == 1 else f"{base}-{count}"
+
+
+def llms_full_metadata(source_url: str) -> dict[str, str]:
+    return {
+        "source_type": "website_url",
+        "document_role": "guide",
+        "expanded_from": "llms_full",
+        "source_manifest_url": source_url,
+    }
 
 
 def llms_frontmatter_boundaries(text: str) -> list[tuple[int, int, dict[str, str]]]:

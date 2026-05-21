@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -666,7 +667,7 @@ def profile_params(
         "library": library,
         "description": clean(payload.get("description")) or f"Documentation crawled from {source_url}.",
         "source_url": source_url,
-        "source_type": clean(payload.get("source_type")) or "website_url",
+        "source_type": canonical_source_type(clean(payload.get("source_type")), source_url),
         "priority": int_value(payload.get("priority"), default=100, minimum=1),
         "allowed_hosts": json.dumps(allowed_hosts, sort_keys=True),
         "allowed_paths": json.dumps(allowed_paths, sort_keys=True),
@@ -780,6 +781,20 @@ def int_value(value: Any, *, default: int, minimum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, parsed)
+
+
+def canonical_source_type(value: str, source_url: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"website_url", "github", "llms_txt", "openapi"}:
+        return normalized
+    lowered = source_url.lower()
+    if lowered.endswith(("/llms.txt", "/llms-full.txt")):
+        return "llms_txt"
+    if "github.com/" in lowered or "raw.githubusercontent.com/" in lowered:
+        return "github"
+    if re.search(r"(?:openapi|swagger).*\.(?:json|ya?ml)$", lowered):
+        return "openapi"
+    return "website_url"
 
 
 def float_value(value: Any, *, default: float, minimum: float) -> float:

@@ -7,16 +7,25 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import urldefrag
+from urllib import request
 
 from oz_crawler.content_types import block_content_type
 from oz_crawler.normalize import NormalizedPage, clean_markdown
+from oz_crawler.sections import (
+    content_hash,
+    heading_text,
+    markdown_blocks,
+    section_blocks,
+    source_anchor,
+    source_document_key,
+    source_path_for_page,
+    source_section_key_for_span,
+    source_sections_for_page,
+)
 from oz_crawler.token_counting import token_count
 
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 FULL_FENCE_RE = re.compile(r"^(`{3,}|~{3,})([^\n]*)\n(?P<body>.*)\n\1$", re.S)
-MAX_HEADING_TEXT_CHARS = 160
-MAX_SOURCE_ANCHOR_CHARS = 240
 
 
 @dataclass(frozen=True)
@@ -30,14 +39,53 @@ class MarkdownChunk:
     chunk_key: str | None = None
 
 
+@dataclass
+class ContextualPrefixCache:
+    path: Path
+    values: dict[str, str]
+
+    @classmethod
+    def create(cls, target: Path) -> "ContextualPrefixCache":
+        path = target / ".oz" / "contextual-prefix-cache.jsonl"
+        values: dict[str, str] = {}
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = str(row.get("key") or "")
+                value = str(row.get("prefix") or "")
+                if key and value:
+                    values[key] = value
+        return cls(path=path, values=values)
+
+    def get(self, key: str) -> str:
+        return self.values.get(key, "")
+
+    def set(self, key: str, prefix: str) -> None:
+        value = prefix.strip()
+        if not key or not value:
+            return
+        if self.values.get(key) == value:
+            return
+        self.values[key] = value
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"key": key, "prefix": value}, sort_keys=True) + "\n")
+
+
 def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
     rows: list[dict[str, Any]] = []
     coverage_rows: list[dict[str, Any]] = []
     seen_chunk_shas: set[str] = set()
     seen_content_keys_by_path: dict[str, set[str]] = {}
+    prefix_cache = ContextualPrefixCache.create(target)
     for page in pages:
         source_path = source_path_for_page(page)
-        source_sections = chunk_source_sections(page, source_path)
+        source_sections = source_sections_for_page(page)
         chunks = chunk_markdown(page.markdown, source_url=page.source_url, page_type=page.content_type)
         page_rows: list[dict[str, Any]] = []
         path_content_keys = seen_content_keys_by_path.setdefault(source_path, set())
@@ -55,6 +103,8 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
             metadata_json = dict(page.source_metadata or {})
             if section_key:
                 metadata_json["source_section_key"] = section_key
+            contextual_prefix = chunk_contextual_prefix(page, source_path, chunk, prefix_cache)
+            embedding_input_sha = content_hash(f"{contextual_prefix}\n\n{chunk.text}" if contextual_prefix else chunk.text)
             row = {
                 "id": chunk_key,
                 "path": source_path,
@@ -71,13 +121,14 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
                 "symbols": chunk_symbols(chunk.text, page.symbols),
                 "content_type": chunk.content_type,
                 "quality_score": page.quality_score,
-                "source_kind": page.source_kind,
                 "canonical_url": page.canonical_url or page.source_url,
                 "source_document_key": source_document_key(page.canonical_url or page.source_url or page.path or page.title),
                 "source_priority": page.source_priority,
                 "discovered_from": page.discovered_from,
                 "source_section_key": section_key,
                 "metadata_json": metadata_json,
+                "contextual_prefix": contextual_prefix,
+                "embedding_input_sha": embedding_input_sha,
                 "token_count": token_count(chunk.text),
                 "text": chunk.text,
             }
@@ -92,6 +143,146 @@ def write_chunks(target: Path, pages: list[NormalizedPage]) -> None:
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in coverage_rows),
         encoding="utf-8",
     )
+
+
+def chunk_contextual_prefix(
+    page: NormalizedPage,
+    source_path: str,
+    chunk: MarkdownChunk,
+    cache: ContextualPrefixCache | None = None,
+) -> str:
+    cache_key = contextual_prefix_cache_key(page, source_path, chunk)
+    if cache is not None:
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+    llm_prefix = llm_chunk_contextual_prefix(page, source_path, chunk)
+    if llm_prefix:
+        if cache is not None:
+            cache.set(cache_key, llm_prefix)
+        return llm_prefix
+    return deterministic_chunk_contextual_prefix(page, source_path, chunk)
+
+
+def contextual_prefix_cache_key(page: NormalizedPage, source_path: str, chunk: MarkdownChunk) -> str:
+    payload = {
+        "schema": 1,
+        "model": os.environ.get("OZ_CONTEXTUAL_PREFIX_LLM_MODEL", "gpt-4.1-mini"),
+        "title": page.title,
+        "source_url": page.source_url,
+        "source_path": source_path,
+        "document_sha": content_hash(clean_markdown(page.markdown)),
+        "chunk_sha": content_hash(chunk.text),
+        "heading_path": chunk.heading_path,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def deterministic_chunk_contextual_prefix(page: NormalizedPage, source_path: str, chunk: MarkdownChunk) -> str:
+    metadata = page.source_metadata or {}
+    parts = [
+        f"Document: {page.title}".strip(),
+        f"Path: {source_path}",
+    ]
+    role = str(metadata.get("document_role") or "").strip()
+    if role:
+        parts.append(f"Role: {role}")
+    product = str(metadata.get("product") or "").strip()
+    if product:
+        parts.append(f"Product: {product}")
+    if chunk.heading_path:
+        parts.append("Section: " + " > ".join(chunk.heading_path[-4:]))
+    if chunk.content_type and chunk.content_type != "prose":
+        parts.append(f"Content type: {chunk.content_type}")
+    prefix = ". ".join(part for part in parts if part and not part.endswith(":")) + "."
+    return limit_section_text(prefix, 100)
+
+
+def llm_chunk_contextual_prefix(page: NormalizedPage, source_path: str, chunk: MarkdownChunk) -> str:
+    if os.environ.get("OZ_CONTEXTUAL_PREFIX_LLM_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        return ""
+    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OZ_OPENAI_API_KEY")
+    if not key:
+        return ""
+    document = clean_markdown(page.markdown)
+    payload = {
+        "model": os.environ.get("OZ_CONTEXTUAL_PREFIX_LLM_MODEL", "gpt-4.1-mini"),
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "Write one concise 50-100 token context prefix for embedding a documentation chunk. "
+                    "Use only the document metadata and chunk. Do not add facts not present in the evidence. "
+                    "Return plain text only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "title": page.title,
+                        "path": source_path,
+                        "source_url": page.source_url,
+                        "metadata": page.source_metadata or {},
+                        "heading_path": chunk.heading_path,
+                        "document_excerpt": document[:12000],
+                        "chunk": chunk.text[:4000],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "temperature": 0,
+        "max_output_tokens": 140,
+    }
+    req = request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=float(os.environ.get("OZ_CONTEXTUAL_PREFIX_LLM_TIMEOUT_SECONDS", "8"))) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return ""
+    text = extract_response_text(parsed)
+    return valid_contextual_prefix(text, page, chunk)
+
+
+def extract_response_text(parsed: dict[str, Any]) -> str:
+    if isinstance(parsed.get("output_text"), str):
+        return parsed["output_text"].strip()
+    output = parsed.get("output")
+    if not isinstance(output, list):
+        return ""
+    parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content") or []:
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                parts.append(content["text"])
+    return "\n".join(parts).strip()
+
+
+def valid_contextual_prefix(text: str, page: NormalizedPage, chunk: MarkdownChunk) -> str:
+    prefix = re.sub(r"\s+", " ", text.strip().strip('"'))
+    if not prefix:
+        return ""
+    if token_count(prefix) > 120:
+        prefix = limit_section_text(prefix, 110)
+    high_risk = {
+        token
+        for token in re.findall(r"\b[A-Z][A-Za-z0-9_]+\.[A-Za-z0-9_]+|/[A-Za-z0-9_./{}:-]+|[A-Z][A-Z0-9_]{3,}\b", prefix)
+        if token not in {"HTTP", "HTTPS", "JSON", "REST", "SDK", "API", "URL"}
+    }
+    evidence = f"{page.title}\n{page.source_url}\n{json.dumps(page.source_metadata or {}, sort_keys=True)}\n{chunk.text}"
+    compact_evidence = re.sub(r"[^a-z0-9]+", "", evidence.lower())
+    for token in high_risk:
+        if re.sub(r"[^a-z0-9]+", "", token.lower()) not in compact_evidence:
+            return ""
+    return prefix
 
 
 def chunk_coverage_row(page: NormalizedPage, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -127,40 +318,6 @@ def chunk_coverage_row(page: NormalizedPage, rows: list[dict[str, Any]]) -> dict
         "clean_token_count": token_count(markdown),
         "chunk_count": len(rows),
     }
-
-
-def chunk_source_sections(page: NormalizedPage, source_path: str) -> list[dict[str, Any]]:
-    blocks = markdown_blocks(clean_markdown(page.markdown))
-    sections: list[dict[str, Any]] = []
-    for section in section_blocks(blocks):
-        content = "\n\n".join(block[0] for block in section).strip()
-        if not content:
-            continue
-        heading_path = next((block[3] for block in reversed(section) if block[3]), [])
-        start_line = min(block[1] for block in section)
-        end_line = max(block[2] for block in section)
-        title = heading_path[-1] if heading_path else page.title or source_path.rsplit("/", 1)[-1]
-        sections.append(
-            {
-                "section_key": stable_surface_key("section", source_path, str(start_line), title, content[:160]),
-                "start_line": start_line,
-                "end_line": end_line,
-            }
-        )
-    return sections
-
-
-def source_section_key_for_span(sections: list[dict[str, Any]], start_line: int, end_line: int) -> str:
-    best_key = ""
-    best_overlap = 0
-    for section in sections:
-        start = int(section.get("start_line") or 0)
-        end = int(section.get("end_line") or 0)
-        overlap = max(0, min(end, end_line) - max(start, start_line) + 1)
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best_key = str(section.get("section_key") or "")
-    return best_key
 
 
 def code_fence_spans(lines: list[str]) -> list[tuple[int, int]]:
@@ -251,55 +408,6 @@ def enforce_chunk_token_limit(chunks: list[MarkdownChunk], max_tokens: int) -> l
             )
         output.extend(pieces)
     return output
-
-
-def markdown_blocks(markdown: str) -> list[tuple[str, int, int, list[str]]]:
-    output: list[tuple[str, int, int, list[str]]] = []
-    current: list[str] = []
-    start_line = 1
-    in_code = False
-    fence_marker = ""
-    heading_path: list[str] = []
-    block_heading = list(heading_path)
-    for line_number, line in enumerate(markdown.splitlines(), start=1):
-        marker = fence_marker_for_line(line)
-        if marker:
-            if not in_code:
-                in_code = True
-                fence_marker = marker[0]
-            elif marker[0] == fence_marker:
-                in_code = False
-                fence_marker = ""
-        if not in_code and not line.strip():
-            if current:
-                output.append(("\n".join(current).strip(), start_line, line_number - 1, block_heading))
-                current = []
-            continue
-        if not current:
-            start_line = line_number
-            block_heading = list(heading_path)
-        current.append(line)
-        heading = heading_text(line)
-        if heading is not None and not in_code:
-            heading_path = update_heading_path(heading_path, line, heading)
-            block_heading = list(heading_path)
-    if current:
-        output.append(("\n".join(current).strip(), start_line, start_line + len(current) - 1, block_heading))
-    return output
-
-
-def section_blocks(blocks: list[tuple[str, int, int, list[str]]]) -> list[list[tuple[str, int, int, list[str]]]]:
-    sections: list[list[tuple[str, int, int, list[str]]]] = []
-    current: list[tuple[str, int, int, list[str]]] = []
-    for block in blocks:
-        is_boundary = bool(re.match(r"^#{1,3}\s+", block[0].strip()))
-        if current and is_boundary:
-            sections.append(current)
-            current = []
-        current.append(block)
-    if current:
-        sections.append(current)
-    return sections
 
 
 def chunk_section(
@@ -495,30 +603,6 @@ def last_overlap(blocks: list[tuple[str, int, int, list[str]]]) -> list[tuple[st
     return overlap
 
 
-def heading_text(line: str) -> str | None:
-    match = re.match(r"^(#{1,6})\s+(.+)$", line.strip())
-    if not match:
-        return None
-    heading = re.sub(r"\s+\{#[^}]+\}\s*$", "", match.group(2)).strip()
-    return bounded_text(heading, MAX_HEADING_TEXT_CHARS)
-
-
-def update_heading_path(current: list[str], line: str, heading: str) -> list[str]:
-    level = len(re.match(r"^(#{1,6})", line.strip()).group(1))  # type: ignore[union-attr]
-    return [*current[: max(level - 1, 0)], heading]
-
-
-def source_anchor(source_url: str, heading_path: list[str], ordinal: int) -> str:
-    base, _ = urldefrag(source_url)
-    heading_slug = slugify(heading_path[-1]) if heading_path else "page"
-    anchor = f"{shorten_anchor_base(base)}#{heading_slug}-_snippet_{ordinal}"
-    if len(anchor) <= MAX_SOURCE_ANCHOR_CHARS:
-        return anchor
-    suffix = f"-_snippet_{ordinal}"
-    available = max(16, MAX_SOURCE_ANCHOR_CHARS - len(shorten_anchor_base(base)) - len("#") - len(suffix))
-    return f"{shorten_anchor_base(base)}#{heading_slug[:available].strip('-') or 'page'}{suffix}"
-
-
 def limit_section_text(text: str, max_tokens: int) -> str:
     if token_count(text) <= max_tokens:
         return text
@@ -541,50 +625,10 @@ def fence_marker_for_line(line: str) -> str:
     return match.group(1) if match else ""
 
 
-def bounded_text(value: str, max_chars: int) -> str:
-    normalized = re.sub(r"\s+", " ", value).strip()
-    if len(normalized) <= max_chars:
-        return normalized
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
-    return normalized[: max_chars - 9].rstrip(" -") + "-" + digest
-
-
-def shorten_anchor_base(base: str) -> str:
-    if len(base) <= 150:
-        return base
-    digest = hashlib.sha256(base.encode("utf-8")).hexdigest()[:10]
-    return base[:139].rstrip("/#?&=-") + "-" + digest
-
-
-def source_path_for_page(page: NormalizedPage) -> str:
-    if page.path:
-        return page.path
-    if page.source_url.startswith("oz-artifact:"):
-        return page.source_url.removeprefix("oz-artifact:")
-    return f"guides/{slugify(page.title or page.source_url)}.md"
-
-
-def source_document_key(value: str) -> str:
-    text = str(value or "").rstrip("/")
-    if "#" in text and re.search(r"(?:^|/)(?:llms|llms-full)\.txt#|(?:openapi|swagger)\.(?:json|ya?ml)#", text.lower()):
-        return text
-    return text.split("#", 1)[0].rstrip("/")
-
-
 def stable_chunk_sha(target: Path, source_path: str, ordinal: int, text: str) -> str:
     vendor, library, version = target.parts[-3:]
     payload = "\0".join([vendor, library, version, source_path, str(ordinal), text])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def stable_surface_key(prefix: str, *parts: str) -> str:
-    digest = hashlib.sha256("\0".join(str(part) for part in parts).encode("utf-8")).hexdigest()[:32]
-    return f"{prefix}:{digest}"
-
-
-def content_hash(text: str) -> str:
-    normalized = re.sub(r"\s+", " ", text.strip())
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def normalized_chunk_key(text: str) -> str:

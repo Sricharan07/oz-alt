@@ -144,20 +144,44 @@ create table if not exists source_documents (
   id bigserial primary key,
   version_id bigint not null references library_versions(id) on delete cascade,
   source_document_key text not null,
-  source_kind text not null default 'website',
+  source_type text not null default 'website_url',
+  document_role text not null default 'unknown',
   canonical_url text,
   source_url text,
   path text,
   title text,
+  product text not null default '',
+  product_confidence double precision not null default 0,
+  language text not null default '',
+  content_markdown text not null default '',
+  parallel_structured_json jsonb not null default '{}'::jsonb,
+  content_sha text,
+  raw_token_count integer not null default 0,
+  clean_token_count integer not null default 0,
+  chunk_coverage_ratio double precision not null default 0,
+  coverage_json jsonb not null default '{}'::jsonb,
   source_priority integer not null default 50,
   discovered_from text,
   raw_artifact_key text,
+  raw_object_store text,
+  raw_object_sha256 text,
   metadata_json jsonb not null default '{}'::jsonb,
   etag text,
   last_modified text,
   fetched_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   unique (version_id, source_document_key)
+);
+
+create table if not exists index_tombstones (
+  id bigserial primary key,
+  version_id bigint not null references library_versions(id) on delete cascade,
+  surface_table text not null,
+  row_id bigint,
+  row_key text not null,
+  content_sha text,
+  payload_json jsonb not null default '{}'::jsonb,
+  tombstoned_at timestamptz not null default now()
 );
 
 create table if not exists chunks (
@@ -182,6 +206,8 @@ create table if not exists chunks (
   parent_chunk_key text,
   token_count integer not null default 0,
   source_anchor text,
+  contextual_prefix text not null default '',
+  embedding_input_sha text,
   metadata_json jsonb not null default '{}'::jsonb,
   embedding_model text,
   embedding_dimensions integer,
@@ -208,10 +234,19 @@ create table if not exists source_sections (
   source_anchor text,
   title text not null,
   heading_path jsonb not null default '[]'::jsonb,
+  document_role text not null default 'unknown',
   content_type text not null default 'prose',
+  product text not null default '',
+  product_confidence double precision not null default 0,
+  language text not null default '',
+  depth integer not null default 0,
   start_line integer not null default 1,
   end_line integer,
   content text not null,
+  content_sha text,
+  has_code boolean not null default false,
+  has_endpoint_shape boolean not null default false,
+  has_signature_shape boolean not null default false,
   token_count integer not null default 0,
   quality_score double precision not null default 1,
   metadata_json jsonb not null default '{}'::jsonb,
@@ -226,161 +261,21 @@ create table if not exists source_sections (
   ) stored
 );
 
-create table if not exists context_snippets (
-  id bigserial primary key,
-  version_id bigint not null references library_versions(id) on delete cascade,
-  source_section_id bigint references source_sections(id) on delete cascade,
-  primary_chunk_id bigint references chunks(id) on delete set null,
-  snippet_key text not null,
-  path text not null,
-  source_url text,
-  source_anchor text,
-  title text not null,
-  description text not null default '',
-  role text not null default 'concept',
-  applies_to jsonb not null default '[]'::jsonb,
-  entities jsonb not null default '[]'::jsonb,
-  task_tags jsonb not null default '[]'::jsonb,
-  heading_path jsonb not null default '[]'::jsonb,
-  symbols jsonb not null default '[]'::jsonb,
-  code_language text,
-  code text,
-  constraints jsonb not null default '[]'::jsonb,
-  related_chunk_ids jsonb not null default '[]'::jsonb,
-  start_line integer not null default 1,
-  end_line integer,
-  content text not null,
-  token_count integer not null default 0,
-  quality_score double precision not null default 1,
-  metadata_json jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (version_id, snippet_key),
-  search_document tsvector generated always as (
-    setweight(to_tsvector('english', coalesce(path, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(description, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(entities::text, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(task_tags::text, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(applies_to::text, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(heading_path::text, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(symbols::text, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(role, '')), 'C') ||
-    setweight(to_tsvector('english', coalesce(content, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(code, '')), 'B')
-  ) stored
-);
+alter table chunks
+  add column if not exists source_section_id bigint references source_sections(id) on delete set null;
 
 create table if not exists dedupe_clusters (
   id bigserial primary key,
   version_id bigint not null references library_versions(id) on delete cascade,
   cluster_key text not null,
+  surface_table text not null default 'chunks',
+  canonical_row_id bigint,
+  member_ids_json jsonb not null default '[]'::jsonb,
   canonical_chunk_id bigint references chunks(id) on delete set null,
   member_count integer not null default 1,
   method text not null,
   created_at timestamptz not null default now(),
   unique (version_id, cluster_key)
-);
-
-create table if not exists agent_operations (
-  id bigserial primary key,
-  version_id bigint not null references library_versions(id) on delete cascade,
-  operation_key text not null,
-  product text not null default '',
-  operation_name text not null,
-  operation_kind text not null default 'operation',
-  sdk_class text not null default '',
-  sdk_method text not null default '',
-  import_path text not null default '',
-  language text not null default '',
-  endpoint text not null default '',
-  http_method text not null default '',
-  route text not null default '',
-  required_params jsonb not null default '[]'::jsonb,
-  optional_params jsonb not null default '[]'::jsonb,
-  request_schema jsonb not null default '{}'::jsonb,
-  response_schema jsonb not null default '{}'::jsonb,
-  errors jsonb not null default '[]'::jsonb,
-  auth_requirements jsonb not null default '[]'::jsonb,
-  source_urls jsonb not null default '[]'::jsonb,
-  source_chunk_ids jsonb not null default '[]'::jsonb,
-  confidence double precision not null default 0,
-  quality_score double precision not null default 1,
-  content text not null default '',
-  embedding vector(1024),
-  embedding_model text,
-  embedding_dimensions integer,
-  metadata_json jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (version_id, operation_key),
-  search_document tsvector generated always as (
-    setweight(to_tsvector('english', coalesce(operation_name, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(operation_kind, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(sdk_class, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(sdk_method, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(endpoint, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(product, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(required_params::text, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(optional_params::text, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(content, '')), 'B')
-  ) stored
-);
-
-create table if not exists agent_operation_examples (
-  id bigserial primary key,
-  version_id bigint not null references library_versions(id) on delete cascade,
-  operation_id bigint references agent_operations(id) on delete cascade,
-  example_key text not null,
-  product text not null default '',
-  title text not null,
-  language text not null default '',
-  content text not null,
-  source_url text,
-  source_chunk_ids jsonb not null default '[]'::jsonb,
-  token_count integer not null default 0,
-  quality_score double precision not null default 1,
-  metadata_json jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (version_id, example_key),
-  search_document tsvector generated always as (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(product, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(language, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(content, '')), 'B')
-  ) stored
-);
-
-create table if not exists agent_recipes (
-  id bigserial primary key,
-  version_id bigint not null references library_versions(id) on delete cascade,
-  operation_id bigint references agent_operations(id) on delete cascade,
-  recipe_key text not null,
-  product text not null default '',
-  title text not null,
-  task_kind text not null default 'operation',
-  language text not null default '',
-  content text not null,
-  code text,
-  info text not null default '',
-  source_urls jsonb not null default '[]'::jsonb,
-  source_chunk_ids jsonb not null default '[]'::jsonb,
-  confidence double precision not null default 0,
-  quality_score double precision not null default 1,
-  token_count integer not null default 0,
-  embedding vector(1024),
-  embedding_model text,
-  embedding_dimensions integer,
-  metadata_json jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (version_id, recipe_key),
-  search_document tsvector generated always as (
-    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(task_kind, '')), 'A') ||
-    setweight(to_tsvector('english', coalesce(product, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(language, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(content, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(code, '')), 'B') ||
-    setweight(to_tsvector('english', coalesce(info, '')), 'B')
-  ) stored
 );
 
 create table if not exists trust_scores (

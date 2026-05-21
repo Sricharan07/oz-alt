@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from typing import Any
 
@@ -30,7 +31,18 @@ def openapi_chunks(text: str, source_url: str, *, limit: int) -> list[dict[str, 
         for method, operation in sorted(operations.items()):
             if method.lower() not in HTTP_METHODS or not isinstance(operation, dict):
                 continue
-            output.append(endpoint_doc(title, method.upper(), str(route), operation, source_url, components=components, root_security=security))
+            output.append(
+                endpoint_doc(
+                    title,
+                    method.upper(),
+                    str(route),
+                    operation,
+                    source_url,
+                    components=components,
+                    root_security=security,
+                    root_spec=parsed,
+                )
+            )
             if len(output) >= limit:
                 return output
     return output
@@ -45,6 +57,7 @@ def endpoint_doc(
     *,
     components: dict[str, Any],
     root_security: list[Any],
+    root_spec: dict[str, Any],
 ) -> dict[str, Any]:
     summary = str(operation.get("summary") or operation.get("operationId") or "").strip()
     description = str(operation.get("description") or "").strip()
@@ -139,8 +152,54 @@ def endpoint_doc(
                 "auth_requirements": security,
                 "source_type": "openapi",
             },
+            "parallel_structured_json": openapi_parallel_structured(
+                root_spec,
+                method=method,
+                route=route,
+                operation=operation,
+                resolved_params=structured_params,
+                request_body=resolved_request_body,
+                responses=structured_responses,
+                auth_requirements=security,
+            ),
         },
     }
+
+
+def openapi_parallel_structured(
+    spec: dict[str, Any],
+    *,
+    method: str,
+    route: str,
+    operation: dict[str, Any],
+    resolved_params: list[dict[str, Any]],
+    request_body: Any,
+    responses: list[dict[str, Any]],
+    auth_requirements: list[Any],
+) -> dict[str, Any]:
+    return {
+        "source_type": "openapi",
+        "openapi": spec.get("openapi") or spec.get("swagger") or "",
+        "info": spec.get("info") if isinstance(spec.get("info"), dict) else {},
+        "servers": spec.get("servers") if isinstance(spec.get("servers"), list) else [],
+        "method": method,
+        "route": route,
+        "operation": operation,
+        "resolved_params": resolved_params,
+        "request_body": request_body,
+        "responses": responses,
+        "auth_requirements": auth_requirements,
+        "components": bounded_components(spec.get("components")),
+    }
+
+
+def bounded_components(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    encoded = json.dumps(value, sort_keys=True)
+    if len(encoded) <= 120_000:
+        return value
+    return {"_truncated": True, "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest()}
 
 
 def structured_parameters(params: list[Any], components: dict[str, Any]) -> list[dict[str, Any]]:

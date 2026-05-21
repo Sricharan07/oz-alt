@@ -87,7 +87,7 @@ def extract_page_symbols(
 def is_symbol_source_page(page: NormalizedPage) -> bool:
     path = (page.path or "").lower()
     metadata = page.source_metadata if isinstance(page.source_metadata, dict) else {}
-    source_type = str(metadata.get("source_type") or page.source_kind).lower()
+    source_type = str(metadata.get("source_type") or page.source_type).lower()
     document_role = str(metadata.get("document_role") or "").lower()
     if path.startswith("_symbols/") or path.startswith("api-reference/"):
         return True

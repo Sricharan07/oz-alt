@@ -13,8 +13,9 @@ from urllib.parse import urlparse, urldefrag
 from oz_api.agent_embeddings import ensure_agent_card_embeddings
 from oz_api.embeddings import embedding_dimensions as configured_embedding_dimensions
 from oz_api.embedding_jobs import EmbeddingEnsureResult, ensure_version_embeddings
+from oz_api.indexer_surfaces import SurfaceIndexMixin
 from oz_api.observability import observe_duration
-from oz_api.recipe_compiler import build_agent_recipes_from_surfaces
+from oz_api.recipe_compiler import build_agent_recipes_from_surfaces, validate_agent_recipes
 from oz_api.retrieval import RetrievalContext, postgres_connection, vector_literal
 from oz_api.storage import RegistryStorage
 from oz_api.trust import first_source_url, trust_score_for_entry
@@ -24,763 +25,7 @@ from oz_crawler.normalize import clean_markdown
 from oz_crawler.token_counting import token_count
 
 
-@dataclass(frozen=True)
-class IndexStats:
-    libraries: int = 0
-    versions: int = 0
-    chunks: int = 0
-    embedded_chunks: int = 0
-    pending_embedding_chunks: int = 0
-
-    def as_dict(self) -> dict[str, int]:
-        return {
-            "libraries": self.libraries,
-            "versions": self.versions,
-            "chunks": self.chunks,
-            "embedded_chunks": self.embedded_chunks,
-            "pending_embedding_chunks": self.pending_embedding_chunks,
-        }
-
-
-def index_registry(repo_root: Path, *, dry_run: bool = False) -> IndexStats:
-    storage = RegistryStorage.from_env(repo_root)
-    catalog = storage.load_catalog()
-    stats = count_registry(storage, catalog)
-    if dry_run:
-        return stats
-
-    ctx = RetrievalContext.from_env(storage)
-    connection = postgres_connection(ctx.database_url)
-    if connection is None:
-        raise RuntimeError("No database connection configured. Set OZ_DATABASE_URL or DATABASE_URL.")
-    with connection:
-        writer = PostgresWriter(connection)
-        results = write_catalog_and_chunks(writer, storage, catalog)
-        embedded_chunks = writer.count_embedded_chunks()
-        if require_embeddings() and embedded_chunks < stats.chunks:
-            raise RuntimeError(f"embedding requirement failed: {embedded_chunks}/{stats.chunks} chunks have embeddings")
-        return IndexStats(
-            libraries=stats.libraries,
-            versions=stats.versions,
-            chunks=stats.chunks,
-            embedded_chunks=embedded_chunks,
-            pending_embedding_chunks=sum(result.pending_chunks for result in results if not result.complete),
-        )
-
-
-class VersionOrder:
-    def __init__(self, version: str) -> None:
-        self.version = version
-
-    def __lt__(self, other: object) -> bool:
-        if not isinstance(other, VersionOrder):
-            return NotImplemented
-        return compare_versions(self.version, other.version) < 0
-
-
-def count_registry(storage: RegistryStorage, catalog: list[dict[str, Any]]) -> IndexStats:
-    chunks = 0
-    embedded = 0
-    for entry in catalog:
-        for row in chunk_rows(storage, entry):
-            chunks += 1
-            if valid_embedding(row.get("embedding")):
-                embedded += 1
-    return IndexStats(libraries=len(catalog), versions=len(catalog), chunks=chunks, embedded_chunks=embedded)
-
-
-def write_catalog_and_chunks(
-    writer: "IndexWriter",
-    storage: RegistryStorage,
-    catalog: list[dict[str, Any]],
-) -> list[EmbeddingEnsureResult]:
-    embedding_results: list[EmbeddingEnsureResult] = []
-    for entry in catalog:
-        vendor_id = writer.upsert_vendor(str(entry["vendor"]))
-        library_id = writer.upsert_library(vendor_id, entry)
-        version_id = writer.upsert_version(library_id, entry)
-        writer.upsert_ref(library_id, version_id, str(entry.get("ref_sha") or "unknown"))
-        writer.upsert_trust_score(library_id, trust_score_for_entry(entry))
-
-        fixture = fixture_path(storage, entry)
-        line_cache: dict[str, str] = {}
-        current_chunk_shas: list[str] = []
-        rows = chunk_rows(storage, entry)
-        source_ids: dict[str, int] = {}
-        current_source_keys: list[str] = []
-        for source in source_document_rows(fixture, rows):
-            source_id = writer.upsert_source_document(version_id, source)
-            key = str(source["source_document_key"])
-            source_ids[key] = source_id
-            current_source_keys.append(key)
-        writer.delete_stale_source_documents(version_id, current_source_keys)
-        for row in rows:
-            chunk_sha = chunk_sha_for_row(entry, row)
-            current_chunk_shas.append(chunk_sha)
-            start_line, end_line = row_line_span(row) or line_span(fixture, row, line_cache)
-            existing_embedding = row.get("embedding")
-            embedding = [float(value) for value in existing_embedding] if valid_embedding(existing_embedding) else None
-            writer.upsert_chunk(
-                version_id,
-                path=str(row.get("path") or "README.md"),
-                start_line=start_line,
-                end_line=end_line,
-                source_url=str(row.get("source_url") or ""),
-                source_document_id=source_ids.get(source_document_key_for_row(row)),
-                ordinal=int(row.get("ordinal") or 1),
-                chunk_key=str(row.get("chunk_key") or row.get("id") or ""),
-                parent_chunk_key=nullable_string(row.get("parent_chunk_key")),
-                chunk_sha=chunk_sha,
-                content_sha=content_sha_for_row(row),
-                heading_path=list_of_strings(row.get("heading_path")),
-                symbols=list_of_strings(row.get("symbols")),
-                content_type=str(row.get("content_type") or "prose"),
-                quality_score=float(row.get("quality_score") or 1.0),
-                token_count=int(row.get("token_count") or token_count(str(row.get("text") or ""))),
-                source_anchor=nullable_string(row.get("source_anchor")),
-                metadata_json=row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {},
-                embedding_model=nullable_string(row.get("embedding_model")) if embedding else None,
-                embedding_dimensions=(int(row.get("embedding_dimensions") or 0) or None) if embedding else None,
-                content=str(row.get("text") or ""),
-                embedding=embedding,
-            )
-        writer.delete_stale_chunks(version_id, current_chunk_shas)
-        writer.resolve_parent_chunks(version_id)
-        writer.rebuild_context_index(version_id, fixture=fixture)
-        result = writer.ensure_embeddings(version_id, crawler_job_id=optional_int(entry.get("crawler_job_id")))
-        embedding_results.append(result)
-        if result.complete:
-            writer.resolve_parent_chunks(version_id)
-            writer.rebuild_dedupe_clusters(version_id)
-            writer.rebuild_context_index(version_id, fixture=fixture, embed_agent_cards=True)
-            writer.set_benchmark_score(version_id, benchmark_score_for_fixture(fixture, rows))
-    return embedding_results
-
-
-def chunk_rows(storage: RegistryStorage, entry: dict[str, Any]) -> list[dict[str, Any]]:
-    chunks_path = fixture_path(storage, entry) / "_chunks.jsonl"
-    fixture = fixture_path(storage, entry)
-    rows: list[dict[str, Any]] = []
-    seen_chunk_shas: set[str] = set()
-    if chunks_path.exists():
-        for line in chunks_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
-    for row in symbol_chunk_rows(fixture):
-        append_unique_chunk_row(entry, row, rows, seen_chunk_shas)
-    rows = add_parent_chunks(entry, fixture, rows)
-    return [enrich_chunk_row(entry, row) for row in rows]
-
-
-def append_unique_chunk_row(
-    entry: dict[str, Any],
-    row: dict[str, Any],
-    rows: list[dict[str, Any]],
-    seen_chunk_shas: set[str],
-) -> None:
-    if not is_indexable_chunk(row):
-        return
-    chunk_sha = chunk_sha_for_row(entry, row)
-    if chunk_sha in seen_chunk_shas:
-        return
-    seen_chunk_shas.add(chunk_sha)
-    rows.append(row)
-
-
-def enrich_chunk_row(entry: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
-    enriched = dict(row)
-    path = str(enriched.get("path") or "README.md")
-    text = limit_to_token_budget(clean_markdown(str(enriched.get("text") or "")).strip(), index_chunk_token_limit())
-    source_url = str(enriched.get("source_url") or "")
-    enriched["path"] = path
-    enriched["source_url"] = source_url
-    enriched["text"] = text
-    enriched["chunk_key"] = str(enriched.get("chunk_key") or enriched.get("id") or f"{path}#{enriched.get('ordinal') or 1}")
-    enriched["content_type"] = canonical_content_type(path, source_url, text, str(enriched.get("content_type") or ""))
-    enriched["content_sha"] = content_sha_for_row(enriched)
-    enriched["token_count"] = token_count(text)
-    enriched["source_anchor"] = nullable_string(enriched.get("source_anchor")) or source_anchor_for_row(entry, enriched)
-    enriched["source_document_key"] = source_document_key_for_row(enriched)
-    enriched["metadata_json"] = enriched.get("metadata_json") if isinstance(enriched.get("metadata_json"), dict) else {}
-    return enriched
-
-
-def source_document_rows(fixture: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    source_path = fixture / "_sources.jsonl"
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    coverage_by_key = source_coverage_rows(fixture)
-    if source_path.exists():
-        for line in source_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            source = json.loads(line)
-            key = source_document_key_for_row(source)
-            if not key or key in seen:
-                continue
-            source["source_document_key"] = key
-            metadata = source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}
-            source.setdefault("source_type", source.get("source_kind") or metadata.get("source_type") or "website_url")
-            source.setdefault("document_role", metadata.get("document_role") or "unknown")
-            source.setdefault("product", metadata.get("product") or "")
-            source.setdefault("product_confidence", metadata.get("product_confidence") or 0)
-            source.setdefault("language", metadata.get("language") or "")
-            source.setdefault("content_sha", "")
-            source.setdefault("raw_token_count", 0)
-            source.setdefault("clean_token_count", 0)
-            if key in coverage_by_key:
-                source["clean_token_count"] = int(coverage_by_key[key].get("clean_token_count") or source.get("clean_token_count") or 0)
-                source["chunk_coverage_ratio"] = float(coverage_by_key[key].get("coverage_ratio") or 0)
-                source["coverage_json"] = coverage_by_key[key]
-                metadata = source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}
-                source["metadata_json"] = {**metadata, "chunk_coverage": coverage_by_key[key]}
-            output.append(source)
-            seen.add(key)
-    for row in rows:
-        key = source_document_key_for_row(row)
-        if not key or key in seen:
-            continue
-        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
-        if key in coverage_by_key:
-            metadata = {**metadata, "chunk_coverage": coverage_by_key[key]}
-        output.append(
-            {
-                "source_document_key": key,
-                "source_kind": str(row.get("source_kind") or row.get("source_type") or "website_url"),
-                "source_type": str(row.get("source_type") or row.get("source_kind") or "website_url"),
-                "document_role": row_metadata_value(row, "document_role", "unknown"),
-                "canonical_url": str(row.get("canonical_url") or row.get("source_url") or ""),
-                "source_url": str(row.get("source_url") or ""),
-                "path": str(row.get("path") or ""),
-                "title": first_heading(str(row.get("text") or "")) or Path(str(row.get("path") or "")).stem,
-                "product": row_metadata_value(row, "product", ""),
-                "product_confidence": float(row_metadata_value(row, "product_confidence", 0) or 0),
-                "language": row_metadata_value(row, "language", ""),
-                "content_sha": str(row.get("content_sha") or content_sha_for_row(row)),
-                "raw_token_count": int(row.get("raw_token_count") or 0),
-                "clean_token_count": int(
-                    coverage_by_key.get(key, {}).get("clean_token_count")
-                    or row.get("token_count")
-                    or token_count(str(row.get("text") or ""))
-                ),
-                "chunk_coverage_ratio": float(coverage_by_key.get(key, {}).get("coverage_ratio") or 0),
-                "coverage_json": coverage_by_key.get(key, {}),
-                "source_priority": int(row.get("source_priority") or 50),
-                "discovered_from": nullable_string(row.get("discovered_from")),
-                "metadata_json": metadata,
-            }
-        )
-        seen.add(key)
-    return output
-
-
-def source_coverage_rows(fixture: Path) -> dict[str, dict[str, Any]]:
-    output: dict[str, dict[str, Any]] = {}
-    for row in jsonl_rows(fixture / "_chunk_coverage.jsonl"):
-        key = str(row.get("source_document_key") or "")
-        if key:
-            output[key] = row
-    return output
-
-
-def row_metadata_value(row: dict[str, Any], key: str, default: Any) -> Any:
-    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
-    value = metadata.get(key, row.get(key, default))
-    return default if value in (None, "") else value
-
-
-def jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    output: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        value = json.loads(line)
-        if isinstance(value, dict):
-            output.append(value)
-    return output
-
-
-def source_section_rows(fixture: Path, chunk_rows_for_fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = jsonl_rows(fixture / "_source_sections.jsonl")
-    if rows:
-        return [normalize_surface_row(row) for row in rows]
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in chunk_rows_for_fallback:
-        key = str(row.get("chunk_key") or row.get("chunk_sha") or "")
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
-        content = str(row.get("content") or row.get("text") or "")
-        heading_path = list_of_strings(row.get("heading_path"))
-        output.append(
-            {
-                "source_document_key": row.get("source_document_key") or source_document_key_for_row(row),
-                "section_key": f"fallback-section:{key}",
-                "path": str(row.get("path") or ""),
-                "title": heading_path[-1] if heading_path else first_heading(content) or Path(str(row.get("path") or "")).stem,
-                "heading_path": heading_path,
-                "source_anchor": row.get("source_anchor"),
-                "document_role": metadata.get("document_role") or "unknown",
-                "content_type": row.get("content_type") or "prose",
-                "product": metadata.get("product") or "",
-                "product_confidence": metadata.get("product_confidence") or 0,
-                "language": metadata.get("language") or "",
-                "start_line": row.get("start_line") or 1,
-                "end_line": row.get("end_line"),
-                "content": content,
-                "token_count": row.get("token_count") or token_count(content),
-                "quality_score": row.get("quality_score") or 1,
-                "metadata_json": metadata,
-            }
-        )
-    return output
-
-
-def code_example_rows(fixture: Path) -> list[dict[str, Any]]:
-    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_code_examples.jsonl")]
-
-
-def api_operation_rows(fixture: Path) -> list[dict[str, Any]]:
-    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_api_operations.jsonl")]
-
-
-def sdk_method_rows(fixture: Path) -> list[dict[str, Any]]:
-    return [normalize_surface_row(row) for row in jsonl_rows(fixture / "_sdk_methods.jsonl")]
-
-
-def normalize_surface_row(row: dict[str, Any]) -> dict[str, Any]:
-    output = dict(row)
-    metadata = output.get("metadata_json") if isinstance(output.get("metadata_json"), dict) else {}
-    output["metadata_json"] = metadata
-    output.setdefault("source_type", metadata.get("source_type") or "website_url")
-    output.setdefault("document_role", metadata.get("document_role") or "unknown")
-    output.setdefault("product", metadata.get("product") or "")
-    output.setdefault("product_confidence", metadata.get("product_confidence") or 0)
-    output.setdefault("language", metadata.get("language") or "")
-    return output
-
-
-def field(row: Any, key: str, default: Any = None) -> Any:
-    if isinstance(row, dict):
-        return row.get(key, default)
-    return getattr(row, key, default)
-
-
-def source_document_key_from_surface(row: dict[str, Any]) -> str:
-    return source_document_key_for_row(row)
-
-
-def list_json(value: Any) -> str:
-    if isinstance(value, list):
-        return json.dumps(value, sort_keys=True)
-    if value in (None, ""):
-        return "[]"
-    return json.dumps([value], sort_keys=True)
-
-
-def dict_json(value: Any) -> str:
-    if isinstance(value, dict):
-        return json.dumps(value, sort_keys=True)
-    if value in (None, ""):
-        return "{}"
-    return json.dumps(value, sort_keys=True)
-
-
-def text_for_search(*values: Any) -> str:
-    parts: list[str] = []
-    for value in values:
-        if isinstance(value, (dict, list)):
-            parts.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
-        elif value is not None:
-            parts.append(str(value))
-    return "\n".join(part for part in parts if part.strip())
-
-
-def source_document_key_for_row(row: dict[str, Any]) -> str:
-    value = row.get("source_document_key") or row.get("canonical_url") or row.get("source_url") or row.get("path") or ""
-    text = str(value).rstrip("/")
-    if preserves_virtual_source_fragment(text, row):
-        return text
-    return text.split("#", 1)[0].rstrip("/")
-
-
-def preserves_virtual_source_fragment(url: str, row: dict[str, Any]) -> bool:
-    parsed = urlparse(url)
-    if not parsed.fragment:
-        return False
-    metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
-    source_type = str(row.get("source_type") or row.get("source_kind") or metadata.get("source_type") or "").lower()
-    if source_type in {"llms_txt", "openapi"}:
-        return True
-    return bool(
-        re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower())
-        or re.search(r"(?:openapi|swagger)\.(?:json|ya?ml)$", parsed.path.lower())
-    )
-
-
-def first_heading(text: str) -> str:
-    for line in text.splitlines():
-        match = re.match(r"^#\s+(.+)$", line.strip())
-        if match:
-            return match.group(1).strip()
-    return ""
-
-
-def canonical_content_type(path: str, source_url: str, text: str, existing: str) -> str:
-    normalized = existing.strip().lower()
-    if path.startswith("_symbols/"):
-        return "api_reference"
-    inferred_page = classify_content_type(source_url or path, text)
-    inferred_block = block_content_type(source_url or path, text, inferred_page)
-    if normalized in {"code_example", "config", "cli", "error_ref"}:
-        return normalized
-    if inferred_block in {"api_reference", "code_example", "config", "cli", "error_ref"}:
-        return inferred_block
-    if normalized == "api_reference":
-        return normalized
-    if normalized in {"prose", "guide"}:
-        return "prose" if inferred_page == "prose" else inferred_page
-    return inferred_page if inferred_page != "index" else "prose"
-
-
-def source_anchor_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
-    path = str(row.get("path") or "README.md")
-    source_url = str(row.get("source_url") or "").strip()
-    if source_url:
-        base, _ = urldefrag(source_url)
-    else:
-        base = f"oz://{entry.get('vendor')}/{entry.get('library')}/{entry.get('version')}/{path}"
-    headings = list_of_strings(row.get("heading_path"))
-    label = headings[-1] if headings else Path(path).stem
-    ordinal = int(row.get("ordinal") or 1)
-    return f"{base}#{slugify(label)}-_snippet_{ordinal}"
-
-
-def add_parent_chunks(entry: dict[str, Any], fixture: Path, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    output = list(rows)
-    existing_keys = {str(row.get("chunk_key") or "") for row in output}
-    paths_with_explicit_parents = {str(row.get("path") or "") for row in output if row.get("parent_chunk_key")}
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for row in output:
-        path = str(row.get("path") or "README.md")
-        if path in paths_with_explicit_parents:
-            continue
-        if row.get("content_type") == "api_reference" and not path.startswith("_symbols/") and int(row.get("ordinal") or 1) > 0:
-            groups.setdefault(path, []).append(row)
-    for path, children in sorted(groups.items()):
-        meaningful_children = unique_meaningful_children(children)
-        if len(meaningful_children) < 2:
-            continue
-        parent_key = f"{path}#parent-api-reference"
-        for child in meaningful_children:
-            if str(child.get("chunk_key") or "") != parent_key:
-                child["parent_chunk_key"] = child.get("parent_chunk_key") or parent_key
-        if parent_key in existing_keys:
-            continue
-        parent = parent_chunk_row(entry, fixture, path, parent_key, meaningful_children)
-        existing_keys.add(parent_key)
-        output.append(parent)
-    return output
-
-
-def unique_meaningful_children(children: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for child in children:
-        text = str(child.get("text") or "").strip()
-        if token_count(text) < 12:
-            continue
-        key = normalized_content_hash(text)
-        if key in seen:
-            continue
-        seen.add(key)
-        output.append(child)
-    return output
-
-
-def parent_chunk_row(
-    entry: dict[str, Any],
-    fixture: Path,
-    path: str,
-    parent_key: str,
-    children: list[dict[str, Any]],
-) -> dict[str, Any]:
-    content = limit_to_token_budget(parent_content(fixture, path, children), index_chunk_token_limit())
-    source_url = first_non_empty(str(row.get("source_url") or "") for row in children)
-    headings = list_of_strings(children[0].get("heading_path")) if children else [Path(path).stem]
-    symbols = sorted({symbol for row in children for symbol in list_of_strings(row.get("symbols"))})
-    end_lines = [int(row.get("end_line") or 0) for row in children if int(row.get("end_line") or 0) > 0]
-    row = {
-        "id": parent_key,
-        "path": path,
-        "source_url": source_url,
-        "ordinal": 0,
-        "chunk_key": parent_key,
-        "start_line": min(int(row.get("start_line") or 1) for row in children) if children else 1,
-        "end_line": max(end_lines) if end_lines else None,
-        "heading_path": headings,
-        "symbols": symbols,
-        "content_type": "api_reference",
-        "quality_score": max(float(row.get("quality_score") or 1.0) for row in children) if children else 1.0,
-        "token_count": token_count(content),
-        "text": content,
-    }
-    row["source_anchor"] = source_anchor_for_row(entry, row)
-    return row
-
-
-def parent_content(fixture: Path, path: str, children: list[dict[str, Any]]) -> str:
-    joined = "\n\n".join(str(row.get("text") or "").strip() for row in children if str(row.get("text") or "").strip())
-    return joined
-
-
-def index_chunk_token_limit() -> int:
-    try:
-        return max(100, int(os.environ.get("OZ_MAX_CHUNK_TOKENS", "1200")))
-    except ValueError:
-        return 1200
-
-
-def limit_to_token_budget(text: str, max_tokens: int) -> str:
-    text = text.strip()
-    if token_count(text) <= max_tokens:
-        return text
-    low = 0
-    high = len(text)
-    best = ""
-    while low <= high:
-        mid = (low + high) // 2
-        candidate = text[:mid].rstrip()
-        if "\n" in candidate:
-            candidate = candidate.rsplit("\n", 1)[0].rstrip() or text[:mid].rstrip()
-        if token_count(candidate) <= max_tokens:
-            best = candidate
-            low = mid + 1
-        else:
-            high = mid - 1
-    return best.strip() or text[: max(1, max_tokens)].strip()
-
-
-def first_non_empty(values: Any) -> str:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def symbol_chunk_rows(fixture: Path) -> list[dict[str, Any]]:
-    symbols_dir = fixture / "_symbols"
-    if not symbols_dir.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for path in sorted(symbols_dir.glob("*.md")):
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
-        if not text:
-            continue
-        symbol = path.stem
-        relative = path.relative_to(fixture).as_posix()
-        rows.append(
-            {
-                "id": f"symbol-{symbol}",
-                "path": relative,
-                "source_url": symbol_source_url(text),
-                "source_anchor": symbol_source_anchor(text, symbol),
-                "ordinal": 1,
-                "chunk_key": f"symbol-{symbol}",
-                "start_line": 1,
-                "end_line": len(text.splitlines()),
-                "heading_path": [symbol],
-                "symbols": [symbol],
-                "content_type": "api_reference",
-                "quality_score": 1.0,
-                "token_count": token_count(text),
-                "text": text,
-            }
-        )
-    return rows
-
-
-def symbol_source_url(text: str) -> str:
-    for line in text.splitlines():
-        if line.startswith("**Source:**"):
-            return line.split("**Source:**", 1)[1].strip()
-    return ""
-
-
-def symbol_source_anchor(text: str, symbol: str) -> str:
-    source_url = symbol_source_url(text)
-    if not source_url:
-        return ""
-    return f"{source_url}#_symbol_{symbol}"
-
-
-def is_indexable_chunk(row: dict[str, Any]) -> bool:
-    text = str(row.get("text") or "")
-    return bool(text.strip()) and "\x00" not in text
-
-
-def fixture_path(storage: RegistryStorage, entry: dict[str, Any]) -> Path:
-    fixture = entry.get("fixture_path")
-    if fixture:
-        return storage.repo_root / str(fixture)
-    return storage.fixtures_root / str(entry["vendor"]) / str(entry["library"]) / str(entry["version"])
-
-
-def line_span(fixture: Path, row: dict[str, Any], cache: dict[str, str]) -> tuple[int, int | None]:
-    path = str(row.get("path") or "README.md")
-    text = str(row.get("text") or "")
-    if path not in cache:
-        source_path = fixture / path
-        cache[path] = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
-
-    source = cache[path]
-    if not source or not text:
-        return 1, None
-
-    index = source.find(text)
-    if index < 0:
-        index = source.find(text[:160])
-    if index < 0:
-        return 1, None
-
-    start = source[:index].count("\n") + 1
-    end = start + text.count("\n")
-    return start, end
-
-
-def row_line_span(row: dict[str, Any]) -> tuple[int, int | None] | None:
-    start = row.get("start_line")
-    if not isinstance(start, int) or start < 1:
-        return None
-    end = row.get("end_line")
-    return start, end if isinstance(end, int) and end >= start else None
-
-
-def list_of_strings(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if str(item).strip()]
-
-
-def merge_metadata(*values: Any) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for value in values:
-        if isinstance(value, dict):
-            merged.update(value)
-    return merged
-
-
-def valid_embedding(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) == configured_embedding_dimensions()
-        and all(isinstance(item, (int, float)) for item in value)
-    )
-
-
-def nullable_string(value: Any) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
-def optional_int(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def slugify(value: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.lower()).strip("-")
-    return slug[:120] or "snippet"
-
-
-def benchmark_score_for_fixture(fixture: Path, rows: list[dict[str, Any]]) -> float:
-    quality = quality_report(fixture)
-    if quality:
-        return benchmark_from_quality(quality, rows)
-    content_types = {str(row.get("content_type") or "") for row in rows}
-    score = 0.45
-    score += min(len(rows), 80) / 80 * 0.25
-    score += min(len([row for row in rows if row.get("content_type") == "api_reference"]), 20) / 20 * 0.12
-    score += min(len(content_types), 6) / 6 * 0.12
-    score += 0.06 if any(str(row.get("path") or "").startswith("_symbols/") for row in rows) else 0
-    return clamp_score(score)
-
-
-def quality_report(fixture: Path) -> dict[str, Any]:
-    path = fixture / "_quality.json"
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def benchmark_from_quality(quality: dict[str, Any], rows: list[dict[str, Any]]) -> float:
-    metrics = quality.get("metrics") if isinstance(quality.get("metrics"), dict) else {}
-    score = 0.35
-    score += 0.25 if quality.get("passed") else 0
-    score += min(float(metrics.get("required_topic_coverage") or metrics.get("topic_coverage") or 0), 1) * 0.15
-    score += min(float(metrics.get("required_symbol_coverage") or metrics.get("symbol_coverage") or 0), 1) * 0.15
-    score += min(float(metrics.get("accepted_pages") or len(rows)), 80) / 80 * 0.06
-    score += min(len({str(row.get("content_type") or "") for row in rows}), 6) / 6 * 0.04
-    return clamp_score(score)
-
-
-def clamp_score(value: float) -> float:
-    return round(max(0.0, min(float(value), 1.0)), 4)
-
-
-def require_embeddings() -> bool:
-    return os.environ.get("OZ_REQUIRE_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes"}
-
-
-def env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except ValueError:
-        return default
-
-
-def chunk_sha_for_row(entry: dict[str, Any], row: dict[str, Any]) -> str:
-    existing = str(row.get("chunk_sha") or "")
-    if len(existing) == 64 and all(char in "0123456789abcdef" for char in existing.lower()):
-        return existing
-    payload = "\0".join(
-        [
-            str(entry.get("vendor") or ""),
-            str(entry.get("library") or ""),
-            str(entry.get("version") or ""),
-            str(row.get("path") or "README.md"),
-            str(row.get("ordinal") or 1),
-            str(row.get("text") or ""),
-        ]
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def content_sha_for_row(row: dict[str, Any]) -> str:
-    existing = str(row.get("content_sha") or "")
-    if len(existing) == 64 and all(char in "0123456789abcdef" for char in existing.lower()):
-        return existing
-    return normalized_content_hash(str(row.get("text") or row.get("content") or ""))
-
-
-def normalized_content_hash(text: str) -> str:
-    normalized = re.sub(r"\s+", " ", text.strip())
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
+from oz_api.indexer_artifacts import *  # noqa: F403
 
 class IndexWriter:
     def upsert_vendor(self, vendor: str) -> int:
@@ -816,7 +61,7 @@ class IndexWriter:
     def rebuild_dedupe_clusters(self, version_id: int) -> None:
         raise NotImplementedError
 
-    def rebuild_context_index(self, version_id: int, *, embed_agent_cards: bool = False) -> None:
+    def rebuild_agent_surfaces(self, version_id: int, *, fixture: Path, embed_agent_cards: bool = False) -> None:
         raise NotImplementedError
 
     def set_benchmark_score(self, version_id: int, score: float) -> None:
@@ -846,6 +91,8 @@ class IndexWriter:
         token_count: int,
         source_anchor: str | None,
         metadata_json: dict[str, Any],
+        contextual_prefix: str,
+        embedding_input_sha: str | None,
         embedding_model: str | None,
         embedding_dimensions: int | None,
         content: str,
@@ -854,7 +101,7 @@ class IndexWriter:
         raise NotImplementedError
 
 
-class PostgresWriter(IndexWriter):
+class PostgresWriter(SurfaceIndexMixin, IndexWriter):
     def __init__(self, connection: Any) -> None:
         self.connection = connection
 
@@ -869,6 +116,57 @@ class PostgresWriter(IndexWriter):
         with observe_duration("oz_db_query_duration_seconds", {"operation": "indexer_execute", "mode": sql_operation(sql)}):
             with self.connection.cursor() as cursor:
                 cursor.execute(sql, params)
+
+    def tombstone_stale_rows(
+        self,
+        table_name: str,
+        key_column: str,
+        version_id: int,
+        current_keys: list[str],
+        *,
+        content_column: str = "content_sha",
+    ) -> None:
+        allowed = {
+            ("source_documents", "source_document_key"),
+            ("chunks", "chunk_sha"),
+            ("source_sections", "section_key"),
+            ("code_examples", "example_key"),
+            ("api_operations", "operation_key"),
+            ("sdk_methods", "method_key"),
+            ("agent_recipes", "recipe_key"),
+        }
+        if (table_name, key_column) not in allowed:
+            raise ValueError(f"unsupported stale tombstone surface: {table_name}.{key_column}")
+        predicate = "" if not current_keys else f"and not ({key_column} = any(%s::text[]))"
+        params: tuple[Any, ...] = (version_id,) if not current_keys else (version_id, sorted(set(current_keys)))
+        self.execute(
+            f"""
+            insert into index_tombstones(version_id, surface_table, row_id, row_key, content_sha, payload_json)
+            select version_id, %s, id, {key_column}, {content_column}, to_jsonb({table_name})
+            from {table_name}
+            where version_id = %s
+              {predicate}
+            """,
+            (table_name, *params),
+        )
+
+    def delete_stale_rows(
+        self,
+        table_name: str,
+        key_column: str,
+        version_id: int,
+        current_keys: list[str],
+        *,
+        content_column: str = "content_sha",
+    ) -> None:
+        self.tombstone_stale_rows(table_name, key_column, version_id, current_keys, content_column=content_column)
+        if current_keys:
+            self.execute(
+                f"delete from {table_name} where version_id = %s and not ({key_column} = any(%s::text[]))",
+                (version_id, sorted(set(current_keys))),
+            )
+            return
+        self.execute(f"delete from {table_name} where version_id = %s", (version_id,))
 
     def upsert_vendor(self, vendor: str) -> int:
         return self.scalar(
@@ -960,30 +258,22 @@ class PostgresWriter(IndexWriter):
                 )
 
     def delete_stale_chunks(self, version_id: int, current_chunk_shas: list[str]) -> None:
-        chunk_shas = sorted(set(current_chunk_shas))
-        if not chunk_shas:
-            self.execute("delete from chunks where version_id = %s", (version_id,))
-            return
-        placeholders = ", ".join(["%s"] * len(chunk_shas))
-        self.execute(
-            f"delete from chunks where version_id = %s and chunk_sha not in ({placeholders})",
-            (version_id, *chunk_shas),
-        )
+        self.delete_stale_rows("chunks", "chunk_sha", version_id, current_chunk_shas)
 
     def upsert_source_document(self, version_id: int, source: dict[str, Any]) -> int:
         return self.scalar(
             """
             insert into source_documents(
-              version_id, source_document_key, source_kind, source_type, document_role,
+              version_id, source_document_key, source_type, document_role,
               canonical_url, source_url, path, title, product, product_confidence,
-              language, content_sha, raw_token_count, clean_token_count,
+              language, content_markdown, parallel_structured_json, content_sha, raw_token_count, clean_token_count,
               chunk_coverage_ratio, coverage_json,
-              source_priority, discovered_from, metadata_json, fetched_at
+              source_priority, discovered_from, raw_artifact_key, raw_object_store, raw_object_sha256,
+              etag, last_modified, metadata_json, fetched_at
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, now())
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, now())
             on conflict (version_id, source_document_key) do update
-              set source_kind = excluded.source_kind,
-                  source_type = excluded.source_type,
+              set source_type = excluded.source_type,
                   document_role = excluded.document_role,
                   canonical_url = excluded.canonical_url,
                   source_url = excluded.source_url,
@@ -992,6 +282,8 @@ class PostgresWriter(IndexWriter):
                   product = excluded.product,
                   product_confidence = excluded.product_confidence,
                   language = excluded.language,
+                  content_markdown = excluded.content_markdown,
+                  parallel_structured_json = excluded.parallel_structured_json,
                   content_sha = excluded.content_sha,
                   raw_token_count = excluded.raw_token_count,
                   clean_token_count = excluded.clean_token_count,
@@ -999,6 +291,11 @@ class PostgresWriter(IndexWriter):
                   coverage_json = excluded.coverage_json,
                   source_priority = excluded.source_priority,
                   discovered_from = excluded.discovered_from,
+                  raw_artifact_key = excluded.raw_artifact_key,
+                  raw_object_store = excluded.raw_object_store,
+                  raw_object_sha256 = excluded.raw_object_sha256,
+                  etag = excluded.etag,
+                  last_modified = excluded.last_modified,
                   metadata_json = excluded.metadata_json,
                   fetched_at = now()
             returning id
@@ -1006,8 +303,7 @@ class PostgresWriter(IndexWriter):
             (
                 version_id,
                 str(source["source_document_key"]),
-                str(source.get("source_kind") or source.get("source_type") or "website_url"),
-                str(source.get("source_type") or source.get("source_kind") or "website_url"),
+                str(source.get("source_type") or "website_url"),
                 str(source.get("document_role") or "unknown"),
                 nullable_string(source.get("canonical_url")),
                 nullable_string(source.get("source_url")),
@@ -1016,6 +312,8 @@ class PostgresWriter(IndexWriter):
                 str(source.get("product") or ""),
                 float(source.get("product_confidence") or 0),
                 str(source.get("language") or ""),
+                str(source.get("content_markdown") or ""),
+                json.dumps(source.get("parallel_structured_json") if isinstance(source.get("parallel_structured_json"), (dict, list)) else {}, sort_keys=True),
                 nullable_string(source.get("content_sha")),
                 int(source.get("raw_token_count") or 0),
                 int(source.get("clean_token_count") or 0),
@@ -1023,20 +321,17 @@ class PostgresWriter(IndexWriter):
                 json.dumps(source.get("coverage_json") if isinstance(source.get("coverage_json"), dict) else {}, sort_keys=True),
                 int(source.get("source_priority") or 50),
                 nullable_string(source.get("discovered_from")),
+                nullable_string(source.get("raw_artifact_key")),
+                nullable_string(source.get("raw_object_store")),
+                nullable_string(source.get("raw_object_sha256")),
+                nullable_string(source.get("etag")),
+                nullable_string(source.get("last_modified")),
                 json.dumps(source.get("metadata_json") if isinstance(source.get("metadata_json"), dict) else {}, sort_keys=True),
             ),
         )
 
     def delete_stale_source_documents(self, version_id: int, current_source_keys: list[str]) -> None:
-        keys = sorted(set(current_source_keys))
-        if not keys:
-            self.execute("delete from source_documents where version_id = %s", (version_id,))
-            return
-        placeholders = ", ".join(["%s"] * len(keys))
-        self.execute(
-            f"delete from source_documents where version_id = %s and source_document_key not in ({placeholders})",
-            (version_id, *keys),
-        )
+        self.delete_stale_rows("source_documents", "source_document_key", version_id, current_source_keys)
 
     def count_embedded_chunks(self) -> int:
         with self.connection.cursor() as cursor:
@@ -1109,8 +404,11 @@ class PostgresWriter(IndexWriter):
               having count(*) > 1
             ),
             inserted as (
-              insert into dedupe_clusters(version_id, cluster_key, canonical_chunk_id, member_count, method)
-              select version_id, cluster_key, ids[1], member_count, 'normalized_exact'
+              insert into dedupe_clusters(
+                version_id, cluster_key, surface_table, canonical_row_id,
+                member_ids_json, canonical_chunk_id, member_count, method
+              )
+              select version_id, cluster_key, 'chunks', ids[1], to_jsonb(ids), ids[1], member_count, 'normalized_exact'
               from grouped
               returning id, canonical_chunk_id, cluster_key
             )
@@ -1196,11 +494,17 @@ class PostgresWriter(IndexWriter):
               group by canonical_id
             ),
             inserted as (
-              insert into dedupe_clusters(version_id, cluster_key, canonical_chunk_id, member_count, method)
-              select %s, cluster_key, canonical_id, cardinality(ids), 'vector_cosine_0.95'
+              insert into dedupe_clusters(
+                version_id, cluster_key, surface_table, canonical_row_id,
+                member_ids_json, canonical_chunk_id, member_count, method
+              )
+              select %s, cluster_key, 'chunks', canonical_id, to_jsonb(ids), canonical_id, cardinality(ids), 'vector_cosine_0.95'
               from clusters
               on conflict (version_id, cluster_key) do update
-                set canonical_chunk_id = excluded.canonical_chunk_id,
+                set surface_table = excluded.surface_table,
+                    canonical_row_id = excluded.canonical_row_id,
+                    member_ids_json = excluded.member_ids_json,
+                    canonical_chunk_id = excluded.canonical_chunk_id,
                     member_count = excluded.member_count
               returning id, canonical_chunk_id, cluster_key
             )
@@ -1222,507 +526,17 @@ class PostgresWriter(IndexWriter):
             """,
             (version_id, version_id, version_id),
         )
-
-    def rebuild_context_index(self, version_id: int, *, fixture: Path, embed_agent_cards: bool = False) -> None:
-        source_ids = self.source_document_id_map(version_id)
-        rows = self.context_chunk_rows(version_id)
-        sections = source_section_rows(fixture, rows)
-        section_ids = self.replace_source_sections(version_id, sections, source_ids)
-        examples = code_example_rows(fixture)
-        operations = api_operation_rows(fixture)
-        methods = sdk_method_rows(fixture)
-        example_ids = self.replace_code_examples(version_id, examples, source_ids, section_ids)
-        operation_ids = self.replace_api_operations(version_id, operations, source_ids)
-        method_ids = self.replace_sdk_methods(version_id, methods, source_ids)
-        recipes = build_agent_recipes_from_surfaces(
-            code_examples=examples,
-            api_operations=operations,
-            sdk_methods=methods,
-            source_sections=sections,
-            code_example_ids=example_ids,
-            api_operation_ids=operation_ids,
-            sdk_method_ids=method_ids,
-            source_section_ids=section_ids,
+        self.execute(
+            """
+            update dedupe_clusters
+               set surface_table = 'chunks',
+                   canonical_row_id = canonical_chunk_id,
+                   member_ids_json = coalesce(member_ids_json, '[]'::jsonb)
+             where version_id = %s
+               and surface_table = 'chunks'
+            """,
+            (version_id,),
         )
-        self.replace_agent_recipes(version_id, recipes)
-        if embed_agent_cards:
-            ensure_agent_card_embeddings(self.connection, version_id)
-
-    def source_document_id_map(self, version_id: int) -> dict[str, int]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                "select source_document_key, id from source_documents where version_id = %s",
-                (version_id,),
-            )
-            rows = cursor.fetchall()
-        return {str(row[0]): int(row[1]) for row in rows}
-
-    def context_chunk_rows(self, version_id: int) -> list[dict[str, Any]]:
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                select c.id, c.source_document_id, c.path, c.start_line, c.end_line, c.source_url,
-                       c.ordinal, c.chunk_key, c.parent_chunk_key, c.chunk_sha, c.content_sha,
-                       c.heading_path, c.symbols, c.content_type, c.quality_score, c.token_count,
-                       c.source_anchor, c.content, c.dedupe_canonical,
-                       coalesce(sd.title, '') as source_title,
-                       coalesce(sd.source_kind, '') as source_kind,
-                       coalesce(sd.source_type, '') as source_type,
-                       coalesce(sd.document_role, '') as document_role,
-                       coalesce(sd.product, '') as product,
-                       coalesce(sd.product_confidence, 0) as product_confidence,
-                       coalesce(sd.language, '') as source_language,
-                       coalesce(sd.source_priority, 50) as source_priority,
-                       coalesce(c.metadata_json, '{}'::jsonb) as chunk_metadata_json,
-                       coalesce(sd.metadata_json, '{}'::jsonb) as source_metadata_json
-                from chunks c
-                left join source_documents sd on sd.id = c.source_document_id
-                where c.version_id = %s
-                order by c.path asc, c.start_line asc, c.ordinal asc, c.id asc
-                """,
-                (version_id,),
-            )
-            rows = cursor.fetchall()
-        output: list[dict[str, Any]] = []
-        for row in rows:
-            output.append(
-                {
-                    "id": row[0],
-                    "source_document_id": row[1],
-                    "path": row[2],
-                    "start_line": row[3],
-                    "end_line": row[4],
-                    "source_url": row[5],
-                    "ordinal": row[6],
-                    "chunk_key": row[7],
-                    "parent_chunk_key": row[8],
-                    "chunk_sha": row[9],
-                    "content_sha": row[10],
-                    "heading_path": row[11] or [],
-                    "symbols": row[12] or [],
-                    "content_type": row[13],
-                    "quality_score": row[14],
-                    "token_count": row[15],
-                    "source_anchor": row[16],
-                    "content": row[17],
-                    "dedupe_canonical": row[18],
-                    "source_title": row[19],
-                    "source_kind": row[20],
-                    "source_type": row[21],
-                    "document_role": row[22],
-                    "product": row[23],
-                    "product_confidence": row[24],
-                    "language": row[25],
-                    "source_priority": row[26],
-                    "metadata_json": merge_metadata(
-                        {
-                            **(row[27] if isinstance(row[27], dict) else {}),
-                            "source_type": row[21],
-                            "document_role": row[22],
-                            "product": row[23],
-                            "product_confidence": row[24],
-                            "language": row[25],
-                        },
-                        row[28],
-                    ),
-                }
-            )
-        return output
-
-    def replace_source_sections(self, version_id: int, sections: list[Any], source_ids: dict[str, int]) -> dict[str, int]:
-        self.execute("delete from source_sections where version_id = %s", (version_id,))
-        section_ids: dict[str, int] = {}
-        for section in sections:
-            section_key = str(field(section, "section_key") or "")
-            if not section_key:
-                continue
-            metadata = field(section, "metadata_json", {}) if isinstance(field(section, "metadata_json", {}), dict) else {}
-            section_id = self.scalar(
-                """
-                insert into source_sections(
-                  version_id, source_document_id, section_key, path, source_url, source_anchor,
-                  title, heading_path, document_role, content_type, product, product_confidence,
-                  language, start_line, end_line, content, token_count, quality_score, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s, %s,
-                  %s, %s::jsonb, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, section_key) do update
-                  set source_document_id = excluded.source_document_id,
-                      path = excluded.path,
-                      source_url = excluded.source_url,
-                      source_anchor = excluded.source_anchor,
-                      title = excluded.title,
-                      heading_path = excluded.heading_path,
-                      document_role = excluded.document_role,
-                      content_type = excluded.content_type,
-                      product = excluded.product,
-                      product_confidence = excluded.product_confidence,
-                      language = excluded.language,
-                      start_line = excluded.start_line,
-                      end_line = excluded.end_line,
-                      content = excluded.content,
-                      token_count = excluded.token_count,
-                      quality_score = excluded.quality_score,
-                      metadata_json = excluded.metadata_json
-                returning id
-                """,
-                (
-                    version_id,
-                    source_ids.get(source_document_key_from_surface(section)) or field(section, "source_document_id"),
-                    section_key,
-                    str(field(section, "path", "")),
-                    nullable_string(field(section, "source_url")),
-                    nullable_string(field(section, "source_anchor")),
-                    str(field(section, "title", "")) or "Documentation section",
-                    json.dumps(list_of_strings(field(section, "heading_path"))),
-                    str(field(section, "document_role", metadata.get("document_role") or "unknown")),
-                    str(field(section, "content_type", "prose")),
-                    str(field(section, "product", metadata.get("product") or "")),
-                    float(field(section, "product_confidence", metadata.get("product_confidence") or 0) or 0),
-                    str(field(section, "language", metadata.get("language") or "")),
-                    int(field(section, "start_line", 1) or 1),
-                    optional_int(field(section, "end_line")),
-                    str(field(section, "content", "")),
-                    int(field(section, "token_count", token_count(str(field(section, "content", "")))) or 0),
-                    float(field(section, "quality_score", 1) or 1),
-                    json.dumps(metadata, sort_keys=True),
-                ),
-            )
-            section_ids[section_key] = section_id
-        return section_ids
-
-    def replace_code_examples(
-        self,
-        version_id: int,
-        examples: list[dict[str, Any]],
-        source_ids: dict[str, int],
-        section_ids: dict[str, int],
-    ) -> dict[str, int]:
-        self.execute("delete from code_examples where version_id = %s", (version_id,))
-        example_ids: dict[str, int] = {}
-        for example in examples:
-            key = str(example.get("example_key") or "")
-            if not key:
-                continue
-            metadata = example.get("metadata_json") if isinstance(example.get("metadata_json"), dict) else {}
-            example_id = self.scalar(
-                """
-                insert into code_examples(
-                  version_id, source_document_id, source_section_id, example_key, source_type,
-                  document_role, product, product_confidence, language, title, description,
-                  caption, code, imports_json, symbols_json, task_tags_json, required_env_json,
-                  required_params_json, source_url, source_anchor, source_chunk_ids_json,
-                  token_count, quality_score, confidence, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s, %s, %s::jsonb,
-                  %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, example_key) do update
-                  set source_document_id = excluded.source_document_id,
-                      source_section_id = excluded.source_section_id,
-                      source_type = excluded.source_type,
-                      document_role = excluded.document_role,
-                      product = excluded.product,
-                      product_confidence = excluded.product_confidence,
-                      language = excluded.language,
-                      title = excluded.title,
-                      description = excluded.description,
-                      caption = excluded.caption,
-                      code = excluded.code,
-                      imports_json = excluded.imports_json,
-                      symbols_json = excluded.symbols_json,
-                      task_tags_json = excluded.task_tags_json,
-                      required_env_json = excluded.required_env_json,
-                      required_params_json = excluded.required_params_json,
-                      source_url = excluded.source_url,
-                      source_anchor = excluded.source_anchor,
-                      source_chunk_ids_json = excluded.source_chunk_ids_json,
-                      token_count = excluded.token_count,
-                      quality_score = excluded.quality_score,
-                      confidence = excluded.confidence,
-                      metadata_json = excluded.metadata_json
-                returning id
-                """,
-                (
-                    version_id,
-                    source_ids.get(source_document_key_from_surface(example)),
-                    section_ids.get(str(example.get("source_section_key") or "")),
-                    key,
-                    str(example.get("source_type") or metadata.get("source_type") or "website_url"),
-                    str(example.get("document_role") or metadata.get("document_role") or "unknown"),
-                    str(example.get("product") or metadata.get("product") or ""),
-                    float(example.get("product_confidence") or metadata.get("product_confidence") or 0),
-                    str(example.get("language") or ""),
-                    str(example.get("title") or "Code example"),
-                    str(example.get("description") or ""),
-                    str(example.get("caption") or ""),
-                    str(example.get("code") or ""),
-                    list_json(example.get("imports_json")),
-                    list_json(example.get("symbols_json")),
-                    list_json(example.get("task_tags_json")),
-                    list_json(example.get("required_env_json")),
-                    list_json(example.get("required_params_json")),
-                    nullable_string(example.get("source_url")),
-                    nullable_string(example.get("source_anchor")),
-                    list_json(example.get("source_chunk_ids_json")),
-                    int(example.get("token_count") or token_count(str(example.get("code") or ""))),
-                    float(example.get("quality_score") or 1),
-                    float(example.get("confidence") or 0),
-                    json.dumps(metadata, sort_keys=True),
-                ),
-            )
-            example_ids[key] = example_id
-        return example_ids
-
-    def replace_api_operations(self, version_id: int, operations: list[dict[str, Any]], source_ids: dict[str, int]) -> dict[str, int]:
-        self.execute("delete from api_operations where version_id = %s", (version_id,))
-        operation_ids: dict[str, int] = {}
-        for operation in operations:
-            key = str(operation.get("operation_key") or "")
-            if not key:
-                continue
-            metadata = operation.get("metadata_json") if isinstance(operation.get("metadata_json"), dict) else {}
-            operation_id = self.scalar(
-                """
-                insert into api_operations(
-                  version_id, source_document_id, operation_key, product, product_confidence,
-                  operation_id, operation_name, operation_kind, http_method, endpoint, route,
-                  tags_json, summary, description, required_params_json, optional_params_json,
-                  request_schema_json, response_schema_json, errors_json, auth_requirements_json,
-                  source_url, source_anchor, token_count, quality_score, confidence, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s,
-                  %s::jsonb, %s, %s, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
-                  %s, %s, %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, operation_key) do update
-                  set source_document_id = excluded.source_document_id,
-                      product = excluded.product,
-                      product_confidence = excluded.product_confidence,
-                      operation_id = excluded.operation_id,
-                      operation_name = excluded.operation_name,
-                      operation_kind = excluded.operation_kind,
-                      http_method = excluded.http_method,
-                      endpoint = excluded.endpoint,
-                      route = excluded.route,
-                      tags_json = excluded.tags_json,
-                      summary = excluded.summary,
-                      description = excluded.description,
-                      required_params_json = excluded.required_params_json,
-                      optional_params_json = excluded.optional_params_json,
-                      request_schema_json = excluded.request_schema_json,
-                      response_schema_json = excluded.response_schema_json,
-                      errors_json = excluded.errors_json,
-                      auth_requirements_json = excluded.auth_requirements_json,
-                      source_url = excluded.source_url,
-                      source_anchor = excluded.source_anchor,
-                      token_count = excluded.token_count,
-                      quality_score = excluded.quality_score,
-                      confidence = excluded.confidence,
-                      metadata_json = excluded.metadata_json
-                returning id
-                """,
-                (
-                    version_id,
-                    source_ids.get(source_document_key_from_surface(operation)),
-                    key,
-                    str(operation.get("product") or metadata.get("product") or ""),
-                    float(operation.get("product_confidence") or metadata.get("product_confidence") or 0),
-                    str(operation.get("operation_id") or ""),
-                    str(operation.get("operation_name") or operation.get("operation_id") or operation.get("endpoint") or "API operation"),
-                    str(operation.get("operation_kind") or "operation"),
-                    str(operation.get("http_method") or ""),
-                    str(operation.get("endpoint") or ""),
-                    str(operation.get("route") or operation.get("endpoint") or ""),
-                    list_json(operation.get("tags_json")),
-                    str(operation.get("summary") or ""),
-                    str(operation.get("description") or ""),
-                    list_json(operation.get("required_params_json")),
-                    list_json(operation.get("optional_params_json")),
-                    dict_json(operation.get("request_schema_json")),
-                    dict_json(operation.get("response_schema_json")),
-                    list_json(operation.get("errors_json")),
-                    list_json(operation.get("auth_requirements_json")),
-                    nullable_string(operation.get("source_url")),
-                    nullable_string(operation.get("source_anchor")),
-                    int(operation.get("token_count") or token_count(text_for_search(operation.get("summary"), operation.get("description")))),
-                    float(operation.get("quality_score") or 1),
-                    float(operation.get("confidence") or 0),
-                    json.dumps(metadata, sort_keys=True),
-                ),
-            )
-            operation_ids[key] = operation_id
-        return operation_ids
-
-    def replace_sdk_methods(self, version_id: int, methods: list[dict[str, Any]], source_ids: dict[str, int]) -> dict[str, int]:
-        self.execute("delete from sdk_methods where version_id = %s", (version_id,))
-        method_ids: dict[str, int] = {}
-        for method in methods:
-            key = str(method.get("method_key") or "")
-            if not key:
-                continue
-            metadata = method.get("metadata_json") if isinstance(method.get("metadata_json"), dict) else {}
-            method_id = self.scalar(
-                """
-                insert into sdk_methods(
-                  version_id, source_document_id, method_key, product, product_confidence,
-                  language, import_path, module_path, sdk_class, sdk_method, symbol_name,
-                  signature, description, required_params_json, optional_params_json,
-                  return_type, errors_json, source_url, source_anchor, source_chunk_ids_json,
-                  public_api, generated, quality_score, confidence, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s::jsonb, %s::jsonb,
-                  %s, %s::jsonb, %s, %s, %s::jsonb,
-                  %s, %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, method_key) do update
-                  set source_document_id = excluded.source_document_id,
-                      product = excluded.product,
-                      product_confidence = excluded.product_confidence,
-                      language = excluded.language,
-                      import_path = excluded.import_path,
-                      module_path = excluded.module_path,
-                      sdk_class = excluded.sdk_class,
-                      sdk_method = excluded.sdk_method,
-                      symbol_name = excluded.symbol_name,
-                      signature = excluded.signature,
-                      description = excluded.description,
-                      required_params_json = excluded.required_params_json,
-                      optional_params_json = excluded.optional_params_json,
-                      return_type = excluded.return_type,
-                      errors_json = excluded.errors_json,
-                      source_url = excluded.source_url,
-                      source_anchor = excluded.source_anchor,
-                      source_chunk_ids_json = excluded.source_chunk_ids_json,
-                      public_api = excluded.public_api,
-                      generated = excluded.generated,
-                      quality_score = excluded.quality_score,
-                      confidence = excluded.confidence,
-                      metadata_json = excluded.metadata_json
-                returning id
-                """,
-                (
-                    version_id,
-                    source_ids.get(source_document_key_from_surface(method)),
-                    key,
-                    str(method.get("product") or metadata.get("product") or ""),
-                    float(method.get("product_confidence") or metadata.get("product_confidence") or 0),
-                    str(method.get("language") or ""),
-                    str(method.get("import_path") or ""),
-                    str(method.get("module_path") or ""),
-                    str(method.get("sdk_class") or ""),
-                    str(method.get("sdk_method") or ""),
-                    str(method.get("symbol_name") or method.get("sdk_method") or method.get("sdk_class") or "SDK method"),
-                    str(method.get("signature") or ""),
-                    str(method.get("description") or ""),
-                    list_json(method.get("required_params_json")),
-                    list_json(method.get("optional_params_json")),
-                    str(method.get("return_type") or ""),
-                    list_json(method.get("errors_json")),
-                    nullable_string(method.get("source_url")),
-                    nullable_string(method.get("source_anchor")),
-                    list_json(method.get("source_chunk_ids_json")),
-                    bool(method.get("public_api", True)),
-                    bool(method.get("generated", False)),
-                    float(method.get("quality_score") or 1),
-                    float(method.get("confidence") or 0),
-                    json.dumps(metadata, sort_keys=True),
-                ),
-            )
-            method_ids[key] = method_id
-        return method_ids
-
-    def replace_agent_recipes(self, version_id: int, recipes: list[dict[str, Any]]) -> None:
-        self.execute("delete from agent_recipes where version_id = %s", (version_id,))
-        for recipe in recipes:
-            key = str(recipe.get("recipe_key") or "")
-            if not key:
-                continue
-            metadata = recipe.get("metadata_json") if isinstance(recipe.get("metadata_json"), dict) else {}
-            self.execute(
-                """
-                insert into agent_recipes(
-                  version_id, recipe_key, product, product_confidence, title, task_kind,
-                  language, summary, code, info, required_env_json, required_params_json,
-                  source_api_operation_ids_json, source_sdk_method_ids_json,
-                  source_code_example_ids_json, source_section_ids_json, source_chunk_ids_json,
-                  source_urls_json, evidence_hash, llm_model, llm_enriched,
-                  confidence, quality_score, token_count, metadata_json
-                )
-                values (
-                  %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s::jsonb, %s::jsonb,
-                  %s::jsonb, %s, %s, %s,
-                  %s, %s, %s, %s::jsonb
-                )
-                on conflict (version_id, recipe_key) do update
-                  set product = excluded.product,
-                      product_confidence = excluded.product_confidence,
-                      title = excluded.title,
-                      task_kind = excluded.task_kind,
-                      language = excluded.language,
-                      summary = excluded.summary,
-                      code = excluded.code,
-                      info = excluded.info,
-                      required_env_json = excluded.required_env_json,
-                      required_params_json = excluded.required_params_json,
-                      source_api_operation_ids_json = excluded.source_api_operation_ids_json,
-                      source_sdk_method_ids_json = excluded.source_sdk_method_ids_json,
-                      source_code_example_ids_json = excluded.source_code_example_ids_json,
-                      source_section_ids_json = excluded.source_section_ids_json,
-                      source_chunk_ids_json = excluded.source_chunk_ids_json,
-                      source_urls_json = excluded.source_urls_json,
-                      evidence_hash = excluded.evidence_hash,
-                      llm_model = excluded.llm_model,
-                      llm_enriched = excluded.llm_enriched,
-                      confidence = excluded.confidence,
-                      quality_score = excluded.quality_score,
-                      token_count = excluded.token_count,
-                      metadata_json = excluded.metadata_json
-                """,
-                (
-                    version_id,
-                    key,
-                    str(recipe.get("product") or ""),
-                    float(recipe.get("product_confidence") or 0),
-                    str(recipe.get("title") or "Recipe"),
-                    str(recipe.get("task_kind") or "operation"),
-                    str(recipe.get("language") or ""),
-                    str(recipe.get("summary") or ""),
-                    nullable_string(recipe.get("code")),
-                    str(recipe.get("info") or ""),
-                    list_json(recipe.get("required_env_json")),
-                    list_json(recipe.get("required_params_json")),
-                    list_json(recipe.get("source_api_operation_ids_json")),
-                    list_json(recipe.get("source_sdk_method_ids_json")),
-                    list_json(recipe.get("source_code_example_ids_json")),
-                    list_json(recipe.get("source_section_ids_json")),
-                    list_json(recipe.get("source_chunk_ids_json")),
-                    list_json(recipe.get("source_urls_json")),
-                    str(recipe.get("evidence_hash") or ""),
-                    str(recipe.get("llm_model") or ""),
-                    bool(recipe.get("llm_enriched", False)),
-                    float(recipe.get("confidence") or 0),
-                    float(recipe.get("quality_score") or 1),
-                    int(recipe.get("token_count") or token_count(text_for_search(recipe.get("summary"), recipe.get("code"), recipe.get("info")))),
-                    json.dumps(metadata, sort_keys=True),
-                ),
-            )
 
     def scalar_int(self, sql: str, params: tuple[Any, ...]) -> int:
         with self.connection.cursor() as cursor:
@@ -1760,6 +574,8 @@ class PostgresWriter(IndexWriter):
         token_count: int,
         source_anchor: str | None,
         metadata_json: dict[str, Any],
+        contextual_prefix: str,
+        embedding_input_sha: str | None,
         embedding_model: str | None,
         embedding_dimensions: int | None,
         content: str,
@@ -1771,10 +587,10 @@ class PostgresWriter(IndexWriter):
             insert into chunks(
               version_id, source_document_id, path, start_line, end_line, source_url, ordinal, chunk_key,
               parent_chunk_key, chunk_sha, content_sha, heading_path, symbols, content_type,
-              quality_score, token_count, source_anchor, embedding_model,
-              embedding_dimensions, metadata_json, content, embedding
+              quality_score, token_count, source_anchor, contextual_prefix, embedding_input_sha,
+              embedding_model, embedding_dimensions, metadata_json, content, embedding
             )
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::vector)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::vector)
             on conflict (version_id, chunk_sha) do update
               set source_document_id = excluded.source_document_id,
                   path = excluded.path,
@@ -1791,6 +607,8 @@ class PostgresWriter(IndexWriter):
                   quality_score = excluded.quality_score,
                   token_count = excluded.token_count,
                   source_anchor = excluded.source_anchor,
+                  contextual_prefix = excluded.contextual_prefix,
+                  embedding_input_sha = excluded.embedding_input_sha,
                   metadata_json = excluded.metadata_json,
                   embedding_model = coalesce(excluded.embedding_model, chunks.embedding_model),
                   embedding_dimensions = coalesce(excluded.embedding_dimensions, chunks.embedding_dimensions),
@@ -1815,6 +633,8 @@ class PostgresWriter(IndexWriter):
                 quality_score,
                 token_count,
                 source_anchor,
+                contextual_prefix,
+                embedding_input_sha,
                 embedding_model,
                 embedding_dimensions,
                 json.dumps(metadata_json, sort_keys=True),

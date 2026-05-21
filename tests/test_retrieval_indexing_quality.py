@@ -1,0 +1,656 @@
+from __future__ import annotations
+# ruff: noqa: E402
+
+import unittest
+import json
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "packages" / "oz-api" / "src"))
+sys.path.insert(0, str(ROOT / "packages" / "oz-crawler" / "src"))
+
+from scripts.worker import queue_has_items
+from oz_api import admin_ops
+from oz_api.crawler_jobs import (
+    content_requirement_hit,
+    embedding_result_is_terminal,
+    pack_eval_report,
+    path_junk_hit,
+    search_eval_report,
+    terminal_embedding_error,
+)
+from oz_api.intent import classify_query, plan_query
+from oz_api.embedding_jobs import EmbeddingEnsureResult, batch_line, selected_embedding_mode, split_batch_rows, embedding_cache_key
+from oz_api.indexer import chunk_rows, enrich_chunk_row, limit_to_token_budget
+from oz_api.llm_recipes import grounded_generation, high_risk_api_tokens
+from oz_api.ranking import local_chunk_score, planned_chunk_score
+from oz_api.queue import queued_crawler_job_event
+from oz_api.retrieval import code_blocks_satisfying_context_terms, context_packet, context_required_terms, context_source_text, leaf_code_blocks
+from oz_api.rerank import (
+    boost_named_suggestions,
+    boost_query_matches,
+    parse_rerank_results,
+    rerank_cache_key,
+    strip_private_fields,
+    zeroentropy_scores,
+)
+from oz_api.trust import github_repo_from_url, github_signal_score, trust_score_for_entry
+from oz_api.storage import RegistryStorage
+from oz_api.versions import latest_entry, parse_versioned_scope, resolve_catalog_entry
+from oz_crawler.chunks import chunk_markdown, content_hash, write_chunks
+from oz_crawler.content_types import block_content_type, classify_content_type
+from oz_crawler.crawl import is_crawlable_doc_url, prepare_pages
+from oz_crawler.crawl_runtime import CrawlRunState
+from oz_crawler.embeddings import embedding_batches
+from oz_crawler.language import language_allowed
+from oz_crawler.normalize import NormalizedPage
+from oz_crawler.normalize import clean_markdown
+from oz_crawler.parsers.source_code import extracted_documented_blocks, source_path_allowed
+from oz_crawler.profiles import BASELINE_DENIED_PATHS, LibraryProfile, url_allowed_by_profile
+from oz_crawler.pack import build_pack_bytes
+from oz_crawler.splitting import document_path, split_llms_full
+from oz_crawler.sources import artifact_markdown, extract_urls, prioritized_urls
+from oz_crawler.token_counting import token_count
+from oz_crawler.validation import USEFUL_CONTENT_TYPES, has_frontmatter, true_junk_rejections, validate_fixture
+
+
+
+
+class RetrievalIndexingQualityTests(unittest.TestCase):
+    def test_indexer_strips_source_index_boilerplate(self) -> None:
+        row = enrich_chunk_row(
+            {"vendor": "vercel", "library": "next.js", "version": "15"},
+            {
+                "path": "api-reference/config.md",
+                "text": (
+                    "Use this config.\n"
+                    "For an index of all available documentation, see [/docs/llms.txt](/docs/llms.txt)"
+                ),
+                "start_line": 1,
+            },
+        )
+
+        self.assertNotIn("index of all available documentation", row["text"])
+        self.assertIn("Use this config.", row["text"])
+
+    def test_indexer_does_not_synthesize_legacy_symbol_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "registry" / "fixtures" / "vendor" / "lib" / "1"
+            symbols = fixture / "_symbols"
+            symbols.mkdir(parents=True)
+            (fixture / "_chunks.jsonl").write_text("", encoding="utf-8")
+            (symbols / "alpha.md").write_text("# alpha\n\n**Source:** https://docs.example/a\n\nAlpha API.", encoding="utf-8")
+            (symbols / "beta.md").write_text("# beta\n\n**Source:** https://docs.example/b\n\nBeta API.", encoding="utf-8")
+            rows = chunk_rows(
+                RegistryStorage(root),
+                {"vendor": "vendor", "library": "lib", "version": "1"},
+            )
+
+        self.assertEqual(rows, [])
+
+    def test_markdown_cleanup_strips_single_word_nav_boilerplate(self) -> None:
+        markdown = clean_markdown("# Guide\n\nSponsor\n\nBlog\n\nUse computed refs.")
+
+        self.assertNotIn("Sponsor", markdown)
+        self.assertNotIn("Blog", markdown)
+        self.assertIn("Use computed refs.", markdown)
+
+    def test_markdown_cleanup_strips_source_index_boilerplate(self) -> None:
+        markdown = clean_markdown(
+            "> For an index of all Next.js documentation, see [/docs/pages/llms.txt](/docs/pages/llms.txt).\n"
+            "NextResponse extends the Web Response API."
+        )
+
+        self.assertNotIn("index of all Next.js documentation", markdown)
+        self.assertIn("NextResponse extends", markdown)
+
+    def test_markdown_cleanup_strips_horizontal_rules_without_frontmatter_false_positive(self) -> None:
+        markdown = clean_markdown("---\n## Reference\n\nUse `useState`.\n\n---\n## Usage\n")
+
+        self.assertNotIn("---", markdown)
+        self.assertTrue(markdown.startswith("## Reference"))
+        self.assertFalse(has_frontmatter("---\n## Reference\n\nUse `useState`.\n\n---\n"))
+
+    def test_llms_full_split_does_not_reemit_frontmatter(self) -> None:
+        pages = split_llms_full(
+            "---\ntitle: Routing\nurl: https://docs.example/routing\n---\n# Routing\n\nUse routes.",
+            source_url="https://docs.example/llms-full.txt",
+        )
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].title, "Routing")
+        self.assertNotIn("title:", pages[0].markdown)
+
+    def test_llms_full_split_ignores_frontmatter_inside_code_fences(self) -> None:
+        pages = split_llms_full(
+            "---\ntitle: Config Guide\nurl: https://docs.example/config\n---\n"
+            "# Config Guide\n\n````md\n---\ntitle: Nested Example\n---\n````\n\nUse config.",
+            source_url="https://docs.example/llms-full.txt",
+        )
+
+        self.assertEqual(len(pages), 1)
+        self.assertIn("Nested Example", pages[0].markdown)
+
+    def test_document_path_uses_canonical_url_not_content_type(self) -> None:
+        path = document_path(
+            "https://nextjs.org/docs/app/api-reference/functions/cookies",
+            "cookies",
+            "code_example",
+        )
+
+        self.assertEqual(path, "api-reference/app/api-reference/functions/cookies.md")
+
+    def test_source_artifact_markdown_keeps_source_url_out_of_indexed_text(self) -> None:
+        markdown = artifact_markdown("Routing", "---\ntitle: Routing\n---\n# Routing\n\nUse routes.")
+
+        self.assertTrue(markdown.startswith("# Routing"))
+        self.assertNotIn("**Source:**", markdown)
+        self.assertNotIn("title:", markdown)
+
+    def test_source_url_discovery_skips_malformed_urls(self) -> None:
+        text = "Good https://docs.example/reference and malformed https://[bad]/docs should not crash."
+
+        self.assertEqual(extract_urls(text, base_url="https://docs.example"), ["https://docs.example/reference"])
+        self.assertEqual(
+            prioritized_urls(
+                "https://docs.example",
+                preferred_urls=[],
+                discovered_urls=["https://[bad]/docs", "https://docs.example/guide"],
+            )[-1],
+            "https://docs.example/guide",
+        )
+
+    def test_language_filter_rejects_non_target_prose_but_keeps_code_heavy_docs(self) -> None:
+        spanish = " ".join(["el ejemplo para configurar la respuesta con los valores"] * 20)
+        code_heavy = "```ts\n" + "\n".join(["export function readCookie() { return cookies.get('sid') }"] * 20) + "\n```"
+
+        self.assertFalse(language_allowed(spanish, "en"))
+        self.assertTrue(language_allowed(code_heavy, "en"))
+
+    def test_source_code_parser_extracts_documented_exports(self) -> None:
+        source = """/** Create a client. */\nexport function createClient(apiKey: string) {\n  return { apiKey };\n}\n"""
+
+        blocks = extracted_documented_blocks(source, "typescript")
+
+        self.assertEqual(blocks[0]["name"], "createClient")
+        self.assertIn("Create a client", blocks[0]["body"])
+        self.assertTrue(source_path_allowed("packages/sdk/src/client.ts", ["src/"]))
+        self.assertTrue(source_path_allowed("django/forms/widgets.py", ["django/**/*.py"]))
+        self.assertTrue(source_path_allowed("src/client.ts", []))
+
+    def test_oversized_code_fence_is_split_under_chunk_cap(self) -> None:
+        long_line = "const value = '" + ("x" * 7000) + "';"
+        chunks = chunk_markdown(
+            "# Config\n\n```ts\n" + long_line + "\n```",
+            source_url="https://docs.example/config",
+            page_type="code_example",
+            max_tokens=250,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.text.startswith("```ts") and chunk.text.endswith("```") for chunk in chunks))
+        self.assertTrue(all(token_count(chunk.text) <= 250 for chunk in chunks))
+
+    def test_crawl_run_state_checkpoints_pages_and_dead_letters(self) -> None:
+        progress: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = CrawlRunState.create(root, progress.append)
+            state.record_page("https://docs.example/a", "<main>A</main>", "A")
+            state.record_dead_letter(
+                "https://docs.example/b",
+                stage="page_fetch",
+                error="HTTP 503",
+                attempts=3,
+                status=503,
+                transient=True,
+            )
+            restored = CrawlRunState.create(root)
+
+        self.assertEqual(restored.completed_urls, {"https://docs.example/a"})
+        self.assertEqual(restored.restored_pages[0]["html"], "<main>A</main>")
+        self.assertEqual(restored.dead_letters[0].status, 503)
+        self.assertTrue(progress)
+        self.assertEqual(progress[-1]["dead_letter_items"][0]["status"], 503)
+
+    def test_pre_promotion_search_eval_uses_candidate_fixture_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            eval_root = repo / "registry" / "evals"
+            eval_root.mkdir(parents=True)
+            (eval_root / "widget.yaml").write_text(
+                json.dumps(
+                    {
+                        "library": "acme/widget",
+                        "version": "1",
+                        "checks": [
+                            {
+                                "name": "candidate docs",
+                                "query": "new target",
+                                "expected_files": ["guides/new.md"],
+                                "must_include": ["target"],
+                                "must_not_include": ["old"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stale = repo / "registry" / "fixtures" / "acme" / "widget" / "1"
+            stale.mkdir(parents=True)
+            (stale / "_chunks.jsonl").write_text(
+                json.dumps({"path": "guides/old.md", "text": "old target", "start_line": 1}) + "\n",
+                encoding="utf-8",
+            )
+            candidate_root = repo / "candidate-fixtures"
+            candidate = candidate_root / "acme" / "widget" / "1"
+            (candidate / "guides").mkdir(parents=True)
+            (candidate / "guides" / "new.md").write_text("new target", encoding="utf-8")
+            (candidate / "_chunks.jsonl").write_text(
+                json.dumps({"path": "guides/new.md", "text": "new target", "start_line": 1}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = search_eval_report(
+                RegistryStorage(repo_root=repo),
+                "acme/widget",
+                "1",
+                fixtures_root=candidate_root,
+            )
+
+        self.assertIsNotNone(report)
+        assert report is not None
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["checks"][0]["paths"], [".codo/vendors/acme/widget@1/guides/new.md"])
+
+    def test_search_eval_content_requirements_support_pattern_alternatives(self) -> None:
+        self.assertTrue(content_requirement_hit("useState updater function", ["set function"], ["set function|updater"]))
+        self.assertFalse(content_requirement_hit("useState render", ["set function"], ["set function|updater"]))
+
+    def test_search_eval_path_bans_do_not_flag_valid_content_words(self) -> None:
+        self.assertFalse(path_junk_hit([".codo/vendors/vuejs/vue@3/guides/blog-example.md"], [], ["/blog$"]))
+        self.assertTrue(path_junk_hit([".codo/vendors/vuejs/vue@3/guides/blog.md"], [], ["/blog\\.md$"]))
+
+    def test_write_chunks_does_not_embed_inline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            page = NormalizedPage(title="Doc", markdown="# Doc\n\nUse it.", source_url="https://docs.example/doc", path="guides/doc.md")
+            write_chunks(target, [page])
+            row = next(json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip())
+            coverage = next(json.loads(line) for line in (target / "_chunk_coverage.jsonl").read_text().splitlines() if line.strip())
+
+        self.assertIn("chunk_sha", row)
+        self.assertIn("content_sha", row)
+        self.assertIn("source_section_key", row)
+        self.assertEqual(row["content_sha"], content_hash(row["text"]))
+        self.assertNotIn("embedding", row)
+        self.assertNotIn("embedding_model", row)
+        self.assertEqual(coverage["coverage_ratio"], 1.0)
+        self.assertEqual(coverage["uncovered_ranges"], [])
+
+    def test_write_chunks_assigns_symbols_only_when_present_in_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vendor" / "library" / "latest"
+            target.mkdir(parents=True)
+            write_chunks(
+                target,
+                [
+                    NormalizedPage(
+                        title="Hooks",
+                        markdown="# Hooks\n\nUse `useEffect` for cleanup.\n\n## Other\n\nUse memoization carefully.",
+                        source_url="https://react.dev/reference/react/hooks",
+                        path="api-reference/react/hooks.md",
+                        content_type="api_reference",
+                        symbols=("useEffect", "useEffectEvent"),
+                    )
+                ],
+            )
+            rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
+
+        effect_rows = [row for row in rows if "useEffect" in row["text"]]
+        other_rows = [row for row in rows if "memoization" in row["text"]]
+        self.assertTrue(effect_rows)
+        self.assertEqual(effect_rows[0]["symbols"], ["useEffect"])
+        self.assertTrue(other_rows)
+        self.assertEqual(other_rows[0]["symbols"], [])
+
+    def test_prepare_pages_rejects_duplicate_source_content(self) -> None:
+        markdown = "# useEffect\n\n" + "React effect cleanup dependencies example. " * 20
+        pages = [
+            NormalizedPage(title="useEffect", markdown=markdown, source_url="https://react.dev/reference/react/useEffect"),
+            NormalizedPage(title="useEffect copy", markdown=markdown, source_url="https://react.dev/reference/react/useEffect"),
+        ]
+
+        accepted, rejected = prepare_pages(pages, profile=None, version="19")
+
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("duplicate source", rejected[0]["reasons"])
+
+    def test_pack_excludes_internal_indexing_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "guides").mkdir()
+            (root / ".oz").mkdir()
+            (root / "INDEX.md").write_text("# Index\n", encoding="utf-8")
+            (root / "guides" / "doc.md").write_text("Doc", encoding="utf-8")
+            (root / ".oz" / "manifest.json").write_text("{}", encoding="utf-8")
+            (root / "_chunks.jsonl").write_text("internal", encoding="utf-8")
+            body, manifest = build_pack_bytes(root, "v", "l", "1")
+
+        paths = {row["path"] for row in manifest["blobs"]}
+        self.assertIn("INDEX.md", paths)
+        self.assertIn("guides/doc.md", paths)
+        self.assertIn(".oz/manifest.json", paths)
+        self.assertNotIn("_chunks.jsonl", paths)
+        self.assertNotIn(b"_chunks.jsonl", body)
+        report = pack_eval_report(manifest)
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["metrics"]["has_manifest"])
+
+    def test_validation_blocks_long_anchors_and_docs_authoring_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            (target / "guides" / "community").mkdir(parents=True)
+            (target / "guides" / "community" / "contribution-guide.md").write_text("Contribution guide", encoding="utf-8")
+            (target / "_chunks.jsonl").write_text(
+                json.dumps(
+                    {
+                        "path": "guides/community/contribution-guide.md",
+                        "text": "For an index of all docs, read this.",
+                        "source_anchor": "https://docs.example/" + ("x" * 260),
+                        "heading_path": ["h" * 170],
+                        "token_count": 12,
+                        "content_type": "prose",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = validate_fixture(target, profile=None)
+
+        self.assertFalse(result.passed)
+        self.assertGreater(result.metrics["long_source_anchors"], 0)
+        self.assertGreater(result.metrics["docs_authoring_chunks"], 0)
+        self.assertGreater(result.metrics["index_boilerplate_chunks"], 0)
+
+    def test_write_chunks_preserves_duplicate_content_across_source_paths_for_coverage(self) -> None:
+        markdown = "# Shared\n\n" + "Use the same setup sequence. " * 25
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vendor" / "library" / "latest"
+            target.mkdir(parents=True)
+            write_chunks(
+                target,
+                [
+                    NormalizedPage(title="One", markdown=markdown, source_url="https://docs.example/one", path="guides/one.md"),
+                    NormalizedPage(title="Two", markdown=markdown, source_url="https://docs.example/two", path="guides/two.md"),
+                ],
+            )
+            rows = [json.loads(line) for line in (target / "_chunks.jsonl").read_text().splitlines() if line.strip()]
+            coverage = [json.loads(line) for line in (target / "_chunk_coverage.jsonl").read_text().splitlines() if line.strip()]
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["path"] for row in rows}, {"guides/one.md", "guides/two.md"})
+        self.assertTrue(all(row["coverage_ratio"] == 1.0 for row in coverage))
+
+    def test_validation_junk_ratio_excludes_policy_dedup_rejections(self) -> None:
+        rows = [
+            {"content_type": "duplicate", "reasons": ["duplicate content", "canonical source: https://docs.example/a"]},
+            {"content_type": "network_page_fetch", "reasons": ["crawler URL returned HTTP 404: https://docs.example/missing"]},
+            {"content_type": "junk", "reasons": ["url rejected by library profile"]},
+            {"content_type": "junk", "reasons": ["marketing/login language"]},
+        ]
+
+        self.assertEqual(len(true_junk_rejections(rows)), 1)
+
+    def test_validation_treats_all_retrieval_content_types_as_useful(self) -> None:
+        self.assertIn("config", USEFUL_CONTENT_TYPES)
+
+    def test_api_reference_parent_chunks_respect_max_token_limit(self) -> None:
+        markdown = "# Endpoint\n\n## Response\n\n" + "\n".join(f"- field_{idx}: lorem ipsum dolor sit amet" for idx in range(500))
+
+        chunks = chunk_markdown(
+            markdown,
+            source_url="https://docs.example/reference",
+            page_type="api_reference",
+            max_tokens=300,
+        )
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(token_count(chunk.text) <= 300 for chunk in chunks))
+        self.assertIn("cli", USEFUL_CONTENT_TYPES)
+        self.assertIn("error_ref", USEFUL_CONTENT_TYPES)
+
+    def test_embedding_cache_key_includes_schema_and_input_type(self) -> None:
+        with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v1"}, clear=False):
+            first = embedding_cache_key("abc")
+            surface_specific = embedding_cache_key("abc", "code_examples")
+        with patch.dict("os.environ", {"OZ_EMBEDDING_CACHE_SCHEMA_VERSION": "v2"}, clear=False):
+            second = embedding_cache_key("abc")
+
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, surface_specific)
+
+    def test_embedding_mode_auto_uses_batch_only_for_large_voyage_jobs(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"OZ_EMBEDDING_PROVIDER": "voyage", "OZ_EMBEDDING_INDEX_MODE": "auto", "OZ_EMBEDDING_SYNC_THRESHOLD": "500"},
+            clear=False,
+        ):
+            self.assertEqual(selected_embedding_mode(499, force_sync=False), "sync")
+            self.assertEqual(selected_embedding_mode(500, force_sync=False), "batch")
+            self.assertEqual(selected_embedding_mode(500, force_sync=True), "sync")
+
+    def test_voyage_batch_rows_split_by_input_limit_and_use_chunk_sha_custom_ids(self) -> None:
+        rows = [{"chunk_sha": f"sha-{index}", "content": f"content {index}"} for index in range(3)]
+        with patch.dict("os.environ", {"OZ_VOYAGE_BATCH_MAX_INPUTS": "2", "OZ_VOYAGE_BATCH_MAX_BYTES": "1000000"}, clear=False):
+            batches = split_batch_rows(rows)
+
+        self.assertEqual([len(batch) for batch in batches], [2, 1])
+        self.assertEqual(batch_line(rows[0])["custom_id"], "sha-0")
+        self.assertEqual(batch_line(rows[0])["body"]["input"], ["content 0"])
+
+    def test_worker_detects_pending_queue_before_idle_batch_poll(self) -> None:
+        class FakeRedis:
+            def __init__(self, depth: int) -> None:
+                self.depth = depth
+
+            def llen(self, _queue: str) -> int:
+                return self.depth
+
+        self.assertTrue(queue_has_items(FakeRedis(2), "oz:crawler:jobs"))
+        self.assertFalse(queue_has_items(FakeRedis(0), "oz:crawler:jobs"))
+
+    def test_requeued_crawler_job_preserves_db_id_and_profile(self) -> None:
+        event = queued_crawler_job_event(
+            {
+                "id": 49,
+                "vendor": "django",
+                "library_name": "django",
+                "source_url": "https://docs.djangoproject.com/en/stable/",
+                "version": "latest",
+                "max_pages": 256,
+                "allowed_hosts": ["docs.djangoproject.com"],
+                "allowed_paths": ["/en/stable/"],
+                "denied_paths": ["/deprecated/"],
+                "source_file_patterns": ["django/**/*.py"],
+                "needs_js": True,
+                "include_source_files": True,
+                "target_language": "en",
+            }
+        )
+
+        self.assertEqual(event["db_job_id"], "49")
+        self.assertEqual(event["profile"]["allowed_hosts"], ["docs.djangoproject.com"])
+        self.assertEqual(event["profile"]["allowed_paths"], ["/en/stable/"])
+        self.assertEqual(event["profile"]["source_file_patterns"], ["django/**/*.py"])
+        self.assertTrue(event["profile"]["needs_js"])
+        self.assertTrue(event["profile"]["include_source_files"])
+        self.assertEqual(event["profile"]["target_language"], "en")
+
+    def test_catalog_promotion_does_not_record_empty_quality_failure(self) -> None:
+        class FakeStore:
+            def execute(self, *_args, **_kwargs) -> list[dict[str, object]]:
+                return []
+
+        entry = {
+            "vendor": "vercel",
+            "library": "next.js",
+            "version": "15",
+            "ref_sha": "abc",
+            "pack_path": "packs/next.ozpack",
+            "source_urls": ["https://nextjs.org/docs"],
+        }
+        job = {"db_job_id": "34"}
+        with patch.object(admin_ops.AuthStore, "from_env", return_value=FakeStore()), patch.object(
+            admin_ops, "record_pack_build"
+        ), patch.object(admin_ops, "record_quality_run") as record_quality:
+            admin_ops.record_catalog_promotion(entry, job, {})
+            record_quality.assert_not_called()
+            admin_ops.record_catalog_promotion(entry, job, {"passed": True})
+            record_quality.assert_called_once()
+
+    def test_baseline_profile_excludes_legacy_noise(self) -> None:
+        profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["docs.example.com"], allowed_paths=["/docs"])
+        self.assertIn("deprecated", BASELINE_DENIED_PATHS)
+        self.assertFalse(url_allowed_by_profile("https://docs.example.com/docs/legacy/v1/page", profile))
+
+    def test_absolute_allowed_paths_match_prefix_not_any_segment(self) -> None:
+        profile = LibraryProfile(vendor="v", library="l", allowed_hosts=["example.com"], allowed_paths=["/docs"])
+
+        self.assertTrue(url_allowed_by_profile("https://example.com/docs/reference/page", profile))
+        self.assertFalse(url_allowed_by_profile("https://example.com/ui/docs/reference/page", profile))
+
+    def test_crawler_rejects_malformed_markdown_urls(self) -> None:
+        self.assertFalse(is_crawlable_doc_url("https://example.com/docs/guides/auth](https://example.com/docs/auth", "example.com"))
+        self.assertFalse(is_crawlable_doc_url("https://example.com/ui/docs/widget'", "example.com"))
+
+    def test_rerank_strips_private_fields_and_boosts_named_suggestions(self) -> None:
+        rows = [{"vendor": "vercel", "library": "next.js", "version": "15", "score": 1, "_rerank_text": "secret"}]
+        boosted = boost_named_suggestions("next.js", rows)
+        self.assertGreater(boosted[0]["score"], 1)
+        self.assertNotIn("_rerank_text", strip_private_fields(boosted)[0])
+
+    def test_rerank_cache_key_changes_when_candidate_paths_change(self) -> None:
+        first = rerank_cache_key("search:facebook/react", "hooks", "project", [{"path": "old.md"}])
+        second = rerank_cache_key("search:facebook/react", "hooks", "project", [{"path": "new.md"}])
+
+        self.assertNotEqual(first, second)
+
+    def test_query_match_boost_keeps_exact_symbols_competitive_after_rerank(self) -> None:
+        rows = [
+            {
+                "path": ".codo/vendors/vercel/next.js@15/guides/authentication.md",
+                "matched_path": "guides/authentication.md",
+                "symbols": [],
+                "content_type": "guide",
+                "score": 100,
+            },
+            {
+                "path": ".codo/vendors/vercel/next.js@15/_symbols/NextRequest.md",
+                "matched_path": "_symbols/NextRequest.md",
+                "symbols": ["NextRequest"],
+                "content_type": "api_reference",
+                "score": 80,
+            },
+        ]
+
+        boosted = boost_query_matches("NextRequest middleware cookies", rows)
+
+        self.assertEqual(boosted[0]["path"], ".codo/vendors/vercel/next.js@15/_symbols/NextRequest.md")
+
+    def test_zeroentropy_rerank_payload_uses_zerank_2(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(url: str, payload: dict[str, object], headers: dict[str, str], **_kwargs: object):
+            captured["url"] = url
+            captured["payload"] = payload
+            captured["headers"] = headers
+            return [(1, 0.9)]
+
+        with patch("oz_api.rerank.request_scores", fake_request), patch.dict(
+            "os.environ",
+            {"OZ_RERANK_MODEL": "zerank-2", "OZ_ZEROENTROPY_LATENCY": "fast"},
+            clear=False,
+        ):
+            scores = zeroentropy_scores("ze-key", "query", ["doc a", "doc b"])
+
+        self.assertEqual(scores, [(1, 0.9)])
+        self.assertEqual(captured["url"], "https://api.zeroentropy.dev/v1/models/rerank")
+        self.assertEqual(captured["payload"]["model"], "zerank-2")  # type: ignore[index]
+        self.assertEqual(captured["payload"]["latency"], "fast")  # type: ignore[index]
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer ze-key")  # type: ignore[index]
+
+    def test_rerank_response_parser_accepts_official_and_compatible_scores(self) -> None:
+        self.assertEqual(
+            parse_rerank_results(
+                [
+                    {"index": 2, "relevance_score": 0.7},
+                    {"index": "1", "score": "0.6"},
+                    {"index": 0, "rerank_score": 0.5},
+                    {"index": True, "relevance_score": 0.1},
+                ]
+            ),
+            [(2, 0.7), (1, 0.6), (0, 0.5)],
+        )
+
+    def test_trust_score_parses_github_and_uses_repo_signals(self) -> None:
+        self.assertEqual(github_repo_from_url("https://github.com/vercel/next.js/tree/canary/docs"), ("vercel", "next.js"))
+        score, signals = trust_score_for_entry(
+            {
+                "vendor": "vercel",
+                "library": "next.js",
+                "source_urls": ["https://github.com/vercel/next.js"],
+                "keywords": ["next", "react", "docs"],
+                "pack_path": "registry/packs/vercel/next.js/15.ozpack",
+            }
+        )
+        self.assertGreater(score, 0.45)
+        self.assertTrue(signals["official_source_signal"])
+
+    def test_github_signal_score_rewards_popular_active_repos(self) -> None:
+        score = github_signal_score(
+            {
+                "network_fetch": "ok",
+                "stars": 120000,
+                "forks": 26000,
+                "license": True,
+                "created_at": "2016-01-01T00:00:00Z",
+                "pushed_at": "2026-05-01T00:00:00Z",
+                "archived": False,
+                "disabled": False,
+            }
+        )
+
+        self.assertGreater(score, 0.35)
+
+    def test_markdown_chunking_handles_malformed_inputs_without_crashing(self) -> None:
+        samples = [
+            "---\ntitle: Broken",
+            "# Heading\n\n```ts\nunterminated fence\nconst value = 1",
+            "- item\n  ```json\n  {bad json\n  ```\n\n<table><tr><td>cell",
+            "\x00\x01# Binary-ish\n\n" + ("word " * 400),
+            "# Long paragraph\n\n" + ("configuration middleware cookies response headers " * 500),
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample[:24]):
+                chunks = chunk_markdown(clean_markdown(sample), source_url="https://docs.example/fuzz", max_tokens=300)
+                self.assertTrue(all(chunk.text.strip() for chunk in chunks))
+                self.assertTrue(all(token_count(chunk.text) <= 1200 for chunk in chunks))
+
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    unittest.main()

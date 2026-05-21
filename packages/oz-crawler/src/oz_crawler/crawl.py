@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -16,6 +15,7 @@ from xml.etree import ElementTree
 
 from oz_crawler.chunks import write_chunks
 from oz_crawler.corpus_surfaces import normalized_metadata, write_corpus_surfaces
+from oz_crawler.crawl_artifacts import canonical_source_key, page_content_key, write_source_documents, write_user_manifest
 from oz_crawler.crawl_runtime import CrawlRunState, ProgressCallback, max_page_bytes, retry_attempts
 from oz_crawler.language import language_allowed
 from oz_crawler.normalize import NormalizedPage, clean_markdown, normalize_html, sanitize_secret_tokens
@@ -26,7 +26,6 @@ from oz_crawler.splitting import assign_page_paths, split_llms_full
 from oz_crawler.sources import SourceArtifact, collect_source_artifacts
 from oz_crawler.symbols import extract_page_symbol_names, write_symbols
 from oz_crawler.text import decode_text_response, is_probably_binary_text, is_textual_url_candidate
-from oz_crawler.token_counting import token_count
 from oz_crawler.validation import validate_fixture, write_validation
 from oz_crawler.versioning import filter_current_version
 
@@ -116,14 +115,6 @@ def crawl_single_page(
         f"# {page_title}\n\nDocumentation crawled from {url}.\n",
         encoding="utf-8",
     )
-    (target / "api-reference" / "README.md").write_text(
-        f"# {page_title} API Reference\n\nAPI reference entries extracted from {url}.\n",
-        encoding="utf-8",
-    )
-    (target / "examples" / "README.md").write_text(
-        f"# {page_title} Examples\n\nRunnable examples extracted from {url}.\n",
-        encoding="utf-8",
-    )
     artifacts = collect_source_artifacts(url, pages, profile=profile, state=state, max_documents=max(24, crawl_options.max_pages))
     artifact_pages = artifact_normalized_pages(artifacts)
     all_pages, rejected = prepare_pages(pages + artifact_pages, profile=profile, version=version)
@@ -176,90 +167,6 @@ def crawl_single_page(
     return target
 
 
-def write_source_documents(target: Path, pages: list[NormalizedPage]) -> None:
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for page in pages:
-        key = canonical_source_key(page)
-        if key in seen:
-            continue
-        seen.add(key)
-        metadata = normalized_metadata(page)
-        clean = clean_markdown(page.markdown)
-        rows.append(
-            {
-                "source_document_key": key,
-                "source_kind": metadata.get("source_type") or page.source_kind,
-                "source_type": metadata.get("source_type") or page.source_kind,
-                "document_role": metadata.get("document_role") or "unknown",
-                "canonical_url": page.canonical_url or page.source_url,
-                "source_url": page.source_url,
-                "path": page.path,
-                "title": page.title,
-                "product": metadata.get("product") or "",
-                "product_confidence": metadata.get("product_confidence") or 0,
-                "language": metadata.get("language") or "",
-                "content_sha": page_content_key(clean),
-                "raw_token_count": token_count(page.markdown),
-                "clean_token_count": token_count(clean),
-                "source_priority": page.source_priority,
-                "discovered_from": page.discovered_from,
-                "metadata_json": metadata,
-            }
-        )
-    (target / "_sources.jsonl").write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
-
-
-def write_user_manifest(
-    target: Path,
-    *,
-    vendor: str,
-    library: str,
-    version: str,
-    pages: list[NormalizedPage],
-    source_url: str,
-) -> None:
-    oz_dir = target / ".oz"
-    oz_dir.mkdir(parents=True, exist_ok=True)
-    manifest = {
-        "schema_version": 1,
-        "vendor": vendor,
-        "library": library,
-        "version": version,
-        "source_url": source_url,
-        "document_count": len(pages),
-        "sources": [
-            {
-                "path": page.path,
-                "source_url": page.source_url,
-                "canonical_url": page.canonical_url or page.source_url,
-                "source_kind": page.source_kind,
-                "metadata_json": page.source_metadata or {},
-            }
-            for page in pages
-        ],
-    }
-    (oz_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def canonical_source_key(page: NormalizedPage) -> str:
-    value = page.canonical_url or page.source_url or page.path or page.title
-    text = str(value).rstrip("/")
-    if preserves_virtual_source_fragment(text, page.source_kind, page.source_metadata):
-        return text
-    return text.split("#", 1)[0].rstrip("/")
-
-
-def preserves_virtual_source_fragment(url: str, source_kind: str | None, metadata: dict[str, Any] | None) -> bool:
-    parsed = urlparse(url)
-    if not parsed.fragment:
-        return False
-    source_type = str((metadata or {}).get("source_type") or source_kind or "").lower()
-    if source_type in {"llms_txt", "openapi"}:
-        return True
-    return bool(re.search(r"(?:^|/)(?:llms|llms-full)\.txt$", parsed.path.lower()))
-
-
 def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[NormalizedPage]:
     return [
         NormalizedPage(
@@ -268,7 +175,7 @@ def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[Normalize
             source_url=artifact.source_url,
             path=artifact.path,
             content_type=artifact_content_type(artifact),
-            source_kind=artifact.source_kind,
+            source_type=artifact.source_type,
             canonical_url=artifact.canonical_url or artifact.source_url,
             source_priority=artifact.source_priority,
             discovered_from=artifact.discovered_from,
@@ -281,9 +188,9 @@ def artifact_normalized_pages(artifacts: list[SourceArtifact]) -> list[Normalize
 
 def artifact_content_type(artifact: SourceArtifact) -> str:
     role = str((artifact.metadata or {}).get("document_role") or "").lower()
-    if artifact.source_kind == "openapi" or role in {"api_reference", "sdk_source", "type_definition"}:
+    if artifact.source_type == "openapi" or role in {"api_reference", "sdk_source", "type_definition"}:
         return "api_reference"
-    if artifact.source_kind in {"github"} and "/examples/" in f"/{artifact.path.lower()}":
+    if artifact.source_type in {"github"} and "/examples/" in f"/{artifact.path.lower()}":
         return "code_example"
     return "prose"
 
@@ -457,7 +364,7 @@ def crawl_pages_with_stdlib(
     if pages:
         first_html = pages[0].html
     else:
-        first_html = fetch_html_stdlib(url, state=run_state)
+        first_html = fetch_html_stdlib(url, state=run_state, respect_robots=options.robots_txt)
         pages = [CrawledPage(source_url=url, html=first_html)]
         run_state.record_page(url, first_html)
     if options.max_pages <= 1:
@@ -479,7 +386,7 @@ def crawl_pages_with_stdlib(
         assert_public_http_url(linked_url)
         seen.add(linked_url)
         try:
-            html = fetch_html_stdlib(linked_url, state=run_state)
+            html = fetch_html_stdlib(linked_url, state=run_state, respect_robots=options.robots_txt)
         except CrawlerFetchError as exc:
             run_state.record_dead_letter(
                 linked_url,
@@ -528,10 +435,16 @@ def ensure_vendored_scrapling_path() -> None:
             return
 
 
-def fetch_html_stdlib(url: str, *, state: CrawlRunState | None = None) -> str:
+def fetch_html_stdlib(url: str, *, state: CrawlRunState | None = None, respect_robots: bool | None = None) -> str:
     assert_public_http_url(url)
     if state is not None:
-        state.limiter.wait(url)
+        robots_on = os.environ.get("OZ_CRAWLER_ROBOTS", "1").lower() not in {"0", "false", "no"} if respect_robots is None else respect_robots
+        if robots_on:
+            if not state.robots.allowed(url):
+                raise RuntimeError(f"{url} is blocked by robots.txt")
+            state.limiter.wait(url, state.robots.crawl_delay(url))
+        else:
+            state.limiter.wait(url)
     extra_headers = state.cache.conditional_headers(url) if state else {}
     extra_headers["Accept"] = "text/html, application/xhtml+xml, text/plain;q=0.5, */*;q=0.1"
     response = fetch_public_url(
@@ -689,7 +602,7 @@ def prepare_pages(
                 quality_score=quality.score,
                 content_type=quality.content_type,
                 symbols=tuple(extract_page_symbol_names(page, profile=profile)),
-                source_kind=normalized_metadata(page)["source_type"],
+                source_type=normalized_metadata(page)["source_type"],
                 source_metadata=normalized_metadata(page),
             )
         )
@@ -704,11 +617,11 @@ def should_apply_language_filter(page: NormalizedPage) -> bool:
     routinely misclassifies those as non-English, which drops exactly the
     material coding agents need most.
     """
-    source_kind = (page.source_kind or "").lower()
-    if source_kind in {"github", "openapi"} and str((page.source_metadata or {}).get("document_role") or "").lower() in {"sdk_source", "type_definition", "api_reference"}:
+    page_source_type = (page.source_type or "").lower()
+    if page_source_type in {"github", "openapi"} and str((page.source_metadata or {}).get("document_role") or "").lower() in {"sdk_source", "type_definition", "api_reference"}:
         return False
     metadata = page.source_metadata or {}
-    source_type = str(metadata.get("source_type") or metadata.get("source_kind") or "").lower()
+    source_type = str(metadata.get("source_type") or metadata.get("source_type") or "").lower()
     document_role = str(metadata.get("document_role") or "").lower()
     if source_type == "openapi" or document_role in {"sdk_source", "type_definition", "api_reference"}:
         return False
@@ -781,11 +694,6 @@ def page_source_rank(page: NormalizedPage) -> tuple[int, int, str]:
     return (page.source_priority, path_rank, page.path or page.source_url)
 
 
-def page_content_key(markdown: str) -> str:
-    normalized = re.sub(r"\s+", " ", markdown.strip().lower())
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
 def rejection_row(page: NormalizedPage, quality: QualityResult) -> dict[str, Any]:
     return {
         "title": page.title,
@@ -803,10 +711,11 @@ def dead_letter_rejections(state: CrawlRunState) -> list[dict[str, Any]]:
             "source_url": letter.url,
             "score": 0,
             "reasons": [letter.error],
-            "content_type": f"network_{letter.stage}",
+            "content_type": f"crawl_{letter.stage}" if letter.stage == "source_cap" else f"network_{letter.stage}",
             "attempts": letter.attempts,
             "status": letter.status,
             "transient": letter.transient,
+            "stage": letter.stage,
         }
         for letter in state.dead_letters
     ]

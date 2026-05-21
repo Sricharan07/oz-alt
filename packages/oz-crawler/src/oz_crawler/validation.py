@@ -39,7 +39,12 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     symbols = symbol_names(target)
     chunks = chunk_rows(target)
     sources = source_rows(target)
+    sections = source_section_rows(target)
+    code_examples = code_example_rows(target)
+    api_operations = api_operation_rows(target)
+    sdk_methods = sdk_method_rows(target)
     coverage = chunk_coverage_rows(target)
+    crawl_errors = crawl_error_rows(target)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -74,6 +79,16 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     missing_token_counts = sum(1 for row in chunks if int(row.get("token_count") or 0) <= 0)
     if chunks and missing_token_counts:
         errors.append(f"{missing_token_counts} chunks are missing token counts")
+    missing_chunk_sections = sum(
+        1
+        for row in chunks
+        if not ((row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}).get("source_section_key") or row.get("source_section_key"))
+    )
+    if chunks and missing_chunk_sections:
+        errors.append(f"{missing_chunk_sections} chunks are missing source section linkage")
+    missing_contextual_prefixes = sum(1 for row in chunks if not str(row.get("contextual_prefix") or "").strip())
+    if chunks and missing_contextual_prefixes:
+        errors.append(f"{missing_contextual_prefixes} chunks are missing contextual prefixes")
     frontmatter_chunks = sum(1 for row in chunks if has_frontmatter(str(row.get("text") or "")))
     if chunks and frontmatter_chunks:
         errors.append(f"{frontmatter_chunks} chunks contain frontmatter")
@@ -110,12 +125,19 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
     ]
     if sources and not coverage:
         errors.append("chunk coverage report is missing")
+    if chunks and not sections:
+        errors.append("source section artifact is missing")
     if coverage_failures:
         sample = ", ".join(str(row.get("path") or row.get("source_url")) for row in coverage_failures[:3])
         errors.append(f"{len(coverage_failures)} source documents have chunk coverage below {coverage_threshold:.2f}: {sample}")
     if code_fence_coverage_failures:
         sample = ", ".join(str(row.get("path") or row.get("source_url")) for row in code_fence_coverage_failures[:3])
         errors.append(f"{len(code_fence_coverage_failures)} source documents have uncovered code fences: {sample}")
+    section_errors = validate_section_extractions(sections, code_examples, api_operations, sdk_methods)
+    errors.extend(section_errors)
+    source_cap_errors = [row for row in crawl_errors if str(row.get("stage") or "") == "source_cap"]
+    if source_cap_errors and not allow_partial_source_coverage():
+        errors.append(f"source artifact cap was hit {len(source_cap_errors)} time(s); set explicit partial coverage approval to promote")
 
     metrics = {
         "documents": len(pages),
@@ -143,6 +165,16 @@ def validate_fixture(target: Path, profile: LibraryProfile | None) -> Validation
         "chunk_coverage_min": min((float(row.get("coverage_ratio") or 0) for row in coverage), default=0),
         "chunk_coverage_failed_documents": len(coverage_failures),
         "code_fence_coverage_failed_documents": len(code_fence_coverage_failures),
+        "source_sections": len(sections),
+        "code_examples": len(code_examples),
+        "api_operations": len(api_operations),
+        "sdk_methods": len(sdk_methods),
+        "crawl_errors": len(crawl_errors),
+        "source_cap_errors": len(source_cap_errors),
+        "missing_contextual_prefixes": missing_contextual_prefixes,
+        "sections_with_code": sum(1 for row in sections if bool(row.get("has_code"))),
+        "sections_with_endpoint_shape": sum(1 for row in sections if bool(row.get("has_endpoint_shape"))),
+        "sections_with_signature_shape": sum(1 for row in sections if bool(row.get("has_signature_shape"))),
     }
     return ValidationResult(not errors, errors, warnings, metrics)
 
@@ -155,10 +187,42 @@ def markdown_pages(target: Path) -> list[Path]:
     pages: list[Path] = []
     for path in target.rglob("*.md"):
         relative = path.relative_to(target).as_posix()
-        if relative.startswith("_symbols/") or relative in {"INDEX.md", "README.md"}:
+        if relative.startswith("_symbols/") or relative in {"INDEX.md", "README.md", "api-reference/README.md", "examples/README.md"}:
             continue
         pages.append(path)
     return pages
+
+
+def source_section_rows(target: Path) -> list[dict[str, Any]]:
+    return jsonl_file_rows(target / "_source_sections.jsonl")
+
+
+def code_example_rows(target: Path) -> list[dict[str, Any]]:
+    return jsonl_file_rows(target / "_code_examples.jsonl")
+
+
+def api_operation_rows(target: Path) -> list[dict[str, Any]]:
+    return jsonl_file_rows(target / "_api_operations.jsonl")
+
+
+def sdk_method_rows(target: Path) -> list[dict[str, Any]]:
+    return jsonl_file_rows(target / "_sdk_methods.jsonl")
+
+
+def crawl_error_rows(target: Path) -> list[dict[str, Any]]:
+    return jsonl_file_rows(target / "_crawl_errors.jsonl")
+
+
+def jsonl_file_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            value = json.loads(line)
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
 
 
 def rejected_pages(target: Path) -> list[dict[str, Any]]:
@@ -252,6 +316,95 @@ def chunk_coverage_rows(target: Path) -> list[dict[str, Any]]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+def validate_section_extractions(
+    sections: list[dict[str, Any]],
+    code_examples: list[dict[str, Any]],
+    api_operations: list[dict[str, Any]],
+    sdk_methods: list[dict[str, Any]],
+) -> list[str]:
+    if not sections:
+        return []
+    errors: list[str] = []
+    section_keys = {str(row.get("section_key") or "") for row in sections if row.get("section_key")}
+    missing_content_sha = sum(1 for row in sections if not row.get("content_sha"))
+    if missing_content_sha:
+        errors.append(f"{missing_content_sha} source sections are missing content_sha")
+    examples_by_section = linked_surface_keys(code_examples)
+    operations_by_section = linked_surface_keys(api_operations)
+    methods_by_section = linked_surface_keys(sdk_methods)
+    missing_example_sections = [
+        row
+        for row in sections
+        if bool(row.get("has_code"))
+        and str(row.get("document_role") or "") not in {"sdk_source", "type_definition"}
+        and str(row.get("section_key") or "") not in examples_by_section
+    ]
+    missing_operation_sections = [
+        row for row in sections if bool(row.get("has_endpoint_shape")) and str(row.get("section_key") or "") not in operations_by_section
+    ]
+    missing_method_sections = [
+        row
+        for row in sections
+        if bool(row.get("has_signature_shape"))
+        and str(row.get("section_key") or "") not in methods_by_section
+        and str(row.get("section_key") or "") not in operations_by_section
+    ]
+    dangling_examples = sorted(linked_surface_keys(code_examples) - section_keys)
+    dangling_operations = sorted(linked_surface_keys(api_operations) - section_keys)
+    dangling_methods = sorted(linked_surface_keys(sdk_methods) - section_keys)
+    missing_example_evidence = missing_surface_evidence(code_examples, "code_examples")
+    missing_operation_evidence = missing_surface_evidence(api_operations, "api_operations")
+    missing_method_evidence = missing_surface_evidence(sdk_methods, "sdk_methods")
+    if missing_example_sections:
+        errors.append(f"{len(missing_example_sections)} code-shaped sections emitted no code_examples: {section_sample(missing_example_sections)}")
+    if missing_operation_sections:
+        errors.append(f"{len(missing_operation_sections)} endpoint-shaped sections emitted no api_operations: {section_sample(missing_operation_sections)}")
+    if missing_method_sections:
+        errors.append(f"{len(missing_method_sections)} signature-shaped sections emitted no sdk_methods: {section_sample(missing_method_sections)}")
+    if dangling_examples:
+        errors.append(f"{len(dangling_examples)} code_examples reference missing source sections")
+    if dangling_operations:
+        errors.append(f"{len(dangling_operations)} api_operations reference missing source sections")
+    if dangling_methods:
+        errors.append(f"{len(dangling_methods)} sdk_methods reference missing source sections")
+    if missing_example_evidence:
+        errors.append(f"{missing_example_evidence} code_examples are missing source evidence")
+    if missing_operation_evidence:
+        errors.append(f"{missing_operation_evidence} api_operations are missing source evidence")
+    if missing_method_evidence:
+        errors.append(f"{missing_method_evidence} sdk_methods are missing source evidence")
+    return errors
+
+
+def missing_surface_evidence(rows: list[dict[str, Any]], _surface_name: str) -> int:
+    missing = 0
+    for row in rows:
+        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        if not str(row.get("source_document_key") or metadata.get("source_document_key") or "").strip():
+            missing += 1
+            continue
+        if not str(row.get("source_anchor") or metadata.get("source_anchor") or "").strip():
+            missing += 1
+            continue
+        if not str(row.get("source_section_key") or metadata.get("source_section_key") or "").strip():
+            missing += 1
+    return missing
+
+
+def linked_surface_keys(rows: list[dict[str, Any]]) -> set[str]:
+    keys: set[str] = set()
+    for row in rows:
+        metadata = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        key = str(row.get("source_section_key") or metadata.get("source_section_key") or "")
+        if key:
+            keys.add(key)
+    return keys
+
+
+def section_sample(rows: list[dict[str, Any]]) -> str:
+    return ", ".join(str(row.get("path") or row.get("source_url") or row.get("section_key")) for row in rows[:3])
 
 
 def duplicate_source_document_count(rows: list[dict[str, Any]]) -> int:
@@ -380,3 +533,7 @@ def min_chunk_coverage_ratio() -> float:
         return max(0.0, min(1.0, float(os.environ.get("OZ_MIN_CHUNK_COVERAGE_RATIO", "0.98"))))
     except ValueError:
         return 0.98
+
+
+def allow_partial_source_coverage() -> bool:
+    return os.environ.get("OZ_ALLOW_PARTIAL_SOURCE_COVERAGE", "").lower() in {"1", "true", "yes", "on"}

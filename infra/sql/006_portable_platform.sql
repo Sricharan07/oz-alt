@@ -2,7 +2,7 @@ create table if not exists library_sources (
   id bigserial primary key,
   library_id bigint not null references libraries(id) on delete cascade,
   source_url text not null,
-  source_type text not null default 'official_docs',
+  source_type text not null default 'website_url',
   priority integer not null default 100,
   enabled boolean not null default true,
   created_at timestamptz not null default now(),

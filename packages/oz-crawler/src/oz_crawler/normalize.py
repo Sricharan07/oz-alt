@@ -60,7 +60,7 @@ class NormalizedPage:
     content_type: str = "prose"
     quality_score: float = 1.0
     symbols: tuple[str, ...] = ()
-    source_kind: str = "website"
+    source_type: str = "website_url"
     canonical_url: str | None = None
     source_priority: int = 50
     discovered_from: str | None = None

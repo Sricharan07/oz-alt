@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -67,13 +68,13 @@ class HostLimiter:
     per_host_delay: float = field(default_factory=lambda: float_env("OZ_CRAWLER_PER_HOST_DELAY_SECONDS", 0.25))
     next_allowed: dict[str, float] = field(default_factory=dict)
 
-    def wait(self, url: str) -> None:
+    def wait(self, url: str, min_delay: float | None = None) -> None:
         host = urlparse(url).netloc.lower()
         now = time.monotonic()
         delay = self.next_allowed.get(host, 0.0) - now
         if delay > 0:
             time.sleep(delay)
-        self.next_allowed[host] = time.monotonic() + self.per_host_delay
+        self.next_allowed[host] = time.monotonic() + max(self.per_host_delay, float(min_delay or 0))
 
     def backoff(self, url: str, retry_after: float | None = None) -> None:
         host = urlparse(url).netloc.lower()
@@ -82,8 +83,97 @@ class HostLimiter:
 
 
 @dataclass
+class RobotsPolicy:
+    user_agent: str = "oz-crawler/0.1"
+    parsers: dict[str, RobotFileParser | None] = field(default_factory=dict)
+
+    def allowed(self, url: str) -> bool:
+        parser = self.parser_for(url)
+        return True if parser is None else parser.can_fetch(self.user_agent, url)
+
+    def crawl_delay(self, url: str) -> float | None:
+        parser = self.parser_for(url)
+        if parser is None:
+            return None
+        try:
+            value = parser.crawl_delay(self.user_agent)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def parser_for(self, url: str) -> RobotFileParser | None:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        key = f"{parsed.scheme}://{parsed.netloc}"
+        if key in self.parsers:
+            return self.parsers[key]
+        parser = RobotFileParser()
+        parser.set_url(f"{key}/robots.txt")
+        try:
+            from oz_crawler.security import fetch_public_url
+
+            response = fetch_public_url(
+                f"{key}/robots.txt",
+                timeout=10,
+                max_bytes=200_000,
+                attempts=1,
+                user_agent=self.user_agent,
+            )
+            parser.parse(response.body.decode("utf-8", errors="replace").splitlines())
+        except Exception:
+            self.parsers[key] = None
+            return None
+        self.parsers[key] = parser
+        return parser
+
+
+@dataclass
+class RawObjectStore:
+    root: Path | None = None
+    s3_bucket: str | None = None
+    s3_prefix: str = "oz/raw"
+
+    @classmethod
+    def create(cls, checkpoint_root: Path | None) -> "RawObjectStore":
+        bucket = os.environ.get("OZ_RAW_OBJECT_S3_BUCKET")
+        prefix = os.environ.get("OZ_RAW_OBJECT_S3_PREFIX", "oz/raw").strip("/")
+        root_value = os.environ.get("OZ_RAW_OBJECT_ROOT")
+        root = Path(root_value).expanduser() if root_value else (checkpoint_root / "raw-objects" if checkpoint_root else None)
+        return cls(root=root, s3_bucket=bucket, s3_prefix=prefix)
+
+    def put(self, url: str, body: bytes, headers: dict[str, str]) -> dict[str, Any]:
+        body_sha = hashlib.sha256(body).hexdigest()
+        etag = clean_key_part(headers.get("etag") or "no-etag")
+        checked_at = str(int(time.time()))
+        key = f"{self.s3_prefix}/{hashlib.sha256(url.encode('utf-8')).hexdigest()}/{etag}/{checked_at}-{body_sha}.body"
+        if self.s3_bucket:
+            self.put_s3(key, body)
+            return {"raw_object_key": f"s3://{self.s3_bucket}/{key}", "raw_object_sha256": body_sha, "raw_object_store": "s3"}
+        if self.root is not None:
+            path = self.root / key
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            return {"raw_object_key": key, "raw_object_sha256": body_sha, "raw_object_store": "local"}
+        return {"raw_object_key": key, "raw_object_sha256": body_sha, "raw_object_store": "disabled"}
+
+    def put_s3(self, key: str, body: bytes) -> None:
+        try:
+            import boto3  # type: ignore
+        except Exception as exc:  # pragma: no cover - optional production dependency
+            raise RuntimeError("OZ_RAW_OBJECT_S3_BUCKET requires boto3 to be installed") from exc
+        boto3.client("s3").put_object(Bucket=self.s3_bucket, Key=key, Body=body)
+
+
+def clean_key_part(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in value.strip())
+    return cleaned.strip("-")[:80] or "none"
+
+
+@dataclass
 class FetchCache:
     root: Path | None
+    raw_store: RawObjectStore = field(default_factory=RawObjectStore)
 
     def metadata(self, url: str) -> dict[str, Any]:
         if self.root is None:
@@ -116,7 +206,10 @@ class FetchCache:
             return None
 
     def store(self, url: str, body: bytes, headers: dict[str, str], status: int) -> None:
-        if self.root is None or status != 200:
+        if status != 200:
+            return
+        raw_object = self.raw_store.put(url, body, headers)
+        if self.root is None:
             return
         self.root.mkdir(parents=True, exist_ok=True)
         self.body_path(url).write_bytes(body)
@@ -126,6 +219,7 @@ class FetchCache:
             "last_modified": headers.get("last-modified"),
             "content_type": headers.get("content-type"),
             "body_sha256": hashlib.sha256(body).hexdigest(),
+            **raw_object,
             "checked_at": int(time.time()),
         }
         self.meta_path(url).write_text(json.dumps(meta, sort_keys=True) + "\n", encoding="utf-8")
@@ -141,6 +235,12 @@ class FetchCache:
         assert self.root is not None
         return self.root / f"{self.key(url)}.body"
 
+    def artifact_key(self, url: str) -> str:
+        meta = self.metadata(url)
+        if meta.get("raw_object_key"):
+            return str(meta["raw_object_key"])
+        return f"http-cache/{self.key(url)}.body"
+
 
 @dataclass
 class CrawlRunState:
@@ -150,11 +250,16 @@ class CrawlRunState:
     dead_letters: list[DeadLetter] = field(default_factory=list)
     restored_pages: list[dict[str, str]] = field(default_factory=list)
     limiter: HostLimiter = field(default_factory=HostLimiter)
+    robots: RobotsPolicy = field(default_factory=RobotsPolicy)
     cache: FetchCache = field(default_factory=lambda: FetchCache(None))
 
     @classmethod
     def create(cls, root: Path | None, progress_callback: ProgressCallback | None = None) -> "CrawlRunState":
-        state = cls(root=root, progress_callback=progress_callback, cache=FetchCache(root / "http-cache" if root else None))
+        state = cls(
+            root=root,
+            progress_callback=progress_callback,
+            cache=FetchCache(root / "http-cache" if root else None, RawObjectStore.create(root)),
+        )
         state.load()
         return state
 

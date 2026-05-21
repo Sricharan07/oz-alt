@@ -178,6 +178,7 @@ def agent_embedding_rows(connection: Any, version_id: int) -> list[dict[str, Any
                 "content": content,
                 "content_sha": content_sha,
                 "chunk_sha": card_sha(str(row["table_name"]), str(row["row_key"]), content_sha),
+                "input_type": agent_input_type(str(row["table_name"])),
                 "token_count": token_count(content),
             }
         )
@@ -189,24 +190,25 @@ def apply_cache_hits(connection: Any, pending: list[dict[str, Any]]) -> int:
     if not pending:
         return 0
     content_shas = sorted({str(row["content_sha"]) for row in pending})
+    input_types = sorted({str(row.get("input_type") or agent_input_type(str(row["table_name"]))) for row in pending})
     cached_rows = rows(
         connection,
         """
-        select content_sha, embedding
+        select content_sha, input_type, embedding
         from embedding_cache
         where content_sha = any(%s::text[])
           and provider = %s
           and model = %s
           and dimensions = %s
-          and input_type = 'document'
+          and input_type = any(%s::text[])
           and schema_version = %s
         """,
-        (content_shas, embedding_provider(), embedding_model(), embedding_dimensions(), cache_schema_version()),
+        (content_shas, embedding_provider(), embedding_model(), embedding_dimensions(), input_types, cache_schema_version()),
     )
-    cache = {str(row["content_sha"]): parse_embedding(row.get("embedding")) for row in cached_rows}
+    cache = {(str(row["content_sha"]), str(row["input_type"])): parse_embedding(row.get("embedding")) for row in cached_rows}
     applied = 0
     for row in pending:
-        embedding = cache.get(str(row["content_sha"]))
+        embedding = cache.get((str(row["content_sha"]), str(row.get("input_type") or agent_input_type(str(row["table_name"])))))
         if not valid_embedding(embedding):
             continue
         update_agent_embedding(connection, str(row["table_name"]), int(row["id"]), embedding)
@@ -238,17 +240,18 @@ def upsert_agent_embedding_cache(connection: Any, row: dict[str, Any], embedding
           cache_key, provider, model, dimensions, input_type, schema_version,
           chunk_sha, content_sha, token_count, embedding
         )
-        values (%s, %s, %s, %s, 'document', %s, %s, %s, %s, %s::vector)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
         on conflict (cache_key) do update
         set embedding = excluded.embedding,
             token_count = excluded.token_count,
             created_at = now()
         """,
         (
-            embedding_cache_key(str(row["content_sha"])),
+            embedding_cache_key(str(row["content_sha"]), str(row.get("input_type") or agent_input_type(str(row["table_name"])))),
             embedding_provider(),
             embedding_model(),
             embedding_dimensions(),
+            str(row.get("input_type") or agent_input_type(str(row["table_name"]))),
             cache_schema_version(),
             str(row["chunk_sha"]),
             str(row["content_sha"]),
@@ -256,6 +259,12 @@ def upsert_agent_embedding_cache(connection: Any, row: dict[str, Any], embedding
             vector_literal(embedding),
         ),
     )
+
+
+def agent_input_type(table_name: str) -> str:
+    if table_name not in AGENT_CARD_TABLES:
+        raise ValueError(f"unsupported agent card table: {table_name}")
+    return table_name
 
 
 def parse_embedding(value: Any) -> list[float] | None:

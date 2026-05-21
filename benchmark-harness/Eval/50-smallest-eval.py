@@ -13,6 +13,7 @@ from typing import Any
 from openai import OpenAI
 
 import eval as base_eval
+from smallest_eval_report import make_report
 
 
 LIBRARY_ID = os.getenv("OZ_EVAL_LIBRARY_ID", "/smallest/py-sdk")
@@ -20,30 +21,6 @@ CTX7_ID = os.getenv("CTX7_ID", "/smallest-inc/smallest-python-sdk")
 OZ_LIBRARY_NAME_DEFAULT = os.getenv("OZ_EVAL_LIBRARY_NAME_DEFAULT", "Smallest AI")
 OZ_VERSION_HINT_DEFAULT = os.getenv("OZ_EVAL_VERSION_HINT_DEFAULT", "latest")
 WINNER_VALUES = {"ours", "context7", "tie"}
-
-# Current 20-query baseline (commented out for reference).
-# QUERIES = [
-#     "How do I install and initialize the Smallest AI Python SDK?",
-#     "How do I authenticate with a Smallest API key in Python?",
-#     "How do I synthesize speech with Waves using the Python SDK?",
-#     "How do I stream text to speech audio with Waves in Python?",
-#     "How do I use Atoms to build or run a voice agent?",
-#     "What are the required parameters for a Waves text to speech request?",
-#     "How do I choose or configure a voice/model for Smallest text to speech?",
-#     "How do I save generated audio to a file in Python?",
-#     "How do I handle errors from Smallest API calls in the Python SDK?",
-#     "Show a complete minimal Python example that sends text to Smallest and plays or writes the audio output.",
-#     "How do I install smallestai with a pinned major version?",
-#     "How do I configure API credentials without hardcoding secrets?",
-#     "How do I select a Waves model for low-latency speech generation?",
-#     "How do I configure language settings for an Atoms agent?",
-#     "How do I create and update an Atoms agent template?",
-#     "How do I create a knowledge base and attach files to it?",
-#     "How do I run a voice session with an existing Atoms agent?",
-#     "How do I capture and inspect response metadata from SDK calls?",
-#     "How do I retry transient API failures in Python?",
-#     "How do I structure a production-ready Smallest client wrapper?",
-# ]
 
 BASE_QUERIES = [
     "How do I install and initialize the Smallest AI Python SDK?",
@@ -837,89 +814,6 @@ def aggregate_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return summary
 
 
-def make_report(
-    run_id: str,
-    rows: list[dict[str, Any]],
-    summary: dict[str, Any],
-    one_shot_summary: dict[str, Any],
-) -> str:
-    lines = [
-        f"# Retrieval Comparison: Oz CLI ({LIBRARY_ID}) vs Context7",
-        "",
-        f"- Corpus: Smallest AI Python SDK + Atoms + Waves",
-        f"- Context7 ID: `{CTX7_ID}`",
-        f"- Run ID: `{run_id}`",
-        f"- Timestamp: `{datetime.now(timezone.utc).isoformat()}`",
-        f"- Queries: `{len(rows)}`",
-        f"- Judge: strict one-shot coding-agent rubric",
-        "",
-        "## Aggregate",
-        "",
-        f"- Overall wins: oz={summary['overall_wins']['ours']}, context7={summary['overall_wins']['context7']}, tie={summary['overall_wins']['tie']}",
-        f"- One-shot ready: oz={one_shot_summary['one_shot_ready']['ours']}, context7={one_shot_summary['one_shot_ready']['context7']}",
-        f"- Avg output tokens est: oz={summary['avg_output_tokens_est']['ours']}, context7={summary['avg_output_tokens_est']['context7']}",
-        f"- Avg latency ms: oz={summary['avg_timing_ms']['ours']}, context7={summary['avg_timing_ms']['context7']}",
-        f"- Judge runs per query: {rows[0]['judge'].get('judge_count', 0) if rows else 0}",
-        "",
-        "| Metric | Oz | Context7 | Winner Count (oz/context7/tie) |",
-        "| --- | ---: | ---: | --- |",
-    ]
-    for metric in base_eval.METRICS:
-        wins = summary["wins_by_metric"][metric]
-        lines.append(
-            f"| {metric} | {summary['ours'][metric]} | {summary['context7'][metric]} | {wins['ours']}/{wins['context7']}/{wins['tie']} |"
-        )
-
-    deterministic = summary.get("deterministic", {})
-    if deterministic:
-        lines.extend(
-            [
-                "",
-                "## Deterministic Criteria",
-                "",
-                "| Metric | Oz | Context7 |",
-                "| --- | ---: | ---: |",
-            ]
-        )
-        for metric in (
-            "expected_api_recall",
-            "required_terms_found_rate",
-            "expected_path_recall",
-            "precision_proxy",
-            "deterministic_pass_rate",
-            "latency_p50_ms",
-            "latency_p95_ms",
-        ):
-            lines.append(
-                f"| {metric} | {deterministic.get('ours', {}).get(metric, 0)} | {deterministic.get('context7', {}).get(metric, 0)} |"
-            )
-
-    lines.extend(["", "## Top Failure Tags", ""])
-    for side, label in (("ours", "Oz"), ("context7", "Context7")):
-        tags = one_shot_summary["top_failure_tags"][side]
-        rendered = ", ".join(f"{item['tag']}={item['count']}" for item in tags) or "none"
-        lines.append(f"- {label}: {rendered}")
-
-    lines.extend(["", "## Per Query", ""])
-    for idx, row in enumerate(rows, 1):
-        judge = row["judge"]
-        oz_tags = ", ".join(judge["ours"].get("failure_tags") or []) or "none"
-        ctx_tags = ", ".join(judge["context7"].get("failure_tags") or []) or "none"
-        lines.extend(
-            [
-                f"### {idx}. {row['query']}",
-                f"- Category: `{row.get('case', {}).get('category', '')}`",
-                f"- Overall winner: `{judge['overall_winner']}`",
-                f"- Oz: latency={row['ours']['duration_ms']}ms, tokens≈{row['ours']['tokens_est']}, one-shot={judge['ours'].get('one_shot_ready')}, tags={oz_tags}",
-                f"- Context7: latency={row['context7']['duration_ms']}ms, tokens≈{row['context7']['tokens_est']}, one-shot={judge['context7'].get('one_shot_ready')}, tags={ctx_tags}",
-                f"- Deterministic: oz_api_recall={row.get('deterministic', {}).get('ours', {}).get('expected_api_recall')} context7_api_recall={row.get('deterministic', {}).get('context7', {}).get('expected_api_recall')}",
-                f"- Judge summary: {judge['summary']}",
-                "",
-            ]
-        )
-    return "\n".join(lines).strip() + "\n"
-
-
 def main() -> None:
     base_eval.load_env(base_eval.ENV_PATH)
     base_eval.load_env(base_eval.EVAL_ENV_PATH, override=True)
@@ -1081,7 +975,17 @@ def main() -> None:
         "rows": rows,
     }
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    md_path.write_text(make_report(run_id, rows, summary, one_shot_summary), encoding="utf-8")
+    md_path.write_text(
+        make_report(
+            run_id,
+            rows,
+            summary,
+            one_shot_summary,
+            library_id=LIBRARY_ID,
+            ctx7_id=CTX7_ID,
+        ),
+        encoding="utf-8",
+    )
     try:
         partial_path.unlink()
     except FileNotFoundError:

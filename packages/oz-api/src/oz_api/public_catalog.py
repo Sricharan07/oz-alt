@@ -245,7 +245,7 @@ def catalog_detail(storage: RegistryStorage, vendor: str, library: str, version:
             "benchmark_score": 0,
             "trust_score": 0,
             "versions": [{"version": item.get("version"), "ref_sha": item.get("ref_sha")} for item in matches],
-            "sources": [{"source_url": source, "source_type": "catalog", "enabled": True} for source in entry.get("source_urls", [])],
+            "sources": [{"source_url": source, "source_type": "website_url", "enabled": True} for source in entry.get("source_urls", [])],
             "content_types": [],
 	            "top_files": [],
 	            "agent_context": [],
