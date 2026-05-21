@@ -26,8 +26,9 @@ def maybe_enrich_recipe(recipe: Any, evidence: list[dict[str, Any]]) -> Any:
     result = call_openai(payload)
     if not result:
         return recipe
-    if not grounded_generation(result, evidence):
-        LOGGER.warning("discarded ungrounded recipe enrichment for %s", getattr(recipe, "recipe_key", "unknown"))
+    missing = ungrounded_tokens(result, evidence)
+    if missing:
+        LOGGER.warning("discarded ungrounded recipe enrichment for %s: %s", getattr(recipe, "recipe_key", "unknown"), ", ".join(sorted(missing)[:8]))
         return recipe
     try:
         from dataclasses import replace
@@ -141,21 +142,79 @@ def extract_response_text(parsed: dict[str, Any]) -> str:
 
 
 def grounded_generation(result: dict[str, Any], evidence: list[dict[str, Any]]) -> bool:
+    return not ungrounded_tokens(result, evidence)
+
+
+def ungrounded_tokens(result: dict[str, Any], evidence: list[dict[str, Any]]) -> set[str]:
     evidence_text = "\n".join(str(item.get("content") or "") for item in evidence)
     evidence_compact = compact(evidence_text)
     generated = "\n".join(str(result.get(key) or "") for key in ("content", "code", "info"))
-    for token in api_tokens(generated):
+    missing: set[str] = set()
+    for token in high_risk_api_tokens(generated):
         compact_token = compact(token)
         if len(compact_token) >= 4 and compact_token not in evidence_compact:
-            return False
-    return True
+            missing.add(token)
+    return missing
 
 
-def api_tokens(text: str) -> set[str]:
-    output = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\b", text))
-    output.update(re.findall(r"\b[a-z_][a-z0-9_]*\s*\(", text))
-    output.update(re.findall(r"\b[A-Z_]{3,}\b", text))
-    return {token.strip("(") for token in output if token not in {"JSON", "HTTP", "URL", "API"}}
+def high_risk_api_tokens(text: str) -> set[str]:
+    """Return generated identifiers that must be backed by source evidence.
+
+    The previous validator treated every capitalized word as an API token, which
+    rejected useful recipe text like "Create an agent" or "Use Python". This
+    gate is intentionally narrower: natural-language prose is allowed, while
+    concrete API surfaces that could mislead a coding agent must appear in the
+    evidence.
+    """
+
+    output: set[str] = set()
+    code_text = "\n".join(code_blocks(text))
+    inspect_text = code_text or text
+    output.update(re.findall(r"https?://[^\s)>'\"]+", inspect_text))
+    output.update(re.findall(r"(?<![A-Za-z0-9_])/[A-Za-z0-9_./{}:-]+", inspect_text))
+    output.update(re.findall(r"@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", inspect_text))
+    output.update(re.findall(r"\b[A-Z][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b", inspect_text))
+    output.update(re.findall(r"\b[A-Z][A-Za-z0-9_]{2,}\(", inspect_text))
+    output.update(re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", inspect_text))
+    for call in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", inspect_text):
+        if call not in SAFE_CALL_TOKENS:
+            output.add(call)
+    return {token.strip().strip("(") for token in output if token.strip() and token not in SAFE_API_TOKENS}
+
+
+def code_blocks(text: str) -> list[str]:
+    blocks = re.findall(r"```[A-Za-z0-9_+-]*\n(.*?)```", text, flags=re.DOTALL)
+    if blocks:
+        return blocks
+    lines = [line for line in text.splitlines() if line.startswith(("    ", "\t"))]
+    return ["\n".join(lines)] if lines else []
+
+
+SAFE_API_TOKENS = {
+    "API",
+    "HTTP",
+    "HTTPS",
+    "JSON",
+    "REST",
+    "SDK",
+    "URL",
+    "URI",
+    "UUID",
+}
+
+SAFE_CALL_TOKENS = {
+    "dict",
+    "float",
+    "int",
+    "len",
+    "list",
+    "print",
+    "range",
+    "set",
+    "str",
+    "tuple",
+    "type",
+}
 
 
 def compact(value: str) -> str:
